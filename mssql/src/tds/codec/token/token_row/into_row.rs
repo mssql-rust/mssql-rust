@@ -11,7 +11,7 @@ where
     A: IntoSql<'a>,
 {
     fn into_row(self) -> TokenRow<'a> {
-        let mut row = TokenRow::new();
+        let mut row = TokenRow::with_capacity(1);
         row.push(self.into_sql());
         row
     }
@@ -23,7 +23,7 @@ where
     B: IntoSql<'a>,
 {
     fn into_row(self) -> TokenRow<'a> {
-        let mut row = TokenRow::new();
+        let mut row = TokenRow::with_capacity(2);
         row.push(self.0.into_sql());
         row.push(self.1.into_sql());
         row
@@ -37,7 +37,7 @@ where
     C: IntoSql<'a>,
 {
     fn into_row(self) -> TokenRow<'a> {
-        let mut row = TokenRow::new();
+        let mut row = TokenRow::with_capacity(3);
         row.push(self.0.into_sql());
         row.push(self.1.into_sql());
         row.push(self.2.into_sql());
@@ -53,7 +53,7 @@ where
     D: IntoSql<'a>,
 {
     fn into_row(self) -> TokenRow<'a> {
-        let mut row = TokenRow::new();
+        let mut row = TokenRow::with_capacity(4);
         row.push(self.0.into_sql());
         row.push(self.1.into_sql());
         row.push(self.2.into_sql());
@@ -71,7 +71,7 @@ where
     E: IntoSql<'a>,
 {
     fn into_row(self) -> TokenRow<'a> {
-        let mut row = TokenRow::new();
+        let mut row = TokenRow::with_capacity(5);
         row.push(self.0.into_sql());
         row.push(self.1.into_sql());
         row.push(self.2.into_sql());
@@ -91,7 +91,7 @@ where
     F: IntoSql<'a>,
 {
     fn into_row(self) -> TokenRow<'a> {
-        let mut row = TokenRow::new();
+        let mut row = TokenRow::with_capacity(6);
         row.push(self.0.into_sql());
         row.push(self.1.into_sql());
         row.push(self.2.into_sql());
@@ -113,7 +113,7 @@ where
     G: IntoSql<'a>,
 {
     fn into_row(self) -> TokenRow<'a> {
-        let mut row = TokenRow::new();
+        let mut row = TokenRow::with_capacity(7);
         row.push(self.0.into_sql());
         row.push(self.1.into_sql());
         row.push(self.2.into_sql());
@@ -137,7 +137,7 @@ where
     H: IntoSql<'a>,
 {
     fn into_row(self) -> TokenRow<'a> {
-        let mut row = TokenRow::new();
+        let mut row = TokenRow::with_capacity(8);
         row.push(self.0.into_sql());
         row.push(self.1.into_sql());
         row.push(self.2.into_sql());
@@ -163,7 +163,7 @@ where
     I: IntoSql<'a>,
 {
     fn into_row(self) -> TokenRow<'a> {
-        let mut row = TokenRow::new();
+        let mut row = TokenRow::with_capacity(9);
         row.push(self.0.into_sql());
         row.push(self.1.into_sql());
         row.push(self.2.into_sql());
@@ -191,7 +191,7 @@ where
     J: IntoSql<'a>,
 {
     fn into_row(self) -> TokenRow<'a> {
-        let mut row = TokenRow::new();
+        let mut row = TokenRow::with_capacity(10);
         row.push(self.0.into_sql());
         row.push(self.1.into_sql());
         row.push(self.2.into_sql());
