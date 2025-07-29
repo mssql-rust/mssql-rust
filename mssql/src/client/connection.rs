@@ -347,14 +347,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
 
                 let client_cred = Cred::acquire(None, None, CredUsage::Initiate, Some(&s))?;
 
-                let ctx = ClientCtx::new(
-                    client_cred,
+                let mut ctx = ClientCtx::new(
+                    Some(client_cred),
                     Name::new(self.context.spn().as_bytes(), Some(&GSS_NT_KRB5_PRINCIPAL))?,
                     CtxFlags::GSS_C_MUTUAL_FLAG | CtxFlags::GSS_C_SEQUENCE_FLAG,
                     None,
                 );
 
-                let init_token = ctx.step(None)?;
+                let init_token = ctx.step(None, None)?;
 
                 login_message.integrated_security(Some(Vec::from(init_token.unwrap().deref())));
 
@@ -365,7 +365,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
 
                 let auth_bytes = self.flush_sspi().await?;
 
-                let next_token = match ctx.step(Some(auth_bytes.as_ref()))? {
+                let next_token = match ctx.step(Some(auth_bytes.as_ref()), None)? {
                     Some(response) => {
                         event!(Level::TRACE, response_len = response.len());
                         TokenSspi::new(Vec::from(response.deref()))
