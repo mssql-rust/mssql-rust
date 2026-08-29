@@ -135,6 +135,16 @@ test_bulk_type!(varchar_limited(
     vec!["aaaaaaaaaaaaaaaaaaaaaaa"; 1000].into_iter()
 ));
 
+// Regression test for prisma/tiberius#376: `Decimal` had `ToSql` (borrowed)
+// but no `IntoSql` (owned) impl, so it couldn't be bulk-inserted via
+// `row.push(value.into_sql())` the way every other supported type can.
+#[cfg(all(feature = "tds73", feature = "rust_decimal"))]
+test_bulk_type!(decimal(
+    "DECIMAL(20, 4)",
+    100,
+    vec![mssql::numeric::Decimal::from_i128_with_scale(123456789, 4); 100].into_iter()
+));
+
 #[cfg(all(feature = "tds73", feature = "chrono"))]
 test_bulk_type!(datetime2(
     "DATETIME2",
