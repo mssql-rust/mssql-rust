@@ -81,11 +81,11 @@ original would have broken the default build), plus direct fixes for issues
   merge: verify whether `EncryptionLevel::Strict` needs its own PRELOGIN wire
   byte distinct from `Required` (currently coded the same) against MS-TDS
   spec / a packet capture, not just one server's tolerance.
-- [ ] **#308** — Fix duplicate-`TlsStream`-symbol compile error when
+- [x] **#308** — Fix duplicate-`TlsStream`-symbol compile error when
   selecting a non-default TLS backend. Real, reproducible bug confirmed
-  against this fork's current `tls_stream.rs`. Reapply just the
-  `tls_stream.rs`/`Cargo.toml` hunks (its chrono hunks are already applied
-  here).
+  against this fork's current `tls_stream.rs`. Reapplied just the
+  `tls_stream.rs`/`Cargo.toml` hunks (its chrono hunks were already applied
+  here). Verified live (292 tests over rustls). Done: `64845fd`.
 - [ ] **#398** — `column_metadata()` + `bulk_insert_columns`. Useful, tested
   API, but its `ColumnFlag` bitflag renumbering is only partially correct
   against the MS-TDS spec (`Updateable=0x04, Unknown=0x08, Identity=0x10,
