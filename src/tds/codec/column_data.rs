@@ -275,6 +275,48 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 dst.extend_from_slice(&header);
                 dst.put_f64_le(val);
             }
+            // `money`/`smallmoney` decode to ColumnData::F64 regardless of
+            // their on-wire width (see token_col_metadata.rs and
+            // column_data/money.rs), so on encode -- needed for bulk_insert,
+            // which type-checks against the target column's declared
+            // metadata -- the actual width to use comes from `vlc.len()`,
+            // not from the ColumnData variant.
+            (ColumnData::F64(opt), Some(TypeInfo::VarLenSized(vlc)))
+                if vlc.r#type() == VarLenType::Money =>
+            {
+                match opt {
+                    Some(val) => {
+                        // Both widths are a scaled-by-10000 fixed-point
+                        // integer; `money` (8 bytes) splits it into the
+                        // upper and lower 32 bits of an i64.
+                        let scaled = (val * 1e4).round() as i64;
+
+                        match vlc.len() {
+                            4 => {
+                                let scaled = i32::try_from(scaled).map_err(|_| {
+                                    crate::Error::BulkInput(
+                                        format!("value {} out of range for smallmoney", val).into(),
+                                    )
+                                })?;
+
+                                dst.put_u8(4);
+                                dst.put_i32_le(scaled);
+                            }
+                            8 => {
+                                dst.put_u8(8);
+                                dst.put_i32_le((scaled >> 32) as i32);
+                                dst.put_u32_le(scaled as u32);
+                            }
+                            len => {
+                                return Err(crate::Error::BulkInput(
+                                    format!("money: invalid column length {}", len).into(),
+                                ))
+                            }
+                        }
+                    }
+                    None => dst.put_u8(0),
+                }
+            }
             (ColumnData::Guid(opt), Some(TypeInfo::VarLenSized(vlc)))
                 if vlc.r#type() == VarLenType::Guid =>
             {
@@ -1122,6 +1164,56 @@ mod tests {
             ColumnData::F64(None),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn f64_with_varlen_money() {
+        test_round_trip(
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Money, 8, None)),
+            ColumnData::F64(Some(3.5)),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn negative_f64_with_varlen_money() {
+        test_round_trip(
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Money, 8, None)),
+            ColumnData::F64(Some(-1234.5678)),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn f64_with_varlen_smallmoney() {
+        test_round_trip(
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Money, 4, None)),
+            ColumnData::F64(Some(214748.3647)),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn none_f64_with_varlen_money() {
+        test_round_trip(
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Money, 8, None)),
+            ColumnData::F64(None),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn f64_out_of_range_for_smallmoney_fails() {
+        let ti = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Money, 4, None));
+        let d = ColumnData::F64(Some(1e12));
+
+        let mut buf = BytesMut::new();
+        let mut buf_ti = BytesMutWithTypeInfo::new(&mut buf).with_type_info(&ti);
+
+        match d.encode(&mut buf_ti) {
+            Err(Error::BulkInput(_)) => {}
+            other => panic!("Expected Error::BulkInput, got: {:?}", other),
+        }
     }
 
     #[tokio::test]
