@@ -48,7 +48,7 @@ impl Collation {
         res.ok_or_else(|| {
             Error::Encoding(
                 format!(
-                    "encoding: unspported encoding (LCID: {:#02x}, sort ID: {})",
+                    "encoding: unspported encoding (LCID: {:#06x}, sort ID: {})",
                     self.lcid(),
                     self.sort_id(),
                 )
