@@ -62,17 +62,17 @@ impl PreloginMessage {
         feature = "native-tls",
         feature = "vendored-openssl"
     ))]
-    pub fn negotiated_encryption(&self, expected: EncryptionLevel) -> EncryptionLevel {
+    pub fn negotiated_encryption(&self, expected: EncryptionLevel) -> Result<EncryptionLevel> {
         match (expected, self.encryption) {
             (EncryptionLevel::NotSupported, EncryptionLevel::NotSupported) => {
-                EncryptionLevel::NotSupported
+                Ok(EncryptionLevel::NotSupported)
             }
-            (EncryptionLevel::Off, EncryptionLevel::Off) => EncryptionLevel::Off,
+            (EncryptionLevel::Off, EncryptionLevel::Off) => Ok(EncryptionLevel::Off),
             (EncryptionLevel::On, EncryptionLevel::Off)
-            | (EncryptionLevel::On, EncryptionLevel::NotSupported) => {
-                panic!("Server does not allow the requested encryption level.")
-            }
-            (_, _) => EncryptionLevel::On,
+            | (EncryptionLevel::On, EncryptionLevel::NotSupported) => Err(Error::Protocol(
+                "server declined the requested encryption level".into(),
+            )),
+            (_, _) => Ok(EncryptionLevel::On),
         }
     }
 
@@ -81,8 +81,8 @@ impl PreloginMessage {
         feature = "native-tls",
         feature = "vendored-openssl"
     )))]
-    pub fn negotiated_encryption(&self, _: EncryptionLevel) -> EncryptionLevel {
-        EncryptionLevel::NotSupported
+    pub fn negotiated_encryption(&self, _: EncryptionLevel) -> Result<EncryptionLevel> {
+        Ok(EncryptionLevel::NotSupported)
     }
 }
 
