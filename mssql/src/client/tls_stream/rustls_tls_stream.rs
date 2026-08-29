@@ -202,6 +202,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
                 event!(Level::INFO, "Using default trust configuration.");
                 builder.with_native_roots().with_no_client_auth()
             }
+            #[cfg(feature = "rustls-webpki-roots")]
+            TrustConfig::WebPkiRoots => {
+                event!(Level::INFO, "Using webpki-roots trust configuration.");
+                builder.with_webpki_roots().with_no_client_auth()
+            }
         };
 
         let connector = TlsConnector::from(Arc::new(client_config));
@@ -252,6 +257,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> AsyncWrite for TlsStream<S> {
 
 trait ConfigBuilderExt {
     fn with_native_roots(self) -> ConfigBuilder<ClientConfig, WantsClientCert>;
+
+    #[cfg(feature = "rustls-webpki-roots")]
+    fn with_webpki_roots(self) -> ConfigBuilder<ClientConfig, WantsClientCert>;
 }
 
 impl ConfigBuilderExt for ConfigBuilder<ClientConfig, WantsVerifier> {
@@ -277,6 +285,14 @@ impl ConfigBuilderExt for ConfigBuilder<ClientConfig, WantsVerifier> {
             invalid_count
         );
         assert!(!roots.is_empty(), "no CA certificates found");
+
+        self.with_root_certificates(roots)
+    }
+
+    #[cfg(feature = "rustls-webpki-roots")]
+    fn with_webpki_roots(self) -> ConfigBuilder<ClientConfig, WantsClientCert> {
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
         self.with_root_certificates(roots)
     }

@@ -62,6 +62,7 @@ num-traits = "0.2"
 uuid = "1.26"
 zeroize = "1.8.2"
 cfg-if = "1.0"
+webpki-roots = { version = "1.0.9", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 winauth = { version = "0.0.5", optional = true }
@@ -216,3 +217,9 @@ vendored-openssl = ["opentls"]
 # if it gated the whole SSPI/Windows-auth concept rather than just this one
 # backend for it.
 sspi-rs = ["dep:sspi"]
+# Validate the server's TLS certificate against Mozilla's curated root CA
+# list (via the `webpki-roots` crate, bundled at compile time) instead of
+# the operating system's own certificate store. Useful in minimal/scratch
+# containers that don't ship a system trust store. Implies `rustls`, since
+# this is a trust-source option for that backend specifically.
+rustls-webpki-roots = ["dep:webpki-roots", "rustls"]

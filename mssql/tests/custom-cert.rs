@@ -202,3 +202,37 @@ fn connect_to_custom_cert_instance_without_ca() -> Result<()> {
         Ok(())
     })
 }
+
+// Regression test for prisma/tiberius#330 (webpki-roots support). This test
+// server's certificate is self-signed for local testing, not issued by any
+// public CA - so validating it against Mozilla's public root CA list
+// (`trust_webpki_roots`) must fail, the same way it would for any real
+// self-signed certificate. This can't positively prove webpki-roots
+// validates a *real* publicly-trusted certificate (that would need an
+// actual internet-facing SQL Server), but it does prove the roots are
+// genuinely loaded and enforced rather than a no-op stub that would trust
+// anything.
+#[test]
+#[cfg(feature = "rustls-webpki-roots")]
+fn connect_to_custom_cert_instance_via_webpki_roots_rejects_self_signed_cert() -> Result<()> {
+    LOGGER_SETUP.call_once(|| {
+        env_logger::init();
+    });
+
+    let rt = Runtime::new()?;
+
+    rt.block_on(async {
+        let mut config = Config::new();
+        config.host("localhost");
+        config.port(1433);
+        config.trust_webpki_roots();
+        config.authentication(AuthMethod::sql_server("sa", "<YourStrong@Passw0rd>"));
+
+        let tcp = TcpStream::connect(config.get_addr()).await?;
+
+        let client = Client::connect(config, tcp.compat_write()).await;
+
+        assert!(client.is_err());
+        Ok(())
+    })
+}

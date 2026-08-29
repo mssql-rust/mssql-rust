@@ -72,6 +72,7 @@ jobs:
           - "--no-default-features --features=chrono"
           - "--no-default-features --features=time"
           - "--no-default-features --features=rustls"
+          - "--no-default-features --features=rustls-webpki-roots"
           - "--no-default-features --features=vendored-openssl"
 
     env:

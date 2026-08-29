@@ -49,6 +49,8 @@ pub(crate) enum TrustConfig {
     CaCertificateLocation(PathBuf),
     #[allow(dead_code)]
     CaCertificateBundle(Vec<u8>),
+    #[cfg(feature = "rustls-webpki-roots")]
+    WebPkiRoots,
     TrustAll,
     Default,
 }
@@ -174,7 +176,7 @@ impl Config {
     pub fn trust_cert(&mut self) {
         if !matches!(&self.trust, TrustConfig::Default) {
             panic!(
-                "'trust_cert', 'trust_cert_ca' and 'trust_cert_ca_bundle' are mutually exclusive! Only use one."
+                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle' and 'trust_webpki_roots' are mutually exclusive! Only use one."
             )
         }
         self.trust = TrustConfig::TrustAll;
@@ -192,7 +194,7 @@ impl Config {
     pub fn trust_cert_ca(&mut self, path: impl ToString) {
         if !matches!(&self.trust, TrustConfig::Default) {
             panic!(
-                "'trust_cert', 'trust_cert_ca' and 'trust_cert_ca_bundle' are mutually exclusive! Only use one."
+                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle' and 'trust_webpki_roots' are mutually exclusive! Only use one."
             )
         } else {
             self.trust = TrustConfig::CaCertificateLocation(PathBuf::from(path.to_string()))
@@ -214,10 +216,34 @@ impl Config {
     pub fn trust_cert_ca_bundle(&mut self, bundle: impl Into<Vec<u8>>) {
         if !matches!(&self.trust, TrustConfig::Default) {
             panic!(
-                "'trust_cert', 'trust_cert_ca' and 'trust_cert_ca_bundle' are mutually exclusive! Only use one."
+                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle' and 'trust_webpki_roots' are mutually exclusive! Only use one."
             )
         } else {
             self.trust = TrustConfig::CaCertificateBundle(bundle.into())
+        }
+    }
+
+    /// If set, the server certificate will be validated against Mozilla's
+    /// curated root CA list (bundled at compile time via the `webpki-roots`
+    /// crate) instead of the operating system's own certificate store.
+    /// Useful in minimal/scratch containers that don't ship a system trust
+    /// store, or to pin trust roots independent of what the host happens to
+    /// have installed.
+    ///
+    /// # Panics
+    /// Will panic in case `trust_cert`, `trust_cert_ca` or
+    /// `trust_cert_ca_bundle` was called before.
+    ///
+    /// - Defaults to validating the server certificate is validated against system's certificate storage.
+    #[cfg(feature = "rustls-webpki-roots")]
+    #[cfg_attr(feature = "docs", doc(cfg(feature = "rustls-webpki-roots")))]
+    pub fn trust_webpki_roots(&mut self) {
+        if !matches!(&self.trust, TrustConfig::Default) {
+            panic!(
+                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle' and 'trust_webpki_roots' are mutually exclusive! Only use one."
+            )
+        } else {
+            self.trust = TrustConfig::WebPkiRoots;
         }
     }
 
@@ -487,7 +513,8 @@ impl ConfigBuilder {
     /// See [`Config::trust_cert`].
     ///
     /// # Panics
-    /// Will panic in case `trust_cert_ca` or `trust_cert_ca_bundle` was called before.
+    /// Will panic in case `trust_cert_ca`, `trust_cert_ca_bundle` or
+    /// `trust_webpki_roots` was called before.
     pub fn trust_cert(&mut self) -> &mut Self {
         self.inner.trust_cert();
         self
@@ -496,7 +523,8 @@ impl ConfigBuilder {
     /// See [`Config::trust_cert_ca`].
     ///
     /// # Panics
-    /// Will panic in case `trust_cert` or `trust_cert_ca_bundle` was called before.
+    /// Will panic in case `trust_cert`, `trust_cert_ca_bundle` or
+    /// `trust_webpki_roots` was called before.
     pub fn trust_cert_ca(&mut self, path: impl ToString) -> &mut Self {
         self.inner.trust_cert_ca(path);
         self
@@ -505,9 +533,22 @@ impl ConfigBuilder {
     /// See [`Config::trust_cert_ca_bundle`].
     ///
     /// # Panics
-    /// Will panic in case `trust_cert` or `trust_cert_ca` was called before.
+    /// Will panic in case `trust_cert`, `trust_cert_ca` or
+    /// `trust_webpki_roots` was called before.
     pub fn trust_cert_ca_bundle(&mut self, bundle: impl Into<Vec<u8>>) -> &mut Self {
         self.inner.trust_cert_ca_bundle(bundle);
+        self
+    }
+
+    /// See [`Config::trust_webpki_roots`].
+    ///
+    /// # Panics
+    /// Will panic in case `trust_cert`, `trust_cert_ca` or
+    /// `trust_cert_ca_bundle` was called before.
+    #[cfg(feature = "rustls-webpki-roots")]
+    #[cfg_attr(feature = "docs", doc(cfg(feature = "rustls-webpki-roots")))]
+    pub fn trust_webpki_roots(&mut self) -> &mut Self {
+        self.inner.trust_webpki_roots();
         self
     }
 
@@ -993,6 +1034,47 @@ mod tests {
             .build();
 
         assert_eq!(Some(8192), built.get_packet_size());
+        assert_eq!(Some("master".to_string()), built.database);
+    }
+
+    // Regression tests for prisma/tiberius#330 (webpki-roots support).
+
+    #[cfg(feature = "rustls-webpki-roots")]
+    #[test]
+    fn trust_webpki_roots_sets_trust_config() {
+        let mut config = Config::new();
+        config.trust_webpki_roots();
+        assert!(matches!(config.trust, TrustConfig::WebPkiRoots));
+    }
+
+    #[cfg(feature = "rustls-webpki-roots")]
+    #[test]
+    #[should_panic(expected = "mutually exclusive")]
+    fn trust_webpki_roots_after_trust_cert_panics() {
+        let mut config = Config::new();
+        config.trust_cert();
+        config.trust_webpki_roots();
+    }
+
+    #[cfg(feature = "rustls-webpki-roots")]
+    #[test]
+    #[should_panic(expected = "mutually exclusive")]
+    fn trust_cert_ca_after_trust_webpki_roots_panics() {
+        let mut config = Config::new();
+        config.trust_webpki_roots();
+        config.trust_cert_ca("some/path.crt");
+    }
+
+    #[cfg(feature = "rustls-webpki-roots")]
+    #[test]
+    fn builder_trust_webpki_roots_chains() {
+        let built = Config::builder()
+            .host("localhost")
+            .trust_webpki_roots()
+            .database("master")
+            .build();
+
+        assert!(matches!(built.trust, TrustConfig::WebPkiRoots));
         assert_eq!(Some("master".to_string()), built.database);
     }
 }
