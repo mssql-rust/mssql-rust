@@ -9,7 +9,7 @@ req_extensions = v3_req
 [ req_distinguished_name ]
 C=DE
 O=Acme
-OU=Tiberius
+OU=mssql
 CN=$CERT_CN
 
 [ v3_req ]
