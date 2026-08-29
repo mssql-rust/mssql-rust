@@ -607,6 +607,46 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
             }
             #[cfg(feature = "tds73")]
             (ColumnData::DateTime2(opt), Some(TypeInfo::VarLenSized(vlc)))
+                if vlc.r#type() == VarLenType::Datetimen =>
+            {
+                if let Some(dt2) = opt {
+                    // `datetime`/`Datetimen`'s epoch is 1900-01-01, which is
+                    // this many days after `DateTime2`'s epoch of 0001-01-01.
+                    const DAYS_FROM_YEAR_ONE_TO_1900: i64 = 693_595;
+                    // SQL Server's documented minimum for `datetime` is
+                    // 1753-01-01 (the earliest date the Gregorian calendar
+                    // algorithm it uses can represent unambiguously).
+                    const DAYS_FROM_YEAR_ONE_TO_1753: i64 = 639_905;
+
+                    let days_since_year_one = dt2.date().days() as i64;
+
+                    if days_since_year_one < DAYS_FROM_YEAR_ONE_TO_1753 {
+                        return Err(crate::Error::Conversion(
+                            format!(
+                                "invalid datetime, expecting a date not earlier than \
+                                 1753-01-01, but got a DateTime2 {} days from 0001-01-01",
+                                days_since_year_one
+                            )
+                            .into(),
+                        ));
+                    }
+
+                    let days = (days_since_year_one - DAYS_FROM_YEAR_ONE_TO_1900) as i32;
+
+                    // Convert this DateTime2's 10^-scale-second increments to
+                    // the legacy `datetime` type's 1/300-of-a-second ones.
+                    let time = dt2.time();
+                    let seconds_fragments =
+                        (time.increments() as u128 * 300 / 10u128.pow(time.scale() as u32)) as u32;
+
+                    dst.put_u8(8);
+                    DateTime::new(days, seconds_fragments).encode(dst)?;
+                } else {
+                    dst.put_u8(0);
+                }
+            }
+            #[cfg(feature = "tds73")]
+            (ColumnData::DateTime2(opt), Some(TypeInfo::VarLenSized(vlc)))
                 if vlc.r#type() == VarLenType::Datetime2 =>
             {
                 if let Some(mut dt2) = opt {
@@ -1595,6 +1635,59 @@ mod tests {
             } else {
                 panic!("Expected: Error::BulkInput, got: {:?}", err);
             }
+        }
+    }
+
+    #[cfg(feature = "tds73")]
+    #[tokio::test]
+    async fn datetime2_encodes_as_datetimen_for_bulk_insert() {
+        // 2024-01-15, scale 7 (100ns increments), matching what the chrono
+        // and time interop conversions always produce.
+        let date = Date::new(738_901); // days since 0001-01-01
+        let time = Time::new(453_780_000_000, 7); // 12:36:18 as 100ns increments
+        let dt2 = ColumnData::DateTime2(Some(DateTime2::new(date, time)));
+
+        let ti = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Datetimen, 8, None));
+
+        let mut buf = BytesMut::new();
+        let mut buf_ti = BytesMutWithTypeInfo::new(&mut buf).with_type_info(&ti);
+        dt2.encode(&mut buf_ti).expect("encode must succeed");
+
+        let reader = &mut buf.into_sql_read_bytes();
+        let decoded = ColumnData::decode(reader, &ti)
+            .await
+            .expect("decode must succeed");
+
+        // datetime's epoch is 1900-01-01; 738901 - 693595 = 45306 days later.
+        let expected_days = 45_306;
+        // 453_780_000_000 (100ns units, i.e. 45378s = 12:36:18) -> 1/300-of-
+        // a-second units: 45378 * 300 = 13_613_400.
+        let expected_seconds_fragments = 13_613_400;
+
+        assert_eq!(
+            ColumnData::DateTime(Some(crate::tds::time::DateTime::new(
+                expected_days,
+                expected_seconds_fragments
+            ))),
+            decoded
+        );
+    }
+
+    #[cfg(feature = "tds73")]
+    #[tokio::test]
+    async fn datetime2_before_1753_rejected_for_bulk_insert() {
+        let date = Date::new(1); // 0001-01-02, long before 1753-01-01
+        let time = Time::new(0, 7);
+        let dt2 = ColumnData::DateTime2(Some(DateTime2::new(date, time)));
+
+        let ti = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Datetimen, 8, None));
+
+        let mut buf = BytesMut::new();
+        let mut buf_ti = BytesMutWithTypeInfo::new(&mut buf).with_type_info(&ti);
+
+        match dt2.encode(&mut buf_ti) {
+            Err(Error::Conversion(_)) => {}
+            other => panic!("Expected Error::Conversion, got: {:?}", other),
         }
     }
 }
