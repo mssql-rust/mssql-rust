@@ -264,6 +264,19 @@ impl Encode<BytesMut> for BaseMetaDataColumn {
 }
 
 /// A setting a column can hold.
+///
+/// Bit positions follow MS-TDS 2.2.7.4 COLMETADATA's `Flags` field exactly
+/// (verified against
+/// <https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/58880b9f-381c-43b2-bf8b-0727a98c4f4c>).
+/// Note that `usUpdateable` is a single 2-bit *value* (0 = read-only, 1 =
+/// read/write, 2 = updateable-unknown), not two independent flags, so
+/// [`Updateable`](ColumnFlag::Updateable) and
+/// [`UpdateableUnknown`](ColumnFlag::UpdateableUnknown) must be checked
+/// together (e.g. via `intersects`) to mean "not definitely read-only" -
+/// checking `Updateable` alone will miss columns the server reports as
+/// "unknown" updateability, which in practice is most ordinary columns in a
+/// plain `SELECT` (servers usually only resolve read-only vs. read/write
+/// definitively for columns like identities or computed columns).
 #[bitflags]
 #[repr(u16)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,22 +287,22 @@ pub enum ColumnFlag {
     /// type.
     CaseSensitive = 1 << 1,
     /// If column is writeable.
-    Updateable = 1 << 3,
+    Updateable = 1 << 2,
     /// Column modification status unknown.
-    UpdateableUnknown = 1 << 4,
+    UpdateableUnknown = 1 << 3,
     /// Column is an identity.
-    Identity = 1 << 5,
+    Identity = 1 << 4,
     /// Coulumn is computed.
-    Computed = 1 << 7,
+    Computed = 1 << 5,
     /// Column is a fixed-length common language runtime user-defined type (CLR
     /// UDT).
-    FixedLenClrType = 1 << 10,
+    FixedLenClrType = 1 << 8,
     /// Column is the special XML column for the sparse column set.
-    SparseColumnSet = 1 << 11,
+    SparseColumnSet = 1 << 10,
     /// Column is encrypted transparently and has to be decrypted to view the
     /// plaintext value. This flag is valid when the column encryption feature
     /// is negotiated between client and server and is turned on.
-    Encrypted = 1 << 12,
+    Encrypted = 1 << 11,
     /// Column is part of a hidden primary key created to support a T-SQL SELECT
     /// statement containing FOR BROWSE.
     Hidden = 1 << 13,
@@ -356,5 +369,91 @@ impl BaseMetaDataColumn {
         };
 
         Ok(BaseMetaDataColumn { flags, ty })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression test for the ColumnFlag bit positions, verified against
+    // MS-TDS 2.2.7.4 COLMETADATA's `Flags` field:
+    // https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/58880b9f-381c-43b2-bf8b-0727a98c4f4c
+    //
+    // Each assertion decodes a raw wire value containing exactly one real
+    // flag bit (plus fNullable, always present for a nullable column so the
+    // value stays realistic) and checks it lands on the right ColumnFlag.
+    // Before this fix, several of these (Updateable, UpdateableUnknown,
+    // Identity, Computed, FixedLenClrType, SparseColumnSet, Encrypted) were
+    // off by 1-2 bits, so e.g. a real server's `fIdentity` bit (0x10) would
+    // have been misread as `UpdateableUnknown`.
+    fn flags(bits: u16) -> BitFlags<ColumnFlag> {
+        BitFlags::from_bits(bits).unwrap()
+    }
+
+    #[test]
+    fn nullable_bit_position() {
+        assert!(flags(0x0001).contains(ColumnFlag::Nullable));
+    }
+
+    #[test]
+    fn case_sensitive_bit_position() {
+        assert!(flags(0x0002).contains(ColumnFlag::CaseSensitive));
+    }
+
+    #[test]
+    fn updateable_bit_position() {
+        // usUpdateable = 1 (read/write): bit 2 only.
+        let f = flags(0x0004);
+        assert!(f.contains(ColumnFlag::Updateable));
+        assert!(!f.contains(ColumnFlag::UpdateableUnknown));
+    }
+
+    #[test]
+    fn updateable_unknown_bit_position() {
+        // usUpdateable = 2 (unknown): bit 3 only.
+        let f = flags(0x0008);
+        assert!(!f.contains(ColumnFlag::Updateable));
+        assert!(f.contains(ColumnFlag::UpdateableUnknown));
+    }
+
+    #[test]
+    fn identity_bit_position() {
+        assert!(flags(0x0010).contains(ColumnFlag::Identity));
+    }
+
+    #[test]
+    fn computed_bit_position() {
+        assert!(flags(0x0020).contains(ColumnFlag::Computed));
+    }
+
+    #[test]
+    fn fixed_len_clr_type_bit_position() {
+        assert!(flags(0x0100).contains(ColumnFlag::FixedLenClrType));
+    }
+
+    #[test]
+    fn sparse_column_set_bit_position() {
+        assert!(flags(0x0400).contains(ColumnFlag::SparseColumnSet));
+    }
+
+    #[test]
+    fn encrypted_bit_position() {
+        assert!(flags(0x0800).contains(ColumnFlag::Encrypted));
+    }
+
+    #[test]
+    fn hidden_bit_position() {
+        assert!(flags(0x2000).contains(ColumnFlag::Hidden));
+    }
+
+    #[test]
+    fn key_bit_position() {
+        assert!(flags(0x4000).contains(ColumnFlag::Key));
+    }
+
+    #[test]
+    fn nullable_unknown_bit_position() {
+        assert!(flags(0x8000).contains(ColumnFlag::NullableUnknown));
     }
 }

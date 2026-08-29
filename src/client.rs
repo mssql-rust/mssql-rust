@@ -392,7 +392,19 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
                 crate::Error::Protocol("expecting column metadata from query but not found".into())
             })?
             .into_iter()
-            .filter(|column| column.base.flags.contains(ColumnFlag::Updateable))
+            // `usUpdateable` is a 2-bit value (0 = read-only, 1 = read/write,
+            // 2 = unknown), not two independent flags: keep the column
+            // unless the server has positively marked it read-only (e.g.
+            // identity/computed columns). Checking `Updateable` alone would
+            // wrongly exclude ordinary columns, since servers commonly
+            // report plain `SELECT` columns as updateable-unknown rather
+            // than definitively read/write.
+            .filter(|column| {
+                column
+                    .base
+                    .flags
+                    .intersects(ColumnFlag::Updateable | ColumnFlag::UpdateableUnknown)
+            })
             .collect();
 
         self.connection.flush_stream().await?;
