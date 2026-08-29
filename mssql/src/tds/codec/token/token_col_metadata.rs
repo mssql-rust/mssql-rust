@@ -25,7 +25,13 @@ pub struct MetaDataColumn<'a> {
 
 impl<'a> Display for MetaDataColumn<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ", self.col_name)?;
+        // Bracket-quote the column name so keyword-ish or space-containing
+        // names (used to build INSERT BULK/SELECT TOP 0 statement text)
+        // don't break the statement; a literal `]` inside the name must be
+        // doubled, matching SQL Server's own escaping rule for quoted
+        // identifiers.
+        let col_name = self.col_name.replace(']', "]]");
+        write!(f, "[{}] ", col_name)?;
 
         match &self.base.ty {
             TypeInfo::FixedLen(fixed) => match fixed {
