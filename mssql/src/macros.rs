@@ -19,7 +19,11 @@ macro_rules! uint_enum {
             type Error = ();
             fn try_from(n: u8) -> ::std::result::Result<$ty, ()> {
                 match n {
-                    $( x if x == $ty::$variant as u8 => Ok($ty::$variant), )*
+                    // Some enums using this macro (e.g. FeatureLevel) have
+                    // discriminants wider than u8; the truncating cast below
+                    // is intentional: matching input `n` never accidentally
+                    // succeeds against a differently-valued variant.
+                    $( #[allow(clippy::cast_enum_truncation)] x if x == $ty::$variant as u8 => Ok($ty::$variant), )*
                     _ => Err(()),
                 }
             }
