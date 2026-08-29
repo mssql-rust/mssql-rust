@@ -6,8 +6,8 @@ use std::cell::RefCell;
 use std::env;
 use std::sync::Once;
 
-use tiberius::FromSql;
-use tiberius::{numeric::Numeric, xml::XmlData, ColumnType, Query, QueryItem, Result};
+use mssql::FromSql;
+use mssql::{numeric::Numeric, xml::XmlData, ColumnType, Query, QueryItem, Result};
 use uuid::Uuid;
 
 use runtimes_macro::test_on_runtimes;
@@ -17,7 +17,7 @@ use runtimes_macro::test_on_runtimes;
 static LOGGER_SETUP: Once = Once::new();
 
 static CONN_STR: Lazy<String> = Lazy::new(|| {
-    env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or_else(|_| {
+    env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or_else(|_| {
         "server=tcp:localhost,1433;user=SA;password=<YourStrong@Passw0rd>;IntegratedSecurity=true;TrustServerCertificate=true".to_owned()
     })
 });
@@ -46,7 +46,7 @@ static PLAIN_TEXT_CONN_STR: Lazy<String> =
     Lazy::new(|| format!("{};encrypt=DANGER_PLAINTEXT", *CONN_STR));
 
 #[test_on_runtimes(connection_string = "ENCRYPTED_CONN_STR")]
-async fn connect_with_full_encryption<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn connect_with_full_encryption<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -63,7 +63,7 @@ where
 }
 
 #[test_on_runtimes(connection_string = "PLAIN_TEXT_CONN_STR")]
-async fn connect_as_plain_text<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn connect_as_plain_text<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -80,7 +80,7 @@ where
 }
 
 #[test_on_runtimes(connection_string = "DOT_CONN_STR")]
-async fn connect_dot_server_as_localhost<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn connect_dot_server_as_localhost<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -97,7 +97,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn transactions<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn transactions<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -118,7 +118,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn transactions_300<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn transactions_300<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -141,7 +141,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn multistatement_query_with_exec_proc<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn multistatement_query_with_exec_proc<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -205,7 +205,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn read_and_write_tinyint<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn read_and_write_tinyint<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -236,7 +236,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn read_and_write_kanji_varchars<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn read_and_write_kanji_varchars<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -273,7 +273,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn read_and_write_weird_garbage<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn read_and_write_weird_garbage<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -308,7 +308,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn read_and_write_finnish_varchars<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn read_and_write_finnish_varchars<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -344,7 +344,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn read_and_write_char<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn read_and_write_char<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -371,7 +371,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn read_and_write_nchar<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn read_and_write_nchar<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -398,7 +398,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn execute_insert_update_delete<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn execute_insert_update_delete<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -438,7 +438,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn execute_with_multiple_separate_results<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn execute_with_multiple_separate_results<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -461,7 +461,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn execute_multiple_count_total<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn execute_multiple_count_total<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -487,7 +487,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn correct_row_handling_when_not_enough_data<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn correct_row_handling_when_not_enough_data<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -516,7 +516,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn multiple_stored_procedure_functions<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn multiple_stored_procedure_functions<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -534,7 +534,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn multiple_queries<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn multiple_queries<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -563,7 +563,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn bool_type<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn bool_type<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -581,7 +581,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn u8_token<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn u8_token<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -596,7 +596,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn i16_token<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn i16_token<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -613,7 +613,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn i32_token<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn i32_token<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -630,7 +630,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn i64_token<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn i64_token<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -647,7 +647,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn f32_token<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn f32_token<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -664,7 +664,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn f64_token<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn f64_token<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -681,7 +681,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn read_nullable_u8<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn read_nullable_u8<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -703,7 +703,7 @@ where
         .unwrap();
 
     for val in row {
-        assert_eq!(&tiberius::ColumnData::U8(None), &val);
+        assert_eq!(&mssql::ColumnData::U8(None), &val);
         assert_eq!(Option::<u8>::None, u8::from_sql(&val)?)
     }
 
@@ -711,7 +711,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn read_nullable_i16<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn read_nullable_i16<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -733,7 +733,7 @@ where
         .unwrap();
 
     for val in row {
-        assert_eq!(&tiberius::ColumnData::I16(None), &val);
+        assert_eq!(&mssql::ColumnData::I16(None), &val);
         assert_eq!(Option::<i16>::None, i16::from_sql(&val)?)
     }
 
@@ -741,7 +741,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn read_nullable_i32<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn read_nullable_i32<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -763,7 +763,7 @@ where
         .unwrap();
 
     for val in row {
-        assert_eq!(&tiberius::ColumnData::I32(None), &val);
+        assert_eq!(&mssql::ColumnData::I32(None), &val);
         assert_eq!(Option::<i32>::None, i32::from_sql(&val)?)
     }
 
@@ -771,7 +771,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn read_nullable_i64<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn read_nullable_i64<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -793,7 +793,7 @@ where
         .unwrap();
 
     for val in row {
-        assert_eq!(&tiberius::ColumnData::I64(None), &val);
+        assert_eq!(&mssql::ColumnData::I64(None), &val);
         assert_eq!(Option::<i64>::None, i64::from_sql(&val)?)
     }
 
@@ -801,7 +801,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn read_nullable_f32<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn read_nullable_f32<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -825,14 +825,14 @@ where
     for val in row {
         assert_eq!(Option::<f32>::None, f32::from_sql(&val)?);
         dbg!(&val);
-        assert_eq!(tiberius::ColumnData::F32(None), val);
+        assert_eq!(mssql::ColumnData::F32(None), val);
     }
 
     Ok(())
 }
 
 #[test_on_runtimes]
-async fn read_nullable_f64<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn read_nullable_f64<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -854,7 +854,7 @@ where
         .unwrap();
 
     for val in row {
-        assert_eq!(&tiberius::ColumnData::F64(None), &val);
+        assert_eq!(&mssql::ColumnData::F64(None), &val);
         assert_eq!(Option::<f64>::None, f64::from_sql(&val)?)
     }
 
@@ -862,7 +862,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn short_strings<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn short_strings<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -880,7 +880,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn long_strings<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn long_strings<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -898,7 +898,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn stored_procedures<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn stored_procedures<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -920,7 +920,7 @@ where
 
 #[test_on_runtimes]
 async fn drop_stream_before_handling_all_results_should_not_cause_weird_things<S>(
-    mut conn: tiberius::Client<S>,
+    mut conn: mssql::Client<S>,
 ) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
@@ -955,7 +955,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn floats_in_nbc_rows<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn floats_in_nbc_rows<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1024,7 +1024,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn tinyint_in_nbc_rows<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn tinyint_in_nbc_rows<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1093,7 +1093,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn smallint_in_nbc_rows<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn smallint_in_nbc_rows<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1162,7 +1162,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn int_in_nbc_rows<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn int_in_nbc_rows<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1231,7 +1231,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn bigint_in_nbc_rows<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn bigint_in_nbc_rows<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1300,7 +1300,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn nbc_rows<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn nbc_rows<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1344,7 +1344,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn ntext_type<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn ntext_type<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1377,7 +1377,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn ntext_empty<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn ntext_empty<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1405,7 +1405,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn text_type<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn text_type<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1434,7 +1434,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn varchar_empty<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn varchar_empty<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1465,7 +1465,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn text_empty<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn text_empty<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1493,7 +1493,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn varbinary_empty<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn varbinary_empty<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1528,7 +1528,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn binary_type<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn binary_type<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1569,7 +1569,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn varbinary_type<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn varbinary_type<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1610,7 +1610,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn image_type<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn image_type<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1649,7 +1649,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn guid_type_roundtrip<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn guid_type_roundtrip<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1667,7 +1667,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn guid_type_byte_ordering<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn guid_type_byte_ordering<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1685,7 +1685,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn varbinary_max<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn varbinary_max<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1726,7 +1726,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn numeric_type_u32_presentation<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn numeric_type_u32_presentation<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1745,7 +1745,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn numeric_type_u64_presentation<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn numeric_type_u64_presentation<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1764,7 +1764,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn numeric_type_u96_presentation<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn numeric_type_u96_presentation<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1783,7 +1783,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn numeric_type_u128_presentation<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn numeric_type_u128_presentation<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -1807,11 +1807,11 @@ mod rust_decimal {
     use super::*;
 
     #[test_on_runtimes]
-    async fn decimal_type_u32_presentation<S>(mut conn: tiberius::Client<S>) -> Result<()>
+    async fn decimal_type_u32_presentation<S>(mut conn: mssql::Client<S>) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send,
     {
-        use tiberius::numeric::Decimal;
+        use mssql::numeric::Decimal;
 
         let num = Decimal::from_i128_with_scale(2, 1);
         let row = conn
@@ -1827,11 +1827,11 @@ mod rust_decimal {
     }
 
     #[test_on_runtimes]
-    async fn decimal_type_u64_presentation<S>(mut conn: tiberius::Client<S>) -> Result<()>
+    async fn decimal_type_u64_presentation<S>(mut conn: mssql::Client<S>) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send,
     {
-        use tiberius::numeric::Decimal;
+        use mssql::numeric::Decimal;
 
         let num = Decimal::from_i128_with_scale(i32::MAX as i128 + 10, 1);
         let row = conn
@@ -1847,11 +1847,11 @@ mod rust_decimal {
     }
 
     #[test_on_runtimes]
-    async fn decimal_type_u96_presentation<S>(mut conn: tiberius::Client<S>) -> Result<()>
+    async fn decimal_type_u96_presentation<S>(mut conn: mssql::Client<S>) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send,
     {
-        use tiberius::numeric::Decimal;
+        use mssql::numeric::Decimal;
 
         let num = Decimal::from_i128_with_scale(i64::MAX as i128, 19);
         let row = conn
@@ -1867,11 +1867,11 @@ mod rust_decimal {
     }
 
     #[test_on_runtimes]
-    async fn decimal_type_u128_presentation<S>(mut conn: tiberius::Client<S>) -> Result<()>
+    async fn decimal_type_u128_presentation<S>(mut conn: mssql::Client<S>) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send,
     {
-        use tiberius::numeric::Decimal;
+        use mssql::numeric::Decimal;
 
         let num = Decimal::from_i128_with_scale(i64::MAX as i128, 28);
         let row = conn
@@ -1893,12 +1893,12 @@ mod bigdecimal {
     use super::*;
 
     #[test_on_runtimes]
-    async fn bigdecimal_type_u32_presentation<S>(mut conn: tiberius::Client<S>) -> Result<()>
+    async fn bigdecimal_type_u32_presentation<S>(mut conn: mssql::Client<S>) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send,
     {
+        use mssql::numeric::BigDecimal;
         use std::str::FromStr;
-        use tiberius::numeric::BigDecimal;
 
         let num = BigDecimal::from_str("2").unwrap();
         let row = conn
@@ -1914,13 +1914,13 @@ mod bigdecimal {
     }
 
     #[test_on_runtimes]
-    async fn handles_scale_underflow_with_bigdecimal<S>(mut conn: tiberius::Client<S>) -> Result<()>
+    async fn handles_scale_underflow_with_bigdecimal<S>(mut conn: mssql::Client<S>) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send,
     {
         use bigdecimal_::num_bigint::BigInt;
+        use mssql::numeric::BigDecimal;
         use num_traits::FromPrimitive;
-        use tiberius::numeric::BigDecimal;
 
         let int = BigInt::from_i128(90).unwrap();
         let num = BigDecimal::new(int, -1);
@@ -1938,13 +1938,13 @@ mod bigdecimal {
     }
 
     #[test_on_runtimes]
-    async fn bigdecimal_type_u64_presentation<S>(mut conn: tiberius::Client<S>) -> Result<()>
+    async fn bigdecimal_type_u64_presentation<S>(mut conn: mssql::Client<S>) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send,
     {
         use bigdecimal_::num_bigint::BigInt;
+        use mssql::numeric::BigDecimal;
         use num_traits::FromPrimitive;
-        use tiberius::numeric::BigDecimal;
 
         let int = BigInt::from_i128(i32::MAX as i128 + 10).unwrap();
         let num = BigDecimal::new(int, 1);
@@ -1962,13 +1962,13 @@ mod bigdecimal {
     }
 
     #[test_on_runtimes]
-    async fn bigdecimal_type_u96_presentation<S>(mut conn: tiberius::Client<S>) -> Result<()>
+    async fn bigdecimal_type_u96_presentation<S>(mut conn: mssql::Client<S>) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send,
     {
         use bigdecimal_::num_bigint::BigInt;
+        use mssql::numeric::BigDecimal;
         use num_traits::FromPrimitive;
-        use tiberius::numeric::BigDecimal;
 
         let int = BigInt::from_i128(i64::MAX as i128 + 10).unwrap();
         let num = BigDecimal::new(int, 19);
@@ -1986,13 +1986,13 @@ mod bigdecimal {
     }
 
     #[test_on_runtimes]
-    async fn bigdecimal_type_u128_presentation<S>(mut conn: tiberius::Client<S>) -> Result<()>
+    async fn bigdecimal_type_u128_presentation<S>(mut conn: mssql::Client<S>) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send,
     {
         use bigdecimal_::num_bigint::BigInt;
+        use mssql::numeric::BigDecimal;
         use num_traits::FromPrimitive;
-        use tiberius::numeric::BigDecimal;
 
         let int = BigInt::from_i128(i64::MAX as i128).unwrap();
         let num = BigDecimal::new(int, 28);
@@ -2010,13 +2010,13 @@ mod bigdecimal {
     }
 
     #[test_on_runtimes]
-    async fn dynamic_query_binding_bigdecimal<S>(mut conn: tiberius::Client<S>) -> Result<()>
+    async fn dynamic_query_binding_bigdecimal<S>(mut conn: mssql::Client<S>) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send,
     {
         use bigdecimal_::num_bigint::BigInt;
+        use mssql::numeric::BigDecimal;
         use num_traits::FromPrimitive;
-        use tiberius::numeric::BigDecimal;
 
         let int = BigInt::from_i128(i64::MAX as i128).unwrap();
         let num = BigDecimal::new(int, 28);
@@ -2036,7 +2036,7 @@ mod bigdecimal {
 
 #[cfg(all(not(feature = "tds73"), feature = "chrono"))]
 #[test_on_runtimes]
-async fn naive_date_time_tds72<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn naive_date_time_tds72<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2057,7 +2057,7 @@ where
 
 #[cfg(all(feature = "tds73", feature = "chrono"))]
 #[test_on_runtimes]
-async fn naive_small_date_time_tds73<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn naive_small_date_time_tds73<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2095,7 +2095,7 @@ where
 
 #[cfg(all(feature = "tds73", feature = "chrono"))]
 #[test_on_runtimes]
-async fn naive_date_time2_tds73<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn naive_date_time2_tds73<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2131,7 +2131,7 @@ where
 
 #[cfg(all(feature = "tds73", feature = "chrono"))]
 #[test_on_runtimes]
-async fn datetime_as_datetime2_tds73<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn datetime_as_datetime2_tds73<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2161,7 +2161,7 @@ where
 
 #[cfg(all(feature = "tds73", feature = "chrono"))]
 #[test_on_runtimes]
-async fn naive_time<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn naive_time<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2194,7 +2194,7 @@ where
 
 #[cfg(all(feature = "tds73", feature = "chrono"))]
 #[test_on_runtimes]
-async fn naive_date<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn naive_date<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2227,7 +2227,7 @@ where
 
 #[cfg(all(feature = "tds73", feature = "chrono"))]
 #[test_on_runtimes]
-async fn date_time_utc<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn date_time_utc<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2264,7 +2264,7 @@ where
 
 #[cfg(all(feature = "tds73", feature = "chrono"))]
 #[test_on_runtimes]
-async fn date_time_fixed<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn date_time_fixed<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2303,7 +2303,7 @@ where
 
 #[cfg(all(feature = "tds73", feature = "chrono"))]
 #[test_on_runtimes]
-async fn date_time_fixed_convertion<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn date_time_fixed_convertion<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2332,7 +2332,7 @@ where
 
 #[cfg(all(not(feature = "tds73"), feature = "time"))]
 #[test_on_runtimes]
-async fn primitive_date_time_tds72_time_crate<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn primitive_date_time_tds72_time_crate<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2351,7 +2351,7 @@ where
 
 #[cfg(all(feature = "tds73", feature = "time"))]
 #[test_on_runtimes]
-async fn primitive_small_date_time_tds73_time_crate<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn primitive_small_date_time_tds73_time_crate<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2388,7 +2388,7 @@ where
 
 #[cfg(all(feature = "tds73", feature = "time"))]
 #[test_on_runtimes]
-async fn primitive_date_time2_tds73_time_crate<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn primitive_date_time2_tds73_time_crate<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2421,7 +2421,7 @@ where
 
 #[cfg(all(feature = "tds73", feature = "time"))]
 #[test_on_runtimes]
-async fn time_with_time_crate<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn time_with_time_crate<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2441,7 +2441,7 @@ where
 
 #[cfg(all(feature = "tds73", feature = "time"))]
 #[test_on_runtimes]
-async fn date_with_time_crate<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn date_with_time_crate<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2461,7 +2461,7 @@ where
 
 #[cfg(all(feature = "tds73", feature = "time"))]
 #[test_on_runtimes]
-async fn offset_datetime_utc_with_time_crate<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn offset_datetime_utc_with_time_crate<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2485,7 +2485,7 @@ where
 
 #[cfg(all(feature = "tds73", feature = "time"))]
 #[test_on_runtimes]
-async fn offset_date_time_fixed_with_time_crate<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn offset_date_time_fixed_with_time_crate<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2510,7 +2510,7 @@ where
 #[cfg(all(feature = "tds73", feature = "time"))]
 #[test_on_runtimes]
 async fn offset_date_time_fixed_with_time_crate_conversion<S>(
-    mut conn: tiberius::Client<S>,
+    mut conn: mssql::Client<S>,
 ) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
@@ -2542,7 +2542,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn xml_read_write<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn xml_read_write<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2560,7 +2560,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn xml_read_null_xml<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn xml_read_null_xml<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2577,7 +2577,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn money_smallmoney<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn money_smallmoney<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2620,7 +2620,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn mars_sp_routines_must_fetch_all_results<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn mars_sp_routines_must_fetch_all_results<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2648,7 +2648,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn warnings_should_not_affect_column_fetch<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn warnings_should_not_affect_column_fetch<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2694,12 +2694,12 @@ fn cyrillic_collations_should_work() -> Result<()> {
 
     async_std::task::block_on(async {
         let mut admin = {
-            let config = tiberius::Config::from_ado_string(&CONN_STR)?;
+            let config = mssql::Config::from_ado_string(&CONN_STR)?;
 
             let tcp = async_std::net::TcpStream::connect(config.get_addr()).await?;
             tcp.set_nodelay(true)?;
 
-            tiberius::Client::connect(config, tcp).await?
+            mssql::Client::connect(config, tcp).await?
         };
 
         admin
@@ -2708,13 +2708,13 @@ fn cyrillic_collations_should_work() -> Result<()> {
 
         {
             let mut client = {
-                let mut config = tiberius::Config::from_ado_string(&CONN_STR)?;
+                let mut config = mssql::Config::from_ado_string(&CONN_STR)?;
                 config.database("ru_test");
 
                 let tcp = async_std::net::TcpStream::connect(config.get_addr()).await?;
                 tcp.set_nodelay(true)?;
 
-                tiberius::Client::connect(config, tcp).await?
+                mssql::Client::connect(config, tcp).await?
             };
 
             client
@@ -2754,13 +2754,13 @@ fn application_name_should_be_set_correctly() -> Result<()> {
     });
 
     async_std::task::block_on(async {
-        let mut config = tiberius::Config::from_ado_string(&CONN_STR)?;
+        let mut config = mssql::Config::from_ado_string(&CONN_STR)?;
         config.application_name("meow");
 
         let tcp = async_std::net::TcpStream::connect(config.get_addr()).await?;
         tcp.set_nodelay(true)?;
 
-        let mut client = tiberius::Client::connect(config, tcp).await?;
+        let mut client = mssql::Client::connect(config, tcp).await?;
 
         let row = client
             .query("SELECT APP_NAME()", &[])
@@ -2776,7 +2776,7 @@ fn application_name_should_be_set_correctly() -> Result<()> {
 }
 
 #[test_on_runtimes]
-async fn columns_fetch_should_work<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn columns_fetch_should_work<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2806,7 +2806,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn into_row_stream_should_work<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn into_row_stream_should_work<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2826,7 +2826,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn dynamic_query_binding_strings<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn dynamic_query_binding_strings<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2874,7 +2874,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn dynamic_query_binding_bytes<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn dynamic_query_binding_bytes<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2903,7 +2903,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn dynamic_query_binding_xml<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn dynamic_query_binding_xml<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2928,7 +2928,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn dynamic_query_binding_guid<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn dynamic_query_binding_guid<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2953,7 +2953,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn dynamic_query_binding_numbers<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn dynamic_query_binding_numbers<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -2996,7 +2996,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn dynamic_query_binding_boolean<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn dynamic_query_binding_boolean<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
@@ -3016,7 +3016,7 @@ where
 }
 
 #[test_on_runtimes]
-async fn new_execute_interface<S>(mut conn: tiberius::Client<S>) -> Result<()>
+async fn new_execute_interface<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {

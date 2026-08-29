@@ -1,13 +1,13 @@
 use std::env;
 
 use indoc::indoc;
+use mssql::{error::Error, Client, Config};
 use once_cell::sync::Lazy;
-use tiberius::{error::Error, Client, Config};
 use tokio::{net::TcpStream, sync::mpsc};
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 static CONN_STR: Lazy<String> = Lazy::new(|| {
-    env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or_else(|_| {
+    env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or_else(|_| {
         "server=tcp:localhost,1433;IntegratedSecurity=true;TrustServerCertificate=true".to_owned()
     })
 });
@@ -17,7 +17,7 @@ static CONN_STR: Lazy<String> = Lazy::new(|| {
 /// can still continue using our other connection in the main task.
 async fn spawn_actor() -> (
     mpsc::Sender<&'static str>,
-    mpsc::Receiver<tiberius::Result<()>>,
+    mpsc::Receiver<mssql::Result<()>>,
 ) {
     let (query_sender, mut query_receiver) = mpsc::channel(100);
     let (response_sender, response_receiver) = mpsc::channel(100);

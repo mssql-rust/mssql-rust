@@ -1,10 +1,10 @@
 use futures_util::io::{AsyncRead, AsyncWrite};
+use mssql::{IntoSql, Result, TokenRow};
 use names::{Generator, Name};
 use once_cell::sync::Lazy;
 use std::cell::RefCell;
 use std::env;
 use std::sync::Once;
-use tiberius::{IntoSql, Result, TokenRow};
 
 #[cfg(all(feature = "tds73", feature = "chrono"))]
 use chrono::DateTime;
@@ -18,7 +18,7 @@ use runtimes_macro::test_on_runtimes;
 static LOGGER_SETUP: Once = Once::new();
 
 static CONN_STR: Lazy<String> = Lazy::new(|| {
-    env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or_else(|_| {
+    env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or_else(|_| {
         "server=tcp:localhost,1433;IntegratedSecurity=true;TrustServerCertificate=true".to_owned()
     })
 });
@@ -43,7 +43,7 @@ macro_rules! test_bulk_type {
     ($name:ident($sql_type:literal, $total_generated:expr, $generator:expr)) => {
         paste::item! {
             #[test_on_runtimes]
-            async fn [< bulk_load_optional_ $name >]<S>(mut conn: tiberius::Client<S>) -> Result<()>
+            async fn [< bulk_load_optional_ $name >]<S>(mut conn: mssql::Client<S>) -> Result<()>
             where
                 S: AsyncRead + AsyncWrite + Unpin + Send,
             {
@@ -75,7 +75,7 @@ macro_rules! test_bulk_type {
             }
 
             #[test_on_runtimes]
-            async fn [< bulk_load_required_ $name >]<S>(mut conn: tiberius::Client<S>) -> Result<()>
+            async fn [< bulk_load_required_ $name >]<S>(mut conn: mssql::Client<S>) -> Result<()>
             where
                 S: AsyncRead + AsyncWrite + Unpin + Send,
             {
