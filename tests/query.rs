@@ -1,8 +1,6 @@
 use futures_util::io::{AsyncRead, AsyncWrite};
 use futures_util::stream::TryStreamExt;
-use names::{Generator, Name};
 use once_cell::sync::Lazy;
-use std::cell::RefCell;
 use std::env;
 use std::sync::Once;
 
@@ -22,19 +20,8 @@ static CONN_STR: Lazy<String> = Lazy::new(|| {
     })
 });
 
-thread_local! {
-    static NAMES: RefCell<Option<Generator<'static>>> = const { RefCell::new(None) };
-}
-
 async fn random_table() -> String {
-    NAMES.with(|maybe_generator| {
-        maybe_generator
-            .borrow_mut()
-            .get_or_insert_with(|| Generator::with_naming(Name::Plain))
-            .next()
-            .unwrap()
-            .replace('-', "")
-    })
+    format!("t{}", Uuid::new_v4().simple())
 }
 
 static DOT_CONN_STR: Lazy<String> = Lazy::new(|| CONN_STR.replace("localhost", "."));
