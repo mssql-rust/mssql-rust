@@ -122,10 +122,12 @@ original would have broken the default build), plus direct fixes for issues
   (dropped the unrelated log-level/already-superseded CI changes).
   Regression test confirmed it fails to compile without the fix. Verified
   live (305 tests over rustls). Done: `37248c6`.
-- [ ] **#366** — `ConfigBuilder`. The idea is fine, but as submitted it
-  *removes* `Config::new()` and every existing setter — a breaking change for
-  ~100% of current users. Add the builder as a pure addition; do not remove
-  the existing API.
+- [x] **#366** — `ConfigBuilder`. Reimplemented as a pure addition — every
+  existing `Config::new()` setter untouched, `ConfigBuilder` just forwards
+  to them with `&mut Self` chaining, covering every setter including the
+  ones added this session (client_name, host_name_in_certificate,
+  send_string_parameters_as_unicode, multi_subnet_failover, packet_size).
+  Verified live (305 tests over rustls, unaffected). Done: `7e8f9c6`.
 - [ ] **#408** — SSPI NTLM without Kerberos (Unix). Real auth-gap fix, but no
   test coverage for a new auth code path, duplicated GSSAPI connection-string
   parsing, and it clones the password without zeroizing (reconcile with
