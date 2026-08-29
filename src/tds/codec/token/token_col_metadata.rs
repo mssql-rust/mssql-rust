@@ -17,9 +17,15 @@ pub struct TokenColMetaData<'a> {
     pub columns: Vec<MetaDataColumn<'a>>,
 }
 
+/// A single column's metadata, as returned by [`Client::column_metadata`]
+/// and used internally to build a bulk insert's column list.
+///
+/// [`Client::column_metadata`]: crate::Client::column_metadata
 #[derive(Debug, Clone)]
 pub struct MetaDataColumn<'a> {
+    /// The column's type and flags (nullability, identity, computed, etc).
     pub base: BaseMetaDataColumn,
+    /// The column's name.
     pub col_name: Cow<'a, str>,
 }
 
