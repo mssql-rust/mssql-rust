@@ -75,12 +75,21 @@ original would have broken the default build), plus direct fixes for issues
   (SQL Server needs `]`→`]]`), only **#388** ships tests. Took #387's fix +
   #388's tests as one combined change. Verified live (confirmed the test
   fails without the fix, passes with it). Done: `2f33e33`.
-- [ ] **#413** — TDS 8.0 Strict encryption + `hostname_in_certificate`.
-  Highest-value PR in the batch: moves TLS before PRELOGIN (closes a real
-  downgrade window) and fixes a genuine `NoCertVerifier` TLS 1.3 gap. Before
-  merge: verify whether `EncryptionLevel::Strict` needs its own PRELOGIN wire
-  byte distinct from `Required` (currently coded the same) against MS-TDS
-  spec / a packet capture, not just one server's tolerance.
+- [x] **#413** — TDS 8.0 Strict encryption + `hostname_in_certificate`.
+  Resolved the flagged open question: confirmed against Microsoft's
+  current TDS 8.0 docs that Strict's PRELOGIN exchange happens *inside*
+  an already-established TLS session, so the server ignores the
+  ENCRYPTION byte value entirely — reusing `Required`'s wire value (as
+  the PR did) is correct, not a placeholder. `hostname_in_certificate`/
+  `client_name` Config fields already existed from earlier
+  bridge-PR-mirroring work this session; only their connection-string
+  parsing was missing, now added. TLS-before-PRELOGIN flow, ALPN
+  (rustls), `encrypt=strict` parsing, unit tests. Live-verified the
+  client-side failure path against a non-TDS-8.0 server (311 tests);
+  positively testing a successful Strict connection needs SQL Server
+  2022+/Azure SQL, and the only such image runnable here crashes under
+  this arm64 host's QEMU emulation (confirmed by trying it). Done:
+  `124b558`.
 - [x] **#308** — Fix duplicate-`TlsStream`-symbol compile error when
   selecting a non-default TLS backend. Real, reproducible bug confirmed
   against this fork's current `tls_stream.rs`. Reapplied just the
