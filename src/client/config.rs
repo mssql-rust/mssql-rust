@@ -36,7 +36,12 @@ pub struct Config {
     pub(crate) readonly: bool,
     pub(crate) send_string_parameters_as_unicode: bool,
     pub(crate) multi_subnet_failover: bool,
+    pub(crate) packet_size: Option<u32>,
 }
+
+/// The valid range for [`Config::packet_size`], per the TDS `LOGIN7`
+/// packet's `PacketSize` field.
+const PACKET_SIZE_RANGE: std::ops::RangeInclusive<u32> = 512..=32767;
 
 #[derive(Clone, Debug)]
 pub(crate) enum TrustConfig {
@@ -73,6 +78,7 @@ impl Default for Config {
             readonly: false,
             send_string_parameters_as_unicode: true,
             multi_subnet_failover: false,
+            packet_size: None,
         }
     }
 }
@@ -233,6 +239,41 @@ impl Config {
     /// Gets the `MultiSubnetFailover` flag.
     pub fn get_multi_subnet_failover(&self) -> bool {
         self.multi_subnet_failover
+    }
+
+    /// Sets the requested TDS packet size for the connection, in bytes.
+    ///
+    /// Larger packet sizes can reduce the number of network round-trips
+    /// needed for large queries or bulk inserts. The server may negotiate a
+    /// different size than requested; the actual, negotiated size takes
+    /// effect regardless of this setting.
+    ///
+    /// - Valid range is 512 to 32767 (per the TDS `LOGIN7` packet's
+    ///   `PacketSize` field); returns [`Error::Conversion`](crate::Error::Conversion)
+    ///   for a value outside that range.
+    /// - Defaults to not sending a preference, in which case the server's
+    ///   own default (commonly 4096) applies.
+    pub fn packet_size(&mut self, size: u32) -> crate::Result<()> {
+        if !PACKET_SIZE_RANGE.contains(&size) {
+            return Err(crate::Error::Conversion(
+                format!(
+                    "packet_size must be between {} and {}, got {size}",
+                    PACKET_SIZE_RANGE.start(),
+                    PACKET_SIZE_RANGE.end(),
+                )
+                .into(),
+            ));
+        }
+
+        self.packet_size = Some(size);
+
+        Ok(())
+    }
+
+    /// Gets the configured packet size preference, if one was set via
+    /// [`Config::packet_size`].
+    pub fn get_packet_size(&self) -> Option<u32> {
+        self.packet_size
     }
 
     pub(crate) fn get_host(&self) -> &str {
@@ -562,5 +603,52 @@ mod tests {
         )
         .unwrap();
         assert!(config.get_multi_subnet_failover());
+    }
+
+    #[test]
+    fn packet_size_defaults_to_none() {
+        let config = Config::new();
+        assert_eq!(None, config.get_packet_size());
+    }
+
+    #[test]
+    fn packet_size_can_be_set_within_range() {
+        let mut config = Config::new();
+        config.packet_size(8192).unwrap();
+        assert_eq!(Some(8192), config.get_packet_size());
+    }
+
+    #[test]
+    fn packet_size_accepts_the_documented_minimum() {
+        let mut config = Config::new();
+        config.packet_size(512).unwrap();
+        assert_eq!(Some(512), config.get_packet_size());
+    }
+
+    #[test]
+    fn packet_size_accepts_the_documented_maximum() {
+        let mut config = Config::new();
+        config.packet_size(32767).unwrap();
+        assert_eq!(Some(32767), config.get_packet_size());
+    }
+
+    #[test]
+    fn packet_size_rejects_below_minimum() {
+        let mut config = Config::new();
+        assert!(config.packet_size(511).is_err());
+        assert_eq!(None, config.get_packet_size());
+    }
+
+    #[test]
+    fn packet_size_rejects_above_maximum() {
+        let mut config = Config::new();
+        assert!(config.packet_size(32768).is_err());
+        assert_eq!(None, config.get_packet_size());
+    }
+
+    #[test]
+    fn packet_size_rejects_zero() {
+        let mut config = Config::new();
+        assert!(config.packet_size(0).is_err());
     }
 }

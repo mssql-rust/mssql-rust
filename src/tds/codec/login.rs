@@ -246,6 +246,13 @@ impl<'a> LoginMessage<'a> {
         }
     }
 
+    /// Sets the requested TDS packet size. The caller (see
+    /// [`crate::Config::packet_size`]) is responsible for validating the
+    /// value; this is a thin, unchecked wire-encoding setter.
+    pub(crate) fn packet_size(&mut self, size: u32) {
+        self.packet_size = size;
+    }
+
     pub(crate) fn encode_to_vec(self) -> crate::Result<Zeroizing<Vec<u8>>> {
         let mut cursor = Cursor::new(Vec::with_capacity(512));
 
