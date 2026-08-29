@@ -35,6 +35,7 @@ pub struct Config {
     pub(crate) auth: AuthMethod,
     pub(crate) readonly: bool,
     pub(crate) send_string_parameters_as_unicode: bool,
+    pub(crate) multi_subnet_failover: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -71,6 +72,7 @@ impl Default for Config {
             auth: AuthMethod::None,
             readonly: false,
             send_string_parameters_as_unicode: true,
+            multi_subnet_failover: false,
         }
     }
 }
@@ -216,6 +218,23 @@ impl Config {
         self.send_string_parameters_as_unicode = enabled;
     }
 
+    /// Sets the `MultiSubnetFailover` flag, hinting that the target is a SQL
+    /// Server Always On availability group listener. When enabled, all of
+    /// the listener's resolved IP addresses are connected to in parallel
+    /// (rather than sequentially, one at a time) and the first to succeed
+    /// wins, substantially reducing failover/reconnect time when the
+    /// addresses span multiple subnets.
+    ///
+    /// - Defaults to `false`.
+    pub fn multi_subnet_failover(&mut self, multi_subnet_failover: bool) {
+        self.multi_subnet_failover = multi_subnet_failover;
+    }
+
+    /// Gets the `MultiSubnetFailover` flag.
+    pub fn get_multi_subnet_failover(&self) -> bool {
+        self.multi_subnet_failover
+    }
+
     pub(crate) fn get_host(&self) -> &str {
         self.host
             .as_deref()
@@ -313,6 +332,8 @@ impl Config {
         builder.encryption(s.encrypt()?);
 
         builder.readonly(s.readonly());
+
+        builder.multi_subnet_failover(s.multi_subnet_failover()?);
 
         Ok(builder)
     }
@@ -433,6 +454,13 @@ pub(crate) trait ConfigString {
             .filter(|val| *val == "ReadOnly")
             .is_some()
     }
+
+    fn multi_subnet_failover(&self) -> crate::Result<bool> {
+        self.dict()
+            .get("multisubnetfailover")
+            .map(Self::parse_bool)
+            .unwrap_or(Ok(false))
+    }
 }
 
 #[cfg(test)]
@@ -479,5 +507,60 @@ mod tests {
         let mut config = Config::new();
         config.send_string_parameters_as_unicode(false);
         assert!(!config.send_string_parameters_as_unicode);
+    }
+
+    #[test]
+    fn multi_subnet_failover_defaults_to_false() {
+        let config = Config::new();
+        assert!(!config.get_multi_subnet_failover());
+    }
+
+    #[test]
+    fn multi_subnet_failover_can_be_enabled() {
+        let mut config = Config::new();
+        config.multi_subnet_failover(true);
+        assert!(config.get_multi_subnet_failover());
+    }
+
+    #[test]
+    fn multi_subnet_failover_absent_from_ado_string_defaults_to_false() {
+        let config =
+            Config::from_ado_string("server=tcp:localhost,1433;user id=SA;password=p").unwrap();
+        assert!(!config.get_multi_subnet_failover());
+    }
+
+    #[test]
+    fn multi_subnet_failover_true_in_ado_string() {
+        let config = Config::from_ado_string(
+            "server=tcp:localhost,1433;user id=SA;password=p;MultiSubnetFailover=True",
+        )
+        .unwrap();
+        assert!(config.get_multi_subnet_failover());
+    }
+
+    #[test]
+    fn multi_subnet_failover_false_in_ado_string() {
+        let config = Config::from_ado_string(
+            "server=tcp:localhost,1433;user id=SA;password=p;MultiSubnetFailover=False",
+        )
+        .unwrap();
+        assert!(!config.get_multi_subnet_failover());
+    }
+
+    #[test]
+    fn multi_subnet_failover_invalid_value_in_ado_string_errors() {
+        let result = Config::from_ado_string(
+            "server=tcp:localhost,1433;user id=SA;password=p;MultiSubnetFailover=maybe",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn multi_subnet_failover_true_in_jdbc_string() {
+        let config = Config::from_jdbc_string(
+            "jdbc:sqlserver://localhost:1433;user=SA;password=p;multiSubnetFailover=true",
+        )
+        .unwrap();
+        assert!(config.get_multi_subnet_failover());
     }
 }
