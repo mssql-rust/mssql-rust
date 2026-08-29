@@ -115,15 +115,15 @@ optional = true
 package = "bigdecimal"
 
 [dependencies.async-io]
-version = "1.13"
+version = "2"
 optional = true
 
 [dependencies.async-net]
-version = "1.8"
+version = "2"
 optional = true
 
 [dependencies.futures-lite]
-version = "1.13.0"
+version = "2"
 optional = true
 
 [dependencies.tokio-rustls]
