@@ -7,10 +7,42 @@ on:
 jobs:
   secret-detection:
     name: Secret Detection
-    if: github.event_name == 'pull_request'
-    uses: prisma/.github/.github/workflows/secret_detection.yml@main
-    secrets: inherit
+    # Skip forked PRs: this repo has no license configured for gitleaks-action,
+    # which is fine for a public repo, but forked-PR contexts don't get the
+    # pull-requests: write permission needed to post results either way.
+    if: github.event.pull_request.head.repo.fork != true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0 # Required to scan git diff/history
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   code-scanning:
     name: Code Scanning
-    if: github.event_name == 'pull_request'
-    uses: prisma/.github/.github/workflows/code_scanning.yml@main
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          languages: rust
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          category: "/language:rust"
