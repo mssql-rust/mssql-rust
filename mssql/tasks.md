@@ -140,10 +140,13 @@ original would have broken the default build), plus direct fixes for issues
   SQL-auth path (305 tests). **Not verified**: the actual NTLM wire
   handshake — no NTLM-capable SQL Server is reachable from this
   environment (same gap the original PR had). Done: `6a815c7`.
-- [ ] **#290** — CA certificate bundle support. Good idea, written against an
-  ~18-month-old rustls API this fork has already moved past (now on
-  rustls 0.23/aws_lc_rs) — reimplement the idea against current
-  `rustls_tls_stream.rs`, don't apply the patch.
+- [x] **#290** — CA certificate bundle support. Reimplemented from scratch
+  against current `rustls_tls_stream.rs` (0.23/aws_lc_rs/pki_types), plus
+  native-tls and vendored-openssl via a new shared PEM-splitting helper
+  (matching the CERTIFICATE label specifically, unlike the PR's any-BEGIN
+  approach). 7 unit tests + 2 live tests (including a real multi-cert
+  bundle) — verified live over both rustls and vendored-openssl (310
+  tests each). Done: `01ccaa2`.
 - [ ] **#330** — webpki-roots support (avoid relying on native/OS cert
   store). Same situation as #290 — targets rustls APIs removed in ≥0.22;
   needs a full rewrite against the current TLS internals, not a patch.
