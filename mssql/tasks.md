@@ -102,11 +102,16 @@ original would have broken the default build), plus direct fixes for issues
   a Windows SQL Browser service) — verified by inspection that the
   default (non-failover) path is a mechanical, unchanged extraction of
   the pre-existing sequential loop. Done: `499f8fb`.
-- [ ] **#312** — SqlBulkCopyOptions / bulk insert improvements. Valuable
-  .NET-parity feature; fails 4 clippy style lints as submitted, and quietly
-  deletes a real regression-test assertion for no stated reason (verified
-  unnecessary — restoring it, all 79 `column_data` tests still pass). Fix
-  both before merging.
+- [x] **#312** — SqlBulkCopyOptions / bulk insert improvements. Added
+  `bulk_insert_with_options` using `enumflags2` (not a second bitflags
+  dependency), fixed `KeepIdentity` to actually work (upstream defined it
+  but never used it — the TDS protocol has no such WITH keyword, so it
+  now controls the existing identity-column filter instead), fixed all
+  4 clippy issues, and didn't carry over the PR's unrelated deletion of a
+  column_data.rs test assertion (reimplemented from scratch, so there was
+  nothing to restore). Live testing caught and fixed a real bug of my own
+  (an empty, invalid `WITH ()` clause when only KeepIdentity was set).
+  Verified live (300 tests over rustls). Done: `e03c090`.
 - [ ] **#400** — `packet_size` config for LOGIN7. Real throughput win; add
   client-side range validation (512–32767), currently absent.
 - [ ] **#376** — `Decimal::into_sql`. Real, small API-parity gap, bundled
