@@ -1,5 +1,17 @@
 # Changes
 
+## mssql (fork of Tiberius)
+
+`mssql` is a fork of [Tiberius](https://github.com/prisma/tiberius), forked at
+its v0.12.3 release. Many thanks to the Tiberius team and community for the
+work this fork builds on. See the README for details on the fork's goals:
+ongoing maintenance, security updates, and support for current SQL Server and
+TDS protocol versions, favoring small, focused changes over large rewrites.
+
+Changes below this point are entries from Tiberius's own changelog, kept for
+history. New entries for `mssql` will be added above this section going
+forward.
+
 ## Version 0.12.3
 - feat: improve column type accuracy (#347)
 - fix: encoding of zero-length values for large varlen columns (#315)
