@@ -167,7 +167,6 @@ version = "1"
 path = "./runtimes-macro"
 
 [dev-dependencies]
-names = "0.14"
 anyhow = "1"
 env_logger = "0.11"
 azure_identity = "1.0.0"
