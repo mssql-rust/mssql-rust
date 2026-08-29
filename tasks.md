@@ -118,9 +118,10 @@ original would have broken the default build), plus direct fixes for issues
   documentation, since the wire-framing code does an unchecked
   `packet_size - HEADER_BYTES` subtraction. 7 unit tests + a live
   connect test. Done: `6fd94b7`.
-- [ ] **#376** — `Decimal::into_sql`. Real, small API-parity gap, bundled
-  with unrelated log-level and stale CI changes — cherry-pick just the
-  decimal hunk.
+- [x] **#376** — `Decimal::into_sql`. Cherry-picked just the decimal hunk
+  (dropped the unrelated log-level/already-superseded CI changes).
+  Regression test confirmed it fails to compile without the fix. Verified
+  live (305 tests over rustls). Done: `37248c6`.
 - [ ] **#366** — `ConfigBuilder`. The idea is fine, but as submitted it
   *removes* `Config::new()` and every existing setter — a breaking change for
   ~100% of current users. Add the builder as a pure addition; do not remove
