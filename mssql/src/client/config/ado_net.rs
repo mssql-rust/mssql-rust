@@ -471,6 +471,63 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    fn encryption_parsing_strict() -> crate::Result<()> {
+        let test_str = "encrypt=strict";
+        let ado: AdoNetConfig = test_str.parse()?;
+
+        assert_eq!(EncryptionLevel::Strict, ado.encrypt()?);
+
+        // Case-insensitive, matching the other recognized `encrypt` values.
+        let test_str = "encrypt=Strict";
+        let ado: AdoNetConfig = test_str.parse()?;
+
+        assert_eq!(EncryptionLevel::Strict, ado.encrypt()?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn host_name_in_certificate_parsing() -> crate::Result<()> {
+        let test_str = "HostNameInCertificate=foo.example.com";
+        let ado: AdoNetConfig = test_str.parse()?;
+
+        assert_eq!(
+            Some("foo.example.com".to_string()),
+            ado.host_name_in_certificate()
+        );
+
+        let test_str = "HostName In Certificate=foo.example.com";
+        let ado: AdoNetConfig = test_str.parse()?;
+
+        assert_eq!(
+            Some("foo.example.com".to_string()),
+            ado.host_name_in_certificate()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn client_name_parsing_from_workstation_id() -> crate::Result<()> {
+        let test_str = "workstationid=meow";
+        let ado: AdoNetConfig = test_str.parse()?;
+
+        assert_eq!(Some("meow".to_string()), ado.client_name());
+
+        let test_str = "Workstation ID=meow";
+        let ado: AdoNetConfig = test_str.parse()?;
+
+        assert_eq!(Some("meow".to_string()), ado.client_name());
+
+        Ok(())
+    }
+
+    #[test]
     fn application_name_parsing() -> crate::Result<()> {
         let test_str = "Application Name=meow";
         let ado: AdoNetConfig = test_str.parse()?;

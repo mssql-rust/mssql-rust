@@ -320,6 +320,44 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    fn encryption_parsing_strict() -> crate::Result<()> {
+        let test_str = "jdbc:sqlserver://my-server.com:4200;encrypt=strict";
+        let jdbc: JdbcConfig = test_str.parse()?;
+
+        assert_eq!(EncryptionLevel::Strict, jdbc.encrypt()?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn host_name_in_certificate_parsing() -> crate::Result<()> {
+        let test_str = "jdbc:sqlserver://my-server.com:4200;HostNameInCertificate=foo.example.com";
+        let jdbc: JdbcConfig = test_str.parse()?;
+
+        assert_eq!(
+            Some("foo.example.com".to_string()),
+            jdbc.host_name_in_certificate()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn client_name_parsing_from_workstation_id() -> crate::Result<()> {
+        let test_str = "jdbc:sqlserver://my-server.com:4200;workstationid=meow";
+        let jdbc: JdbcConfig = test_str.parse()?;
+
+        assert_eq!(Some("meow".to_string()), jdbc.client_name());
+
+        Ok(())
+    }
+
+    #[test]
     fn application_name_parsing() -> crate::Result<()> {
         let test_str = "jdbc:sqlserver://my-server.com:4200;Application Name=meow";
         let jdbc: JdbcConfig = test_str.parse()?;

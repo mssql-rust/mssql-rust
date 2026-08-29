@@ -72,6 +72,11 @@ impl PreloginMessage {
             | (EncryptionLevel::On, EncryptionLevel::NotSupported) => Err(Error::Protocol(
                 "server declined the requested encryption level".into(),
             )),
+            // Strict mode's TLS handshake already happened before PRELOGIN
+            // was even sent, so there's nothing left to negotiate here -
+            // the server's own reply value is irrelevant (per the wire
+            // encoding, we never even asked with a distinct byte).
+            (EncryptionLevel::Strict, _) => Ok(EncryptionLevel::Strict),
             (_, _) => Ok(EncryptionLevel::On),
         }
     }
@@ -110,7 +115,7 @@ impl Encode<BytesMut> for PreloginMessage {
 
         // encryption
         fields.push((PRELOGIN_ENCRYPTION, 0x01)); // encryption
-        data_cursor.write_u8(self.encryption as u8)?;
+        data_cursor.write_u8(self.encryption.as_wire_value())?;
 
         // threadid
         fields.push((PRELOGIN_THREADID, 0x04)); // thread id
@@ -269,6 +274,59 @@ mod tests {
         let decoded = PreloginMessage::decode(&mut payload).expect("decode should succeed");
 
         assert_eq!(prelogin, decoded);
+    }
+
+    // Regression tests for prisma/tiberius#413 (TDS 8.0 Strict encryption).
+
+    #[test]
+    fn prelogin_with_strict_encryption_encodes_as_required_on_the_wire() {
+        // Unlike every other EncryptionLevel, Strict's PRELOGIN exchange
+        // happens *inside* an already-established TLS session, so its
+        // ENCRYPTION field value is documented as ignored by the server -
+        // this crate sends Required's wire value (3) rather than a
+        // distinct one, so this is NOT a round-trip: what comes back out
+        // of `decode` is `Required`, not `Strict`.
+        let mut payload = BytesMut::new();
+        let mut prelogin = PreloginMessage::new();
+        prelogin.encryption = EncryptionLevel::Strict;
+        prelogin
+            .clone()
+            .encode(&mut payload)
+            .expect("encode should succeed");
+
+        let decoded = PreloginMessage::decode(&mut payload).expect("decode should succeed");
+
+        assert_eq!(EncryptionLevel::Required, decoded.encryption);
+    }
+
+    #[test]
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    fn negotiated_encryption_strict_ignores_servers_response() {
+        // The TLS handshake for Strict mode already happened before
+        // PRELOGIN was sent, so whatever the server's PRELOGIN response
+        // says, the negotiated level stays Strict - there's nothing left
+        // to negotiate at this point.
+        for server_response in [
+            EncryptionLevel::Off,
+            EncryptionLevel::On,
+            EncryptionLevel::NotSupported,
+            EncryptionLevel::Required,
+        ] {
+            let mut response = PreloginMessage::new();
+            response.encryption = server_response;
+
+            assert_eq!(
+                EncryptionLevel::Strict,
+                response
+                    .negotiated_encryption(EncryptionLevel::Strict)
+                    .unwrap(),
+                "server_response = {server_response:?}"
+            );
+        }
     }
 
     #[test]

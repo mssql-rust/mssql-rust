@@ -435,11 +435,19 @@ impl Config {
             builder.trust_cert_ca(ca);
         }
 
+        if let Some(hostname) = s.host_name_in_certificate() {
+            builder.host_name_in_certificate(hostname);
+        }
+
         builder.encryption(s.encrypt()?);
 
         builder.readonly(s.readonly());
 
         builder.multi_subnet_failover(s.multi_subnet_failover()?);
+
+        if let Some(client_name) = s.client_name() {
+            builder.client_name(client_name);
+        }
 
         Ok(builder)
     }
@@ -695,6 +703,20 @@ pub(crate) trait ConfigString {
             .map(|ca| ca.to_string())
     }
 
+    fn host_name_in_certificate(&self) -> Option<String> {
+        self.dict()
+            .get("hostnameincertificate")
+            .or_else(|| self.dict().get("hostname in certificate"))
+            .map(|name| name.to_string())
+    }
+
+    fn client_name(&self) -> Option<String> {
+        self.dict()
+            .get("workstationid")
+            .or_else(|| self.dict().get("workstation id"))
+            .map(|name| name.to_string())
+    }
+
     #[cfg(any(
         feature = "rustls",
         feature = "native-tls",
@@ -707,6 +729,7 @@ pub(crate) trait ConfigString {
                 Ok(true) => Ok(EncryptionLevel::Required),
                 Ok(false) => Ok(EncryptionLevel::Off),
                 Err(_) if val == "DANGER_PLAINTEXT" => Ok(EncryptionLevel::NotSupported),
+                Err(_) if val.eq_ignore_ascii_case("strict") => Ok(EncryptionLevel::Strict),
                 Err(e) => Err(e),
             })
             .unwrap_or(Ok(EncryptionLevel::Off))

@@ -236,3 +236,47 @@ fn connect_to_custom_cert_instance_via_webpki_roots_rejects_self_signed_cert() -
         Ok(())
     })
 }
+
+// Regression test for prisma/tiberius#413 (TDS 8.0 Strict encryption). This
+// fork's test infrastructure can't positively verify a successful Strict
+// connection: TDS 8.0 needs SQL Server 2022+ or Azure SQL Database, and the
+// only such image runnable here (mcr.microsoft.com/mssql/server:2022-latest,
+// linux/amd64 only) crashes on this arm64 host under QEMU emulation
+// ("Invalid mapping of address ... in reserved address space", a known
+// QEMU/SQL-Server-CLR interaction) - confirmed by actually trying it, not
+// assumed. This test instead confirms the client-side half behaves
+// correctly against a server that does *not* speak TDS 8.0 (this fork's
+// usual Azure SQL Edge test server): attempting the pre-PRELOGIN TLS
+// handshake Strict mode requires fails cleanly with a TLS-level error
+// rather than hanging or panicking, since the server just closes the
+// connection on receiving a raw TLS ClientHello where it expects a
+// cleartext PRELOGIN packet instead.
+#[test]
+#[cfg(any(
+    feature = "rustls",
+    feature = "native-tls",
+    feature = "vendored-openssl"
+))]
+fn connect_with_strict_encryption_fails_cleanly_against_a_non_tds80_server() -> Result<()> {
+    LOGGER_SETUP.call_once(|| {
+        env_logger::init();
+    });
+
+    let rt = Runtime::new()?;
+
+    rt.block_on(async {
+        let mut config = Config::new();
+        config.host("localhost");
+        config.port(1433);
+        config.encryption(EncryptionLevel::Strict);
+        config.trust_cert();
+        config.authentication(AuthMethod::sql_server("sa", "<YourStrong@Passw0rd>"));
+
+        let tcp = TcpStream::connect(config.get_addr()).await?;
+
+        let client = Client::connect(config, tcp.compat_write()).await;
+
+        assert!(client.is_err());
+        Ok(())
+    })
+}

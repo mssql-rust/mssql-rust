@@ -1,6 +1,23 @@
 use crate::Config;
 use futures_util::io::{AsyncRead, AsyncWrite};
 
+/// The ALPN protocol identifier SQL Server uses to recognize a TDS 8.0
+/// ("strict" encryption) connection during the TLS handshake. Requesting
+/// it is optional - SQL Server infers TDS 8.0 purely from receiving a TLS
+/// ClientHello before any TDS bytes at all (see
+/// [`crate::EncryptionLevel::Strict`]) - but rustls, this crate's only
+/// backend that actually requests it, does so anyway as documented
+/// practice (native-tls and vendored-openssl just log that they can't).
+///
+/// Gated on `feature = "rustls"` alone rather than "not compiled dead code
+/// under some other combo": since rustls always wins the priority order
+/// established for #308 (rustls > vendored-openssl > native-tls) whenever
+/// it's enabled, the bare feature flag already means it's the active
+/// backend - unlike native-tls/vendored-openssl, which need an explicit
+/// `not(feature = "rustls")` guard for their own shared helpers.
+#[cfg(feature = "rustls")]
+pub(crate) const TDS_ALPN_PROTOCOL_NAME: &str = "tds/8.0";
+
 /// Splits a byte buffer holding one or more concatenated PEM-encoded X.509
 /// certificates (a "CA bundle", e.g. curl's `ca-bundle.crt`) into the
 /// individual `-----BEGIN CERTIFICATE----- ... -----END CERTIFICATE-----`

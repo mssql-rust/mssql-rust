@@ -109,7 +109,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
             .with_protocol_versions(&[&version::TLS12])
             .map_err(|e| crate::Error::Tls(e.to_string()))?;
 
-        let client_config = match &config.trust {
+        let mut client_config = match &config.trust {
             TrustConfig::CaCertificateLocation(path) => {
                 if let Ok(buf) = fs::read(path) {
                     let cert = match path.extension() {
@@ -208,6 +208,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
                 builder.with_webpki_roots().with_no_client_auth()
             }
         };
+
+        if config.encryption == crate::EncryptionLevel::Strict {
+            client_config
+                .alpn_protocols
+                .push(super::TDS_ALPN_PROTOCOL_NAME.as_bytes().to_vec());
+        }
 
         let connector = TlsConnector::from(Arc::new(client_config));
 

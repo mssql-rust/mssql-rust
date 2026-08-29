@@ -15,6 +15,16 @@ pub(crate) async fn create_tls_stream<S: AsyncRead + AsyncWrite + Unpin + Send>(
 ) -> crate::Result<TlsStream<S>> {
     let mut builder = TlsConnector::new();
 
+    if config.encryption == crate::EncryptionLevel::Strict {
+        // Not fatal: SQL Server infers TDS 8.0 purely from the TLS
+        // handshake happening before any TDS bytes, independent of ALPN
+        // (see `EncryptionLevel::Strict`'s doc comment).
+        event!(
+            Level::WARN,
+            "vendored-openssl does not support requesting the TDS 8.0 ALPN protocol; proceeding without it. SQL Server will still recognize TDS 8.0 from the handshake ordering alone."
+        );
+    }
+
     match &config.trust {
         TrustConfig::CaCertificateLocation(path) => {
             if let Ok(buf) = fs::read(path) {
