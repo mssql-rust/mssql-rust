@@ -87,7 +87,12 @@ impl ServerCertVerifier for NoCertVerifier {
 }
 
 fn get_server_name(config: &Config) -> crate::Result<ServerName<'static>> {
-    match (ServerName::try_from(config.get_host()), &config.trust) {
+    let host = config
+        .host_name_in_certificate
+        .as_deref()
+        .unwrap_or_else(|| config.get_host());
+
+    match (ServerName::try_from(host), &config.trust) {
         (Ok(sn), _) => Ok(sn.to_owned()),
         (Err(_), TrustConfig::TrustAll) => {
             Ok(ServerName::try_from("placeholder.domain.com").unwrap())

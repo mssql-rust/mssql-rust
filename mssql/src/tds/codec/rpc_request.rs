@@ -1,5 +1,5 @@
 use super::{AllHeaderTy, Encode, ALL_HEADERS_LEN_TX};
-use crate::{tds::codec::ColumnData, BytesMutWithTypeInfo, Result};
+use crate::{tds::codec::ColumnData, BytesMutWithTypeInfo, Result, TypeInfo};
 use bytes::{BufMut, BytesMut};
 use enumflags2::{bitflags, BitFlags};
 use std::borrow::BorrowMut;
@@ -51,6 +51,12 @@ pub struct RpcParam<'a> {
     pub name: Cow<'a, str>,
     pub flags: BitFlags<RpcStatus>,
     pub value: ColumnData<'a>,
+    /// Overrides the type info this parameter is sent with, instead of
+    /// letting `value`'s `Encode` impl pick a default (`String` values
+    /// default to `NVarchar`). Used by
+    /// `Config::send_string_parameters_as_unicode(false)` to send string
+    /// parameters as `VarChar` instead.
+    pub type_info: Option<TypeInfo>,
 }
 
 /// 2.2.6.6 RPC Request
@@ -135,6 +141,11 @@ impl<'a> Encode<BytesMut> for RpcParam<'a> {
         dst.put_u8(self.flags.bits());
 
         let mut dst_fi = BytesMutWithTypeInfo::new(dst);
+
+        if let Some(ref ti) = self.type_info {
+            dst_fi = dst_fi.with_type_info(ti);
+        }
+
         self.value.encode(&mut dst_fi)?;
 
         let dst: &mut [u8] = dst.borrow_mut();

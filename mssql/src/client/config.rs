@@ -28,10 +28,13 @@ pub struct Config {
     pub(crate) database: Option<String>,
     pub(crate) instance_name: Option<String>,
     pub(crate) application_name: Option<String>,
+    pub(crate) client_name: Option<String>,
     pub(crate) encryption: EncryptionLevel,
     pub(crate) trust: TrustConfig,
+    pub(crate) host_name_in_certificate: Option<String>,
     pub(crate) auth: AuthMethod,
     pub(crate) readonly: bool,
+    pub(crate) send_string_parameters_as_unicode: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +53,7 @@ impl Default for Config {
             database: None,
             instance_name: None,
             application_name: None,
+            client_name: None,
             #[cfg(any(
                 feature = "rustls",
                 feature = "native-tls",
@@ -63,8 +67,10 @@ impl Default for Config {
             )))]
             encryption: EncryptionLevel::NotSupported,
             trust: TrustConfig::Default,
+            host_name_in_certificate: None,
             auth: AuthMethod::None,
             readonly: false,
+            send_string_parameters_as_unicode: true,
         }
     }
 }
@@ -115,6 +121,17 @@ impl Config {
         self.application_name = Some(name.to_string());
     }
 
+    /// Sets the client machine's hostname, sent in the LOGIN7 packet as the
+    /// workstation name. Unrelated to [`host`], which is the address of the
+    /// SQL Server to connect to.
+    ///
+    /// - Defaults to no name specified.
+    ///
+    /// [`host`]: #method.host
+    pub fn client_name(&mut self, name: impl ToString) {
+        self.client_name = Some(name.to_string());
+    }
+
     /// Set the preferred encryption level.
     ///
     /// - With `tls` feature, defaults to `Required`.
@@ -157,6 +174,19 @@ impl Config {
         }
     }
 
+    /// Overrides the hostname used to validate the server's TLS certificate,
+    /// independent of the address given to [`host`]. Useful when connecting
+    /// through a proxy, load balancer, or an address that doesn't match the
+    /// name on the certificate (mirrors the JDBC driver's
+    /// `hostNameInCertificate` property).
+    ///
+    /// - Defaults to using the address from [`host`].
+    ///
+    /// [`host`]: #method.host
+    pub fn host_name_in_certificate(&mut self, name: impl ToString) {
+        self.host_name_in_certificate = Some(name.to_string());
+    }
+
     /// Sets the authentication method.
     ///
     /// - Defaults to `None`.
@@ -169,6 +199,21 @@ impl Config {
     /// - Defaults to `false`.
     pub fn readonly(&mut self, readnoly: bool) {
         self.readonly = readnoly;
+    }
+
+    /// Controls whether `&str` and `String` query parameters are sent to the
+    /// server as `NVARCHAR` (Unicode).
+    ///
+    /// SQL Server's default behavior of always treating string parameters as
+    /// `NVARCHAR` can defeat an index on a `VARCHAR` column, since comparing
+    /// a `VARCHAR` column against an `NVARCHAR` literal requires an implicit
+    /// conversion of every row. Setting this to `false` sends string
+    /// parameters as `VARCHAR` instead (mirrors the JDBC/ODBC drivers'
+    /// `sendStringParametersAsUnicode` connection property).
+    ///
+    /// - Defaults to `true`.
+    pub fn send_string_parameters_as_unicode(&mut self, enabled: bool) {
+        self.send_string_parameters_as_unicode = enabled;
     }
 
     pub(crate) fn get_host(&self) -> &str {
@@ -387,5 +432,52 @@ pub(crate) trait ConfigString {
             .get("applicationintent")
             .filter(|val| *val == "ReadOnly")
             .is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_name_defaults_to_none() {
+        let config = Config::new();
+        assert_eq!(None, config.client_name);
+    }
+
+    #[test]
+    fn client_name_can_be_set() {
+        let mut config = Config::new();
+        config.client_name("app-host-01");
+        assert_eq!(Some("app-host-01".to_string()), config.client_name);
+    }
+
+    #[test]
+    fn host_name_in_certificate_defaults_to_none() {
+        let config = Config::new();
+        assert_eq!(None, config.host_name_in_certificate);
+    }
+
+    #[test]
+    fn host_name_in_certificate_can_be_set() {
+        let mut config = Config::new();
+        config.host_name_in_certificate("sql.example.com");
+        assert_eq!(
+            Some("sql.example.com".to_string()),
+            config.host_name_in_certificate
+        );
+    }
+
+    #[test]
+    fn send_string_parameters_as_unicode_defaults_to_true() {
+        let config = Config::new();
+        assert!(config.send_string_parameters_as_unicode);
+    }
+
+    #[test]
+    fn send_string_parameters_as_unicode_can_be_disabled() {
+        let mut config = Config::new();
+        config.send_string_parameters_as_unicode(false);
+        assert!(!config.send_string_parameters_as_unicode);
     }
 }
