@@ -1,10 +1,27 @@
-# Tiberius
-[![crates.io](https://meritbadge.herokuapp.com/tiberius)](https://crates.io/crates/tiberius)
-[![docs.rs](https://docs.rs/tiberius/badge.svg)](https://docs.rs/tiberius)
-[![Cargo tests](https://github.com/prisma/tiberius/actions/workflows/test.yml/badge.svg)](https://github.com/prisma/tiberius/actions/workflows/test.yml)
-[![Chat](https://img.shields.io/discord/664092374359605268)](https://discord.gg/xX4xp9x)
+# mssql
+[![crates.io](https://img.shields.io/crates/v/mssql.svg)](https://crates.io/crates/mssql)
+[![docs.rs](https://docs.rs/mssql/badge.svg)](https://docs.rs/mssql)
+[![Cargo tests](https://github.com/mssql-rust/mssql-rust/actions/workflows/test.yml/badge.svg)](https://github.com/mssql-rust/mssql-rust/actions/workflows/test.yml)
 
 A native Microsoft SQL Server (TDS) client for Rust.
+
+## Fork of Tiberius
+
+`mssql` is a fork of [Tiberius](https://github.com/prisma/tiberius)
+([crates.io](https://crates.io/crates/tiberius),
+[docs.rs](https://docs.rs/tiberius/0.12.3/tiberius/)), the TDS client
+originally created by Prisma and its contributors. Many thanks to the
+Tiberius team and community for the work this fork builds on.
+
+This fork exists to prioritize ongoing maintenance and security updates:
+
+- Prioritizing support for current (most recent) versions of SQL Server and
+  the TDS protocol.
+- Favoring small, specific commits over large, general ones.
+- Using the same free and open source licenses as Tiberius (MIT/Apache-2.0).
+
+The `.git` history, including all of Tiberius's original commits, is
+preserved in this repository.
 
 ### Goals
 
@@ -51,11 +68,11 @@ A native Microsoft SQL Server (TDS) client for Rust.
 
 ### Supported protocols
 
-Tiberius does not rely on any protocol when connecting to an SQL Server instance. Instead the `Client` takes a socket that implements the `AsyncRead` and `AsyncWrite` traits from the [futures-rs](https://crates.io/crates/futures) crate.
+`mssql` does not rely on any protocol when connecting to an SQL Server instance. Instead the `Client` takes a socket that implements the `AsyncRead` and `AsyncWrite` traits from the [futures-rs](https://crates.io/crates/futures) crate.
 
 Currently there are good async implementations for TCP in the [async-std](https://crates.io/crates/async-std), [Tokio](https://crates.io/crates/tokio) and [Smol](https://crates.io/crates/smol) projects.
 
-To be able to use them together with Tiberius on Windows platforms with SQL Server, you should make sure that the TCP protocol is enabled, as depending on the edition, this may not be the case. Standard and Enterprise editions will have the setting enabled by default, whereas Developer, Express editions and the Windows Internal Database feature of the Windows Server OS don't.
+To be able to use them together with `mssql` on Windows platforms with SQL Server, you should make sure that the TCP protocol is enabled, as depending on the edition, this may not be the case. Standard and Enterprise editions will have the setting enabled by default, whereas Developer, Express editions and the Windows Internal Database feature of the Windows Server OS don't.
 To enable the TCP/IP protocol you may want to use  the [server settings](https://docs.microsoft.com/en-us/sql/database-engine/configure-windows/enable-or-disable-a-server-network-protocol) the [command line](https://docs.microsoft.com/en-us/sql/powershell/how-to-enable-tcp-sqlps).
 In the official [Docker image](https://hub.docker.com/_/microsoft-mssql-server) TCP is is enabled by default.
 
@@ -65,13 +82,13 @@ The shared memory protocol is not documented and seems there are no Rust crates 
 
 ### Encryption (TLS/SSL)
 
-Tiberius can be set to use two different implementations of TLS connection encryption. By default it uses `native-tls`, linking to the TLS library provided by the operating system. This is a good practice and in case of security vulnerabilities, upgrading the system libraries fixes the vulnerability in Tiberius without a recompilation. On Linux we link against OpenSSL, on Windows against schannel and on macOS against Security Framework.
+`mssql` can be set to use two different implementations of TLS connection encryption. By default it uses `native-tls`, linking to the TLS library provided by the operating system. This is a good practice and in case of security vulnerabilities, upgrading the system libraries fixes the vulnerability in `mssql` without a recompilation. On Linux we link against OpenSSL, on Windows against schannel and on macOS against Security Framework.
 
 Alternatively one can use the `rustls` feature flag to use the Rust native TLS implementation. This way there are no dynamic dependencies to the system. This might be useful in certain installations, but requires a rebuild to update to a new TLS version. For some reasons the Security Framework on macOS does not work with SQL Server TLS settings, and on Apple platforms if needing TLS it is recommended to use `rustls` instead of `native-tls`. The other option is to use the `vendored-openssl` feature flag, that statically links against the latest OpenSSL implementation.
 
 The crate can also be compiled without TLS support, but not with both features enabled at the same time.
 
-Tiberius has three runtime encryption settings:
+`mssql` has three runtime encryption settings:
 
 | Encryption level | Description                                      |
 |------------------|--------------------------------------------------|
@@ -100,7 +117,7 @@ With certain Azure firewall settings, a login might return `Error::Routing { hos
 A simple connection procedure would then be:
 
 ```rust
-use tiberius::{Client, Config, AuthMethod, error::Error};
+use mssql::{Client, Config, AuthMethod, error::Error};
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 use tokio::net::TcpStream;
 
@@ -141,4 +158,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Security
 
-If you have a security issue to report, please contact us at [security@prisma.io](mailto:security@prisma.io?subject=[GitHub]%20Prisma%202%20Security%20Report%20Tiberius)
+If you have a security issue to report, please contact
+[joel@joelparkerhenderson.com](mailto:joel@joelparkerhenderson.com?subject=%5BGitHub%5D%20mssql%20Security%20Report).
