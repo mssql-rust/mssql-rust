@@ -94,9 +94,14 @@ original would have broken the default build), plus direct fixes for issues
   the pre-fix bit numbering) + a live regression test for identity/computed
   column exclusion. Verified live (294 tests over rustls). Done: `e7eb6e4`,
   `7e7c40e`.
-- [ ] **#378** — MultiSubnetFailover. Complete, dependency-clean (supersedes
-  draft #357). Needs basic tests on the default (non-failover) path before
-  merging, since it refactors the common connect path too.
+- [x] **#378** — MultiSubnetFailover. Added `Config::multi_subnet_failover`
+  (+ connection-string parsing) and the concurrent-address-race refactor
+  of `connect_named` for all three sql-browser backends. Config plumbing
+  covered by 7 new unit tests; the connect_named race behavior itself
+  can't be live-tested here (needs a real Always On listener or at least
+  a Windows SQL Browser service) — verified by inspection that the
+  default (non-failover) path is a mechanical, unchanged extraction of
+  the pre-existing sequential loop. Done: `499f8fb`.
 - [ ] **#312** — SqlBulkCopyOptions / bulk insert improvements. Valuable
   .NET-parity feature; fails 4 clippy style lints as submitted, and quietly
   deletes a real regression-test assertion for no stated reason (verified
