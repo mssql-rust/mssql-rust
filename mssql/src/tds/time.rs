@@ -25,6 +25,9 @@
 #[cfg_attr(feature = "docs", doc(cfg(feature = "chrono")))]
 pub mod chrono;
 
+// Named after the `time` crate it maps to/from, matching the `chrono`
+// submodule above; not an accidental duplication of the parent module name.
+#[allow(clippy::module_inception)]
 #[cfg(feature = "time")]
 #[cfg_attr(feature = "docs", doc(cfg(feature = "time")))]
 pub mod time;
