@@ -339,3 +339,55 @@ where
 
     Ok(())
 }
+
+// Regression test for the ColumnFlag::Updateable/UpdateableUnknown bit
+// values (MS-TDS 2.2.7.4 COLMETADATA Flags, `usUpdateable`): identity and
+// computed columns must be excluded from a wildcard bulk_insert's generated
+// column list, while ordinary read/write columns (which SQL Server commonly
+// reports as updateable-unknown rather than definitively read/write on a
+// plain SELECT) must still be included.
+#[test_on_runtimes]
+async fn bulk_insert_excludes_identity_and_computed_columns<S>(
+    mut conn: mssql::Client<S>,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("##{}", random_table().await);
+
+    conn.simple_query(format!(
+        "CREATE TABLE {} (
+            id INT IDENTITY PRIMARY KEY,
+            content INT NULL,
+            doubled AS (content * 2)
+        )",
+        table
+    ))
+    .await?;
+
+    let mut req = conn.bulk_insert(&table).await?;
+    for num in [1, 2, 3] {
+        let mut row = TokenRow::new();
+        row.push(ColumnData::I32(Some(num)));
+        req.send(row).await?;
+    }
+    let result = req.finalize().await?;
+    assert_eq!(result.rows_affected(), &[3]);
+
+    let rows = conn
+        .query(
+            format!("SELECT content, doubled FROM {} ORDER BY id", table),
+            &[],
+        )
+        .await?
+        .into_first_result()
+        .await?;
+
+    assert_eq!(rows.len(), 3);
+    assert_eq!(Some(1), rows[0].get(0));
+    assert_eq!(Some(2), rows[0].get(1));
+    assert_eq!(Some(3), rows[2].get(0));
+    assert_eq!(Some(6), rows[2].get(1));
+
+    Ok(())
+}
