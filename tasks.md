@@ -35,10 +35,13 @@ original would have broken the default build), plus direct fixes for issues
 
 ## Build now — small, safe, real value
 
-- [ ] **#411** — Zeroize SQL auth password buffers. Direct credential-handling
-  hardening, clean, tested, tiny new dependency (`zeroize`).
-- [ ] **#351** — Fix SSPI header type (0x10→0x11) for the NTLM continuation
-  packet. One-line, spec-cited fix to a real auth wire-format bug.
+- [x] **#411** — Zeroize SQL auth password buffers. Direct credential-handling
+  hardening, clean, tested, tiny new dependency (`zeroize`). Done: `0827801`.
+- [x] **#351** — Fix SSPI header type (0x10→0x11) for the NTLM continuation
+  packet. One-line, spec-cited fix to a real auth wire-format bug. Applied to
+  all three of this fork's SSPI-continuation call sites (winauth Integrated,
+  winauth Windows, unix GSSAPI Integrated), not just the one upstream's diff
+  touched. Done: see commit.
 - [ ] **#430** — Renew expired test cert + add podman/docker test-server
   script. Unblocks running the integration suite at all; zero source risk.
   (Supersedes the overlapping cert-fix in #405, and #241/#389, both already

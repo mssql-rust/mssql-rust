@@ -386,7 +386,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
                         event!(Level::TRACE, sspi_response_len = sspi_response.len());
 
                         let id = self.context.next_packet_id();
-                        let header = PacketHeader::login(id);
+                        let header = PacketHeader::sspi(id);
 
                         let token = TokenSspi::new(sspi_response);
                         self.send(header, token).await?;
@@ -431,7 +431,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
                 };
 
                 let id = self.context.next_packet_id();
-                let header = PacketHeader::login(id);
+                let header = PacketHeader::sspi(id);
 
                 self.send(header, next_token).await?;
             }
@@ -455,7 +455,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
                         event!(Level::TRACE, sspi_response_len = sspi_response.len());
 
                         let id = self.context.next_packet_id();
-                        let header = PacketHeader::login(id);
+                        let header = PacketHeader::sspi(id);
 
                         let token = TokenSspi::new(sspi_response);
                         self.send(header, token).await?;
