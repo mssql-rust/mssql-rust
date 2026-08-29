@@ -1,7 +1,7 @@
 mod bytes_mut_with_data_columns;
 mod into_row;
 use crate::tds::codec::encode::Encode;
-use crate::{tds::codec::ColumnData, BytesMutWithTypeInfo, SqlReadBytes, TokenType};
+use crate::{tds::codec::ColumnData, BytesMutWithTypeInfo, Error, SqlReadBytes, TokenType};
 use bytes::BufMut;
 pub(crate) use bytes_mut_with_data_columns::BytesMutWithDataColumns;
 use futures_util::io::AsyncReadExt;
@@ -100,7 +100,11 @@ impl TokenRow<'static> {
     where
         R: SqlReadBytes + Unpin,
     {
-        let col_meta = src.context().last_meta().unwrap();
+        let Some(col_meta) = src.context().last_meta() else {
+            return Err(Error::Protocol(
+                "received a ROW token before any COLMETADATA".into(),
+            ));
+        };
 
         let mut row = Self {
             data: Vec::with_capacity(col_meta.columns.len()),
@@ -120,7 +124,11 @@ impl TokenRow<'static> {
     where
         R: SqlReadBytes + Unpin,
     {
-        let col_meta = src.context().last_meta().unwrap();
+        let Some(col_meta) = src.context().last_meta() else {
+            return Err(Error::Protocol(
+                "received a ROW token before any COLMETADATA".into(),
+            ));
+        };
         let row_bitmap = RowBitmap::decode(src, col_meta.columns.len()).await?;
 
         let mut row = Self {

@@ -205,7 +205,9 @@ impl Decode<BytesMut> for PreloginMessage {
                     } else if length == 4 {
                         cursor.read_u32::<BigEndian>()?
                     } else {
-                        panic!("should never happen")
+                        return Err(Error::Protocol(
+                            format!("invalid PRELOGIN THREADID length: {}", length).into(),
+                        ));
                     }
                 }
                 // mars
@@ -240,7 +242,8 @@ impl Decode<BytesMut> for PreloginMessage {
 
                     ret.nonce = Some(data);
                 }
-                _ => panic!("unsupported prelogin token: {}", token),
+                // unknown options are ignored for forward compatibility
+                _ => {}
             }
 
             cursor.set_position(old_pos);

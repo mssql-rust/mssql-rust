@@ -247,7 +247,11 @@ where
                 TokenType::LoginAck => this.get_login_ack().await?,
                 TokenType::Sspi => this.get_sspi().await?,
                 TokenType::FeatureExtAck => this.get_feature_ext_ack().await?,
-                _ => panic!("Token {:?} unimplemented!", ty),
+                _ => {
+                    return Err(Error::Protocol(
+                        format!("unhandled token type {:?}", ty).into(),
+                    ))
+                }
             };
 
             Ok(Some((token, this)))
