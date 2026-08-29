@@ -43,18 +43,18 @@ impl<'a> Query<'a> {
     /// # Example
     ///
     /// ```no_run
-    /// # use tiberius::{Config, Query};
+    /// # use mssql::{Config, Query};
     /// # use tokio_util::compat::TokioAsyncWriteCompatExt;
     /// # use std::env;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let c_str = env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or(
+    /// # let c_str = env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or(
     /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
     /// # );
     /// # let config = Config::from_ado_string(&c_str)?;
     /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
     /// # tcp.set_nodelay(true)?;
-    /// # let mut client = tiberius::Client::connect(config, tcp.compat_write()).await?;
+    /// # let mut client = mssql::Client::connect(config, tcp.compat_write()).await?;
     /// let mut query = Query::new("INSERT INTO ##Test (id) VALUES (@P1), (@P2), (@P3)");
     ///
     /// query.bind("foo");
@@ -91,18 +91,18 @@ impl<'a> Query<'a> {
     /// # Example
     ///
     /// ```
-    /// # use tiberius::{Config, Query};
+    /// # use mssql::{Config, Query};
     /// # use tokio_util::compat::TokioAsyncWriteCompatExt;
     /// # use std::env;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let c_str = env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or(
+    /// # let c_str = env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or(
     /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
     /// # );
     /// # let config = Config::from_ado_string(&c_str)?;
     /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
     /// # tcp.set_nodelay(true)?;
-    /// # let mut client = tiberius::Client::connect(config, tcp.compat_write()).await?;
+    /// # let mut client = mssql::Client::connect(config, tcp.compat_write()).await?;
     /// let mut query = Query::new("SELECT @P1, @P2, @P3");
     ///
     /// query.bind(1i32);

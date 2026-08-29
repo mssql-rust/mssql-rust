@@ -202,18 +202,18 @@ impl From<&TypeInfo> for ColumnType {
 /// methods, or moving by value using the [`IntoIterator`] implementation.
 ///
 /// ```
-/// # use tiberius::{Config, FromSqlOwned};
+/// # use mssql::{Config, FromSqlOwned};
 /// # use tokio_util::compat::TokioAsyncWriteCompatExt;
 /// # use std::env;
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let c_str = env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or(
+/// # let c_str = env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or(
 /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
 /// # );
 /// # let config = Config::from_ado_string(&c_str)?;
 /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
 /// # tcp.set_nodelay(true)?;
-/// # let mut client = tiberius::Client::connect(config, tcp.compat_write()).await?;
+/// # let mut client = mssql::Client::connect(config, tcp.compat_write()).await?;
 /// // by-reference
 /// let row = client
 ///     .query("SELECT @P1 AS col1", &[&"test"])
@@ -278,18 +278,18 @@ impl Row {
     /// # Example
     ///
     /// ```
-    /// # use tiberius::Config;
+    /// # use mssql::Config;
     /// # use tokio_util::compat::TokioAsyncWriteCompatExt;
     /// # use std::env;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let c_str = env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or(
+    /// # let c_str = env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or(
     /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
     /// # );
     /// # let config = Config::from_ado_string(&c_str)?;
     /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
     /// # tcp.set_nodelay(true)?;
-    /// # let mut client = tiberius::Client::connect(config, tcp.compat_write()).await?;
+    /// # let mut client = mssql::Client::connect(config, tcp.compat_write()).await?;
     /// let row = client
     ///     .query("SELECT 1 AS foo, 2 AS bar", &[])
     ///     .await?
@@ -322,18 +322,18 @@ impl Row {
     /// # Example
     ///
     /// ```
-    /// # use tiberius::Config;
+    /// # use mssql::Config;
     /// # use tokio_util::compat::TokioAsyncWriteCompatExt;
     /// # use std::env;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let c_str = env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or(
+    /// # let c_str = env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or(
     /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
     /// # );
     /// # let config = Config::from_ado_string(&c_str)?;
     /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
     /// # tcp.set_nodelay(true)?;
-    /// # let mut client = tiberius::Client::connect(config, tcp.compat_write()).await?;
+    /// # let mut client = mssql::Client::connect(config, tcp.compat_write()).await?;
     /// let row = client
     ///     .query("SELECT 1, 2", &[])
     ///     .await?
@@ -356,18 +356,18 @@ impl Row {
     /// # Example
     ///
     /// ```
-    /// # use tiberius::Config;
+    /// # use mssql::Config;
     /// # use tokio_util::compat::TokioAsyncWriteCompatExt;
     /// # use std::env;
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let c_str = env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or(
+    /// # let c_str = env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or(
     /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
     /// # );
     /// # let config = Config::from_ado_string(&c_str)?;
     /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
     /// # tcp.set_nodelay(true)?;
-    /// # let mut client = tiberius::Client::connect(config, tcp.compat_write()).await?;
+    /// # let mut client = mssql::Client::connect(config, tcp.compat_write()).await?;
     /// let row = client
     ///     .query("SELECT @P1 AS col1", &[&1i32])
     ///     .await?
