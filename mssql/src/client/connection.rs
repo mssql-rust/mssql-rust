@@ -460,7 +460,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
             stream.get_mut().handshake_complete();
             event!(Level::INFO, "TLS handshake successful");
 
-            let transport = Framed::new(MaybeTlsStream::Tls(stream), PacketCodec);
+            let transport = Framed::new(MaybeTlsStream::Tls(Box::new(stream)), PacketCodec);
 
             Ok(Self {
                 transport,
