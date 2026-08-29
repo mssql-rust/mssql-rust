@@ -53,11 +53,12 @@ original would have broken the default build), plus direct fixes for issues
   found and fixed two real bugs the unit tests alone had missed: see
   `9314a44` (money/smallmoney bulk_insert Display) and `f70bf1a` (RPC
   TYPE_INFO header for the ANSI-string-encoding feature).
-- [ ] **#385** — Fix `QueryStream::into_results` miscounting empty result
+- [x] **#385** — Fix `QueryStream::into_results` miscounting empty result
   sets in a multi-statement batch. Verified by hand-tracing the logic; real
-  correctness bug. Add a regression test on merge (PR ships none).
-- [ ] **#314** — `ColumnData` `FromSql`/`ToSql`/`IntoSql` impls. Verified
-  compiling and clippy-clean in an isolated worktree.
+  correctness bug. Added a regression test (confirmed it fails on the old
+  code, passes on the fix, live). Done: `d346db2`.
+- [x] **#314** — `ColumnData` `FromSql`/`ToSql`/`IntoSql` impls. Verified
+  compiling and clippy-clean in an isolated worktree. Done: `622372d`.
 - [ ] **#359** — Bulk insert for a specified column list. Well-tested,
   additive, addresses upstream issue #311.
 - [ ] **#331** — `Row` → `TokenRow` conversion. Trivial once `impl Into<..>
