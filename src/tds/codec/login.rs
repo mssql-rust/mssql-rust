@@ -205,6 +205,15 @@ impl<'a> LoginMessage<'a> {
         self.server_name = server_name.into();
     }
 
+    /// The client machine's hostname, sent in the LOGIN7 packet. Unrelated to
+    /// [`server_name`], which names the SQL Server instance being connected
+    /// to.
+    ///
+    /// [`server_name`]: #method.server_name
+    pub fn hostname(&mut self, hostname: impl Into<Cow<'a, str>>) {
+        self.hostname = hostname.into();
+    }
+
     pub fn user_name(&mut self, user_name: impl Into<Cow<'a, str>>) {
         self.username = user_name.into();
     }
@@ -560,6 +569,7 @@ mod tests {
         login.db_name("fake-database-name");
         login.app_name("fake-app-name");
         login.server_name("fake-server-name");
+        login.hostname("fake-client-hostname");
         login.user_name("fake-user-name");
         login.password("fake-pw");
         login

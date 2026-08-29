@@ -56,5 +56,10 @@ pub(crate) async fn create_tls_stream<S: AsyncRead + AsyncWrite + Unpin + Send>(
         }
     }
 
-    Ok(builder.connect(config.get_host(), stream).await?)
+    let domain = config
+        .host_name_in_certificate
+        .as_deref()
+        .unwrap_or_else(|| config.get_host());
+
+    Ok(builder.connect(domain, stream).await?)
 }

@@ -966,6 +966,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn string_with_varlen_bigvarchar_and_default_ansi_collation() {
+        // The collation Client uses for Config::send_string_parameters_as_unicode(false):
+        // LCID 0x0409 (English - United States), matching SQL_Latin1_General_CP1_CI_AS.
+        test_round_trip(
+            TypeInfo::VarLenSized(VarLenContext::new(
+                VarLenType::BigVarChar,
+                0xffff_ffff,
+                Some(Collation::new(0x0409, 0)),
+            )),
+            ColumnData::String(Some("hello, world".into())),
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn string_with_varlen_bigchar() {
         test_round_trip(
             TypeInfo::VarLenSized(VarLenContext::new(

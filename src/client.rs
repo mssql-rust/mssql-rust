@@ -20,10 +20,14 @@ use crate::{
     tds::{
         codec::{self, IteratorJoin},
         stream::{QueryStream, TokenStream},
+        Collation,
     },
     BulkLoadRequest, ColumnFlag, SqlReadBytes, ToSql,
 };
-use codec::{BatchRequest, ColumnData, PacketHeader, RpcParam, RpcProcId, TokenRpcRequest};
+use codec::{
+    BatchRequest, ColumnData, PacketHeader, RpcParam, RpcProcId, TokenRpcRequest, TypeInfo,
+    VarLenContext, VarLenType,
+};
 use enumflags2::BitFlags;
 use futures_util::io::{AsyncRead, AsyncWrite};
 use futures_util::stream::TryStreamExt;
@@ -358,13 +362,38 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
                 name: Cow::Borrowed("stmt"),
                 flags: BitFlags::empty(),
                 value: ColumnData::String(Some(query.into())),
+                type_info: None,
             },
             RpcParam {
                 name: Cow::Borrowed("params"),
                 flags: BitFlags::empty(),
                 value: ColumnData::I32(Some(0)),
+                type_info: None,
             },
         ]
+    }
+
+    /// A collation covering the ASCII range, used as the default when
+    /// [`Config::send_string_parameters_as_unicode`] is disabled and no
+    /// column-specific collation is otherwise available. Corresponds to
+    /// LCID `0x0409` (English - United States), matching SQL Server's most
+    /// common installation default (`SQL_Latin1_General_CP1_CI_AS`).
+    ///
+    /// [`Config::send_string_parameters_as_unicode`]: struct.Config.html#method.send_string_parameters_as_unicode
+    fn default_varchar_collation() -> Collation {
+        Collation::new(0x0409, 0)
+    }
+
+    /// Type info for sending a string parameter as `VARCHAR(MAX)` instead of
+    /// the default `NVARCHAR(MAX)`, using [`default_varchar_collation`].
+    ///
+    /// [`default_varchar_collation`]: #method.default_varchar_collation
+    fn varchar_type_info() -> TypeInfo {
+        TypeInfo::VarLenSized(VarLenContext::new(
+            VarLenType::BigVarChar,
+            0xffff_ffff,
+            Some(Self::default_varchar_collation()),
+        ))
     }
 
     pub(crate) async fn rpc_perform_query<'a, 'b>(
@@ -376,6 +405,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     where
         'a: 'b,
     {
+        let unicode = self
+            .connection
+            .context()
+            .send_string_parameters_as_unicode();
         let mut param_str = String::new();
 
         for (i, param) in params.enumerate() {
@@ -383,12 +416,20 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
                 param_str.push(',')
             }
             param_str.push_str(&format!("@P{} ", i + 1));
-            param_str.push_str(&param.type_name());
+
+            let type_info = if !unicode && matches!(param, ColumnData::String(Some(_))) {
+                param_str.push_str("varchar(max)");
+                Some(Self::varchar_type_info())
+            } else {
+                param_str.push_str(&param.type_name());
+                None
+            };
 
             rpc_params.push(RpcParam {
                 name: Cow::Owned(format!("@P{}", i + 1)),
                 flags: BitFlags::empty(),
                 value: param,
+                type_info,
             });
         }
 

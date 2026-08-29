@@ -76,6 +76,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         let context = {
             let mut context = Context::new();
             context.set_spn(config.get_host(), config.get_port());
+            context.set_send_string_parameters_as_unicode(config.send_string_parameters_as_unicode);
             context
         };
 
@@ -105,6 +106,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
                 config.database,
                 config.host,
                 config.application_name,
+                config.client_name,
                 config.readonly,
                 prelogin,
             )
@@ -292,6 +294,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         db: Option<String>,
         server_name: Option<String>,
         application_name: Option<String>,
+        client_name: Option<String>,
         readonly: bool,
         prelogin: PreloginMessage,
     ) -> crate::Result<Self> {
@@ -307,6 +310,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
 
         if let Some(app_name) = application_name {
             login_message.app_name(app_name);
+        }
+
+        if let Some(client_name) = client_name {
+            login_message.hostname(client_name);
         }
 
         login_message.readonly(readonly);

@@ -10,6 +10,7 @@ pub(crate) struct Context {
     transaction_desc: [u8; 8],
     last_meta: Option<Arc<TokenColMetaData<'static>>>,
     spn: Option<String>,
+    send_string_parameters_as_unicode: bool,
 }
 
 impl Context {
@@ -21,7 +22,16 @@ impl Context {
             transaction_desc: [0; 8],
             last_meta: None,
             spn: None,
+            send_string_parameters_as_unicode: true,
         }
+    }
+
+    pub fn set_send_string_parameters_as_unicode(&mut self, enabled: bool) {
+        self.send_string_parameters_as_unicode = enabled;
+    }
+
+    pub fn send_string_parameters_as_unicode(&self) -> bool {
+        self.send_string_parameters_as_unicode
     }
 
     pub fn next_packet_id(&mut self) -> u8 {
