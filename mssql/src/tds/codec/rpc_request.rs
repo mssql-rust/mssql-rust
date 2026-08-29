@@ -140,6 +140,16 @@ impl<'a> Encode<BytesMut> for RpcParam<'a> {
 
         dst.put_u8(self.flags.bits());
 
+        // Unlike bulk_insert (which declares column types once, up front, in
+        // a COLMETADATA token), an RPC parameter's TYPE_INFO is inlined here
+        // before its value on every call, so when a type override is given
+        // we have to write that header ourselves -- ColumnData::encode's
+        // Some(TypeInfo) arms only ever write the *value*, assuming the
+        // header was already written by a bulk_insert-style caller.
+        if let Some(ref ti) = self.type_info {
+            ti.clone().encode(dst)?;
+        }
+
         let mut dst_fi = BytesMutWithTypeInfo::new(dst);
 
         if let Some(ref ti) = self.type_info {
