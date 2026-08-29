@@ -93,6 +93,11 @@ impl<'a> Display for MetaDataColumn<'a> {
                     8 => write!(f, "float")?,
                     _ => unreachable!(),
                 },
+                VarLenType::Money => match ctx.len() {
+                    4 => write!(f, "smallmoney")?,
+                    8 => write!(f, "money")?,
+                    _ => unreachable!(),
+                },
                 _ => unreachable!(),
             },
             TypeInfo::VarLenSizedPrecision {
