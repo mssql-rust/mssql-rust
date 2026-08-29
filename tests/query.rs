@@ -577,6 +577,57 @@ where
 }
 
 #[test_on_runtimes]
+async fn row_converts_into_token_row_for_bulk_insert<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    use mssql::TokenRow;
+
+    let table = format!("##{}", random_table().await);
+
+    conn.execute(
+        format!("CREATE TABLE {table} (a INT NOT NULL, b VARCHAR(50) NOT NULL)"),
+        &[],
+    )
+    .await?;
+    conn.execute(
+        format!("INSERT INTO {table} (a, b) VALUES (@P1, @P2)"),
+        &[&42i32, &"hello"],
+    )
+    .await?;
+
+    // Read the row back out, then send it straight into a second bulk
+    // insert without touching its cells.
+    let row = conn
+        .query(format!("SELECT a, b FROM {table}"), &[])
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+
+    let token_row: TokenRow<'static> = row.into();
+
+    let mut req = conn.bulk_insert(&table).await?;
+    req.send(token_row).await?;
+    let res = req.finalize().await?;
+    assert_eq!(1, res.total());
+
+    let rows = conn
+        .query(format!("SELECT a, b FROM {table} ORDER BY a"), &[])
+        .await?
+        .into_first_result()
+        .await?;
+
+    assert_eq!(2, rows.len());
+    assert_eq!(Some(42i32), rows[0].get(0));
+    assert_eq!(Some("hello"), rows[0].get(1));
+    assert_eq!(Some(42i32), rows[1].get(0));
+    assert_eq!(Some("hello"), rows[1].get(1));
+
+    Ok(())
+}
+
+#[test_on_runtimes]
 async fn bool_type<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,

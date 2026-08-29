@@ -423,3 +423,14 @@ impl IntoIterator for Row {
         self.data.into_iter()
     }
 }
+
+/// Lets a `Row` read from a query be sent straight back into a
+/// [`BulkLoadRequest`] or another statement's parameters, without manually
+/// copying each cell.
+///
+/// [`BulkLoadRequest`]: struct.BulkLoadRequest.html
+impl From<Row> for TokenRow<'static> {
+    fn from(row: Row) -> Self {
+        row.data
+    }
+}
