@@ -86,7 +86,18 @@ The shared memory protocol is not documented and seems there are no Rust crates 
 
 Alternatively one can use the `rustls` feature flag to use the Rust native TLS implementation. This way there are no dynamic dependencies to the system. This might be useful in certain installations, but requires a rebuild to update to a new TLS version. For some reasons the Security Framework on macOS does not work with SQL Server TLS settings, and on Apple platforms if needing TLS it is recommended to use `rustls` instead of `native-tls`. The other option is to use the `vendored-openssl` feature flag, that statically links against the latest OpenSSL implementation.
 
-The crate can also be compiled without TLS support, but not with both features enabled at the same time.
+The crate can also be compiled without TLS support.
+
+Because of the way default features currently work with cargo, if you select
+another TLS implementation, you will get that implementation *and* the
+`native-tls` implementation pulled in as dependencies (since `native-tls` is
+enabled by default and additive `--features` flags don't turn it off). To
+avoid ending up with two conflicting `TlsStream` implementations, this crate
+picks one implementation to actually compile in, at priority `rustls` >
+`vendored-openssl` > `native-tls`. This means that by default the library
+uses `native-tls`, but supplying either `rustls` or `vendored-openssl` takes
+priority over it. If you experience issues with the TLS handshake on macOS,
+add `mssql = { version = "*", features = ["rustls"] }` to your `Cargo.toml`.
 
 `mssql` has three runtime encryption settings:
 
