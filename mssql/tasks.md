@@ -68,12 +68,13 @@ original would have broken the default build), plus direct fixes for issues
 
 ## Build with modifications — needs rework first
 
-- [ ] **Column-name bracket-escaping** (consolidates #296, #387, #388, and
+- [x] **Column-name bracket-escaping** (consolidates #296, #387, #388, and
   #398's bracketing piece). All four fix the same real bug (keyword/space
   column names break `bulk_insert`'s `INSERT BULK`/`SELECT TOP 0` text), with
   varying completeness: only **#387** escapes an embedded `]` correctly
-  (SQL Server needs `]`→`]]`), only **#388** ships tests. Take #387's fix +
-  #388's tests as one combined change; don't merge more than one of these.
+  (SQL Server needs `]`→`]]`), only **#388** ships tests. Took #387's fix +
+  #388's tests as one combined change. Verified live (confirmed the test
+  fails without the fix, passes with it). Done: `2f33e33`.
 - [ ] **#413** — TDS 8.0 Strict encryption + `hostname_in_certificate`.
   Highest-value PR in the batch: moves TLS before PRELOGIN (closes a real
   downgrade window) and fixes a genuine `NoCertVerifier` TLS 1.3 gap. Before
