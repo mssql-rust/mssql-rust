@@ -112,8 +112,12 @@ original would have broken the default build), plus direct fixes for issues
   nothing to restore). Live testing caught and fixed a real bug of my own
   (an empty, invalid `WITH ()` clause when only KeepIdentity was set).
   Verified live (300 tests over rustls). Done: `e03c090`.
-- [ ] **#400** — `packet_size` config for LOGIN7. Real throughput win; add
-  client-side range validation (512–32767), currently absent.
+- [x] **#400** — `packet_size` config for LOGIN7. Added
+  `Config::packet_size` with the client-side range validation
+  (512–32767) that was missing upstream — this matters beyond
+  documentation, since the wire-framing code does an unchecked
+  `packet_size - HEADER_BYTES` subtraction. 7 unit tests + a live
+  connect test. Done: `6fd94b7`.
 - [ ] **#376** — `Decimal::into_sql`. Real, small API-parity gap, bundled
   with unrelated log-level and stale CI changes — cherry-pick just the
   decimal hunk.
