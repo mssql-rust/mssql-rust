@@ -1,5 +1,5 @@
 use futures_util::io::{AsyncRead, AsyncWrite};
-use mssql::{ColumnData, IntoSql, Result, TokenRow};
+use mssql::{ColumnData, IntoSql, Result, SortOrder, SqlBulkCopyOption, TokenRow};
 use once_cell::sync::Lazy;
 use std::env;
 use std::sync::Once;
@@ -388,6 +388,140 @@ where
     assert_eq!(Some(2), rows[0].get(1));
     assert_eq!(Some(3), rows[2].get(0));
     assert_eq!(Some(6), rows[2].get(1));
+
+    Ok(())
+}
+
+// Regression tests for prisma/tiberius#312 (SqlBulkCopyOptions / ORDER hint).
+
+#[test_on_runtimes]
+async fn bulk_insert_with_options_keep_identity<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("##{}", random_table().await);
+
+    conn.simple_query(format!(
+        "CREATE TABLE {} (id INT IDENTITY(10, 1) PRIMARY KEY, val INT NOT NULL)",
+        table
+    ))
+    .await?;
+
+    let mut req = conn
+        .bulk_insert_with_options(
+            &table,
+            &["id", "val"],
+            SqlBulkCopyOption::KeepIdentity.into(),
+            &[],
+        )
+        .await?;
+
+    for (id, val) in [(1i32, 100i32), (2i32, 200i32)] {
+        let mut row = TokenRow::new();
+        row.push(ColumnData::I32(Some(id)));
+        row.push(ColumnData::I32(Some(val)));
+        req.send(row).await?;
+    }
+    let result = req.finalize().await?;
+    assert_eq!(result.rows_affected(), &[2]);
+
+    let rows = conn
+        .query(format!("SELECT id, val FROM {} ORDER BY id", table), &[])
+        .await?
+        .into_first_result()
+        .await?;
+
+    assert_eq!(rows.len(), 2);
+    // The identity values we supplied must have been preserved, not
+    // reassigned starting from the seed (10).
+    assert_eq!(Some(1), rows[0].get(0));
+    assert_eq!(Some(100), rows[0].get(1));
+    assert_eq!(Some(2), rows[1].get(0));
+    assert_eq!(Some(200), rows[1].get(1));
+
+    Ok(())
+}
+
+#[test_on_runtimes]
+async fn bulk_insert_without_keep_identity_still_excludes_identity_column<S>(
+    mut conn: mssql::Client<S>,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("##{}", random_table().await);
+
+    conn.simple_query(format!(
+        "CREATE TABLE {} (id INT IDENTITY(10, 1) PRIMARY KEY, val INT NOT NULL)",
+        table
+    ))
+    .await?;
+
+    // Wildcard bulk_insert, no KeepIdentity: the identity column must be
+    // excluded from the generated column list (same as
+    // bulk_insert_excludes_identity_and_computed_columns), so only `val`
+    // is supplied and the server assigns `id` starting from its seed.
+    let mut req = conn.bulk_insert(&table).await?;
+    for val in [100, 200] {
+        let mut row = TokenRow::new();
+        row.push(ColumnData::I32(Some(val)));
+        req.send(row).await?;
+    }
+    let result = req.finalize().await?;
+    assert_eq!(result.rows_affected(), &[2]);
+
+    let rows = conn
+        .query(format!("SELECT id, val FROM {} ORDER BY id", table), &[])
+        .await?
+        .into_first_result()
+        .await?;
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(Some(10), rows[0].get(0));
+    assert_eq!(Some(100), rows[0].get(1));
+    assert_eq!(Some(11), rows[1].get(0));
+    assert_eq!(Some(200), rows[1].get(1));
+
+    Ok(())
+}
+
+#[test_on_runtimes]
+async fn bulk_insert_with_options_table_lock_and_order_hint<S>(
+    mut conn: mssql::Client<S>,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("##{}", random_table().await);
+
+    conn.simple_query(format!("CREATE TABLE {} (val INT NOT NULL)", table))
+        .await?;
+
+    let options = SqlBulkCopyOption::TableLock
+        | SqlBulkCopyOption::CheckConstraints
+        | SqlBulkCopyOption::FireTriggers
+        | SqlBulkCopyOption::KeepNulls;
+    let order_hints = [("val", SortOrder::Ascending)];
+
+    let mut req = conn
+        .bulk_insert_with_options(&table, &["*"], options, &order_hints)
+        .await?;
+
+    for val in [3, 1, 2] {
+        let mut row = TokenRow::new();
+        row.push(ColumnData::I32(Some(val)));
+        req.send(row).await?;
+    }
+    let result = req.finalize().await?;
+    assert_eq!(result.rows_affected(), &[3]);
+
+    let rows = conn
+        .query(format!("SELECT val FROM {}", table), &[])
+        .await?
+        .into_first_result()
+        .await?;
+
+    assert_eq!(rows.len(), 3);
 
     Ok(())
 }
