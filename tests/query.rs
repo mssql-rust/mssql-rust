@@ -551,6 +551,31 @@ where
     Ok(())
 }
 
+// Regression test for https://github.com/prisma/tiberius/issues/380:
+// into_results() used to collapse consecutive empty result sets, so a
+// caller couldn't tell which SELECT in a multi-statement batch produced
+// which (possibly empty) result. Three statements should always produce
+// three entries, regardless of how many rows each one returns.
+#[test_on_runtimes]
+async fn into_results_counts_empty_result_sets<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let results = conn
+        .query("SELECT 1 WHERE 1 = 0; SELECT 1 WHERE 1 = 0; SELECT 1;", &[])
+        .await?
+        .into_results()
+        .await?;
+
+    assert_eq!(3, results.len());
+    assert!(results[0].is_empty());
+    assert!(results[1].is_empty());
+    assert_eq!(1, results[2].len());
+    assert_eq!(Some(1i32), results[2][0].get(0));
+
+    Ok(())
+}
+
 #[test_on_runtimes]
 async fn bool_type<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
