@@ -1,0 +1,20 @@
+{
+  "name": "mssql-rust.github.io",
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "sync:lily": "node bin/sync-lily.mjs",
+    "check": "svelte-kit sync"
+  },
+  "type": "module",
+  "private": "true",
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.70.2",
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "svelte": "^5.56.9",
+    "vite": "^8.2.1"
+  }
+}
