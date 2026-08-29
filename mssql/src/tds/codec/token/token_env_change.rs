@@ -84,10 +84,10 @@ pub enum TokenEnvChange {
 impl fmt::Display for TokenEnvChange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Database(ref old, ref new) => {
+            Self::Database(ref new, ref old) => {
                 write!(f, "Database change from '{}' to '{}'", old, new)
             }
-            Self::PacketSize(old, new) => {
+            Self::PacketSize(new, old) => {
                 write!(f, "Packet size change from '{}' to '{}'", old, new)
             }
             Self::SqlCollation { old, new } => match (old, new) {
