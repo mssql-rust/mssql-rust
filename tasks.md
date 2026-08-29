@@ -42,10 +42,17 @@ original would have broken the default build), plus direct fixes for issues
   all three of this fork's SSPI-continuation call sites (winauth Integrated,
   winauth Windows, unix GSSAPI Integrated), not just the one upstream's diff
   touched. Done: see commit.
-- [ ] **#430** — Renew expired test cert + add podman/docker test-server
+- [x] **#430** — Renew expired test cert + add podman/docker test-server
   script. Unblocks running the integration suite at all; zero source risk.
   (Supersedes the overlapping cert-fix in #405, and #241/#389, both already
-  superseded by CI work already done in this fork.)
+  superseded by CI work already done in this fork.) The cert-renewal half was
+  already moot -- this fork's cert (regenerated in `ea6bb6a`) is valid until
+  2031 -- so only `docker/test-server.sh` was added, ported to this fork's
+  `mssql`/`MSSQL_TEST_*` naming. Running it against a live server (Azure SQL
+  Edge via rustls) validated 276 integration/bulk tests and, in the process,
+  found and fixed two real bugs the unit tests alone had missed: see
+  `9314a44` (money/smallmoney bulk_insert Display) and `f70bf1a` (RPC
+  TYPE_INFO header for the ANSI-string-encoding feature).
 - [ ] **#385** — Fix `QueryStream::into_results` miscounting empty result
   sets in a multi-statement batch. Verified by hand-tracing the logic; real
   correctness bug. Add a regression test on merge (PR ships none).
