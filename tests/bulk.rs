@@ -1,5 +1,5 @@
 use futures_util::io::{AsyncRead, AsyncWrite};
-use mssql::{IntoSql, Result, TokenRow};
+use mssql::{ColumnData, IntoSql, Result, TokenRow};
 use once_cell::sync::Lazy;
 use std::env;
 use std::sync::Once;
@@ -302,3 +302,40 @@ test_bulk_columns!(ab_ba_override_default_columns(
     (&["a", "b", "c"], vec![(1i32, 1f64, 10i32); 100]),
     (&["b", "c", "a"], vec![(2f64, 20i32, 2i32); 100]),
 ));
+
+// Regression test for prisma/tiberius#296 / #387 / #388: a column named
+// after a reserved word (or containing a space) used to break bulk_insert's
+// generated INSERT BULK statement text, since the column name wasn't
+// bracket-quoted.
+#[test_on_runtimes]
+async fn read_and_write_to_keyword_columns<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("##{}", random_table().await);
+
+    conn.simple_query(format!("CREATE TABLE {} ([End] INT)", table))
+        .await?;
+
+    let mut req = conn.bulk_insert(&table).await?;
+    for num in [6, 7, 8] {
+        let mut row = TokenRow::new();
+        row.push(ColumnData::I32(Some(num)));
+        req.send(row).await?;
+    }
+    let result = req.finalize().await?;
+    assert_eq!(result.rows_affected(), &[3]);
+
+    let rows = conn
+        .query(format!("SELECT [End] FROM {}", table), &[])
+        .await?
+        .into_first_result()
+        .await?;
+
+    assert_eq!(rows.len(), 3);
+    assert_eq!(Some(6), rows[0].get(0));
+    assert_eq!(Some(7), rows[1].get(0));
+    assert_eq!(Some(8), rows[2].get(0));
+
+    Ok(())
+}
