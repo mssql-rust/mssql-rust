@@ -4,15 +4,16 @@ authors = [
     "Julius de Bruijn <bruijn@prisma.io>",
     "Eric Sheppard <eric@eigenmo.de>",
     "Yoshua Wuyts <yoshuawuyts@gmail.com>",
+    "Joel Parker Henderson <joel@joelparkerhenderson.com>",
 ]
-description = "A TDS (MSSQL) driver"
-documentation = "https://docs.rs/tiberius/"
+description = "MSSQL TDS driver. Fork of Tiberius, with a focus on ongoing maintenance and security updates."
+documentation = "https://docs.rs/mssql/"
 edition = "2021"
 keywords = ["tds", "mssql", "sql"]
 license = "MIT/Apache-2.0"
-name = "tiberius"
+name = "mssql"
 readme = "README.md"
-repository = "https://github.com/prisma/tiberius"
+repository = "https://github.com/mssql-rust/mssql-rust"
 version = "0.12.3"
 
 [workspace]
