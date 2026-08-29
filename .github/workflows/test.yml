@@ -53,7 +53,7 @@ jobs:
           - "--no-default-features --features=vendored-openssl"
 
     env:
-      TIBERIUS_TEST_CONNECTION_STRING: "server=tcp:localhost,1433;user=SA;password=<YourStrong@Passw0rd>;TrustServerCertificate=true"
+      MSSQL_TEST_CONNECTION_STRING: "server=tcp:localhost,1433;user=SA;password=<YourStrong@Passw0rd>;TrustServerCertificate=true"
       RUSTFLAGS: "-Dwarnings"
 
     steps:
@@ -92,8 +92,8 @@ jobs:
           - "--no-default-features --features=vendored-openssl,winauth"
 
     env:
-      TIBERIUS_TEST_INSTANCE: "MSSQLSERVER"
-      TIBERIUS_TEST_CONNECTION_STRING: "server=tcp:127.0.0.1,1433;IntegratedSecurity=true;TrustServerCertificate=true"
+      MSSQL_TEST_INSTANCE: "MSSQLSERVER"
+      MSSQL_TEST_CONNECTION_STRING: "server=tcp:127.0.0.1,1433;IntegratedSecurity=true;TrustServerCertificate=true"
 
     steps:
       - uses: actions/checkout@v2
@@ -201,7 +201,7 @@ jobs:
           - "--no-default-features --features=vendored-openssl"
 
     env:
-      TIBERIUS_TEST_CONNECTION_STRING: "server=tcp:localhost,1433;user=SA;password=<YourStrong@Passw0rd>;TrustServerCertificate=true"
+      MSSQL_TEST_CONNECTION_STRING: "server=tcp:localhost,1433;user=SA;password=<YourStrong@Passw0rd>;TrustServerCertificate=true"
 
     steps:
       - uses: actions/checkout@v2
