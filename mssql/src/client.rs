@@ -22,7 +22,7 @@ use crate::{
         stream::{QueryStream, TokenStream},
         Collation,
     },
-    BulkLoadRequest, ColumnFlag, SqlReadBytes, ToSql,
+    BulkLoadRequest, ColumnFlag, MetaDataColumn, SqlReadBytes, ToSql,
 };
 use codec::{
     BatchRequest, ColumnData, PacketHeader, RpcParam, RpcProcId, TokenRpcRequest, TypeInfo,
@@ -310,6 +310,64 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         self.bulk_insert_columns(table, &["*"]).await
     }
 
+    /// Retrieve the column metadata for a table (or a subset of its
+    /// columns), including each column's name, type, and flags (e.g.
+    /// nullability, whether it's an identity or computed column). Runs a
+    /// `SELECT TOP 0` internally, so it never touches any row data.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use mssql::Config;
+    /// # use tokio_util::compat::TokioAsyncWriteCompatExt;
+    /// # use std::env;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let c_str = env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or(
+    /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
+    /// # );
+    /// # let config = Config::from_ado_string(&c_str)?;
+    /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
+    /// # tcp.set_nodelay(true)?;
+    /// # let mut client = mssql::Client::connect(config, tcp.compat_write()).await?;
+    /// client.simple_query("CREATE TABLE ##describe_test (id INT IDENTITY PRIMARY KEY, name VARCHAR(50) NULL)").await?;
+    /// let columns = client.column_metadata("##describe_test", &["*"]).await?;
+    /// assert_eq!(2, columns.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn column_metadata<'a>(
+        &'a mut self,
+        table: &'a str,
+        columns: &'a [&'a str],
+    ) -> crate::Result<Vec<MetaDataColumn<'static>>> {
+        self.connection.flush_stream().await?;
+
+        let columns_list = columns.join(", ");
+        let query = format!("SELECT TOP 0 {columns_list} FROM {table}");
+
+        let req = BatchRequest::new(query, self.connection.context().transaction_descriptor());
+
+        let id = self.connection.context_mut().next_packet_id();
+        self.connection.send(PacketHeader::batch(id), req).await?;
+
+        let token_stream = TokenStream::new(&mut self.connection).try_unfold();
+
+        let columns = token_stream
+            .try_fold(None, |mut columns, token| async move {
+                if let ReceivedToken::NewResultset(metadata) = token {
+                    columns = Some(metadata.columns.clone());
+                };
+
+                Ok(columns)
+            })
+            .await?;
+
+        columns.ok_or_else(|| {
+            crate::Error::Protocol("expecting column metadata from query but not found".into())
+        })
+    }
+
     /// Execute a `BULK INSERT` statement, efficiently storing a large number of
     /// rows into a specified list of a table's columns. Note: make sure the
     /// input row follows the same schema as the column list, otherwise
@@ -362,35 +420,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         table: &'a str,
         columns: &'a [&'a str],
     ) -> crate::Result<BulkLoadRequest<'a, S>> {
-        // Start the bulk request
-        self.connection.flush_stream().await?;
-
-        // retrieve column metadata from server
-        let columns_list = columns.join(", ");
-        let query = format!("SELECT TOP 0 {columns_list} FROM {table}");
-
-        let req = BatchRequest::new(query, self.connection.context().transaction_descriptor());
-
-        let id = self.connection.context_mut().next_packet_id();
-        self.connection.send(PacketHeader::batch(id), req).await?;
-
-        let token_stream = TokenStream::new(&mut self.connection).try_unfold();
-
-        let columns = token_stream
-            .try_fold(None, |mut columns, token| async move {
-                if let ReceivedToken::NewResultset(metadata) = token {
-                    columns = Some(metadata.columns.clone());
-                };
-
-                Ok(columns)
-            })
-            .await?;
-
-        // now start bulk upload
-        let columns: Vec<_> = columns
-            .ok_or_else(|| {
-                crate::Error::Protocol("expecting column metadata from query but not found".into())
-            })?
+        let columns: Vec<_> = self
+            .column_metadata(table, columns)
+            .await?
             .into_iter()
             // `usUpdateable` is a 2-bit value (0 = read-only, 1 = read/write,
             // 2 = unknown), not two independent flags: keep the column
@@ -407,6 +439,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
             })
             .collect();
 
+        // now start bulk upload
         self.connection.flush_stream().await?;
         let col_data = columns.iter().map(|c| format!("{}", c)).join(", ");
         let query = format!("INSERT BULK {} ({})", table, col_data);
