@@ -52,7 +52,7 @@ pub(crate) enum MaybeTlsStream<S: AsyncRead + AsyncWrite + Unpin + Send> {
         feature = "native-tls",
         feature = "vendored-openssl"
     ))]
-    Tls(TlsStream<TlsPreloginWrapper<S>>),
+    Tls(Box<TlsStream<TlsPreloginWrapper<S>>>),
 }
 
 #[cfg(any(
