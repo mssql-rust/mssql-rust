@@ -128,10 +128,18 @@ original would have broken the default build), plus direct fixes for issues
   ones added this session (client_name, host_name_in_certificate,
   send_string_parameters_as_unicode, multi_subnet_failover, packet_size).
   Verified live (305 tests over rustls, unaffected). Done: `7e8f9c6`.
-- [ ] **#408** — SSPI NTLM without Kerberos (Unix). Real auth-gap fix, but no
-  test coverage for a new auth code path, duplicated GSSAPI connection-string
-  parsing, and it clones the password without zeroizing (reconcile with
-  #411's zeroize pattern).
+- [x] **#408** — SSPI NTLM without Kerberos (Unix). Added `sspi-rs`
+  feature. Fixed all 3 flagged issues: added unit tests for the
+  (previously fully untested, for any backend) connection-string dispatch
+  and for `WindowsAuth` zeroizing; deduplicated the dispatch to check its
+  guard condition once instead of once per backend; changed
+  `WindowsAuth.password` to `Zeroizing<String>`. Also fixed a
+  `PacketHeader::sspi` vs `login` bug matching #351. Verified compiling
+  clean across every feature combo including a real Windows cross-compile
+  check (`--target x86_64-pc-windows-msvc`), and live for the unaffected
+  SQL-auth path (305 tests). **Not verified**: the actual NTLM wire
+  handshake — no NTLM-capable SQL Server is reachable from this
+  environment (same gap the original PR had). Done: `6a815c7`.
 - [ ] **#290** — CA certificate bundle support. Good idea, written against an
   ~18-month-old rustls API this fork has already moved past (now on
   rustls 0.23/aws_lc_rs) — reimplement the idea against current
