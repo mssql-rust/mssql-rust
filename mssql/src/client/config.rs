@@ -89,6 +89,17 @@ impl Config {
         Self::default()
     }
 
+    /// Creates a new [`ConfigBuilder`], initialized with the default
+    /// settings, offering the same options as `Config`'s own setters but
+    /// through a chainable, `.build()`-terminated API. Equivalent to and
+    /// interchangeable with calling `Config::new()` and its setters
+    /// directly - use whichever style reads better for the call site.
+    pub fn builder() -> ConfigBuilder {
+        ConfigBuilder {
+            inner: Self::default(),
+        }
+    }
+
     /// A host or ip address to connect to.
     ///
     /// - Defaults to `localhost`.
@@ -380,6 +391,135 @@ impl Config {
     }
 }
 
+/// A chainable builder for [`Config`], created via [`Config::builder`].
+///
+/// This is a pure alternative to constructing a `Config` with `Config::new()`
+/// and calling its setters directly - both styles produce the same `Config`
+/// and remain fully supported; use whichever reads better at the call site.
+///
+/// # Example
+///
+/// ```
+/// # use mssql::{Config, AuthMethod};
+/// let config = Config::builder()
+///     .host("localhost")
+///     .port(1433)
+///     .authentication(AuthMethod::sql_server("SA", "<YourStrong@Passw0rd>"))
+///     .trust_cert()
+///     .build();
+/// ```
+#[derive(Clone, Debug)]
+pub struct ConfigBuilder {
+    inner: Config,
+}
+
+impl ConfigBuilder {
+    /// See [`Config::host`].
+    pub fn host(&mut self, host: impl ToString) -> &mut Self {
+        self.inner.host(host);
+        self
+    }
+
+    /// See [`Config::port`].
+    pub fn port(&mut self, port: u16) -> &mut Self {
+        self.inner.port(port);
+        self
+    }
+
+    /// See [`Config::database`].
+    pub fn database(&mut self, database: impl ToString) -> &mut Self {
+        self.inner.database(database);
+        self
+    }
+
+    /// See [`Config::instance_name`].
+    pub fn instance_name(&mut self, name: impl ToString) -> &mut Self {
+        self.inner.instance_name(name);
+        self
+    }
+
+    /// See [`Config::application_name`].
+    pub fn application_name(&mut self, name: impl ToString) -> &mut Self {
+        self.inner.application_name(name);
+        self
+    }
+
+    /// See [`Config::client_name`].
+    pub fn client_name(&mut self, name: impl ToString) -> &mut Self {
+        self.inner.client_name(name);
+        self
+    }
+
+    /// See [`Config::encryption`].
+    pub fn encryption(&mut self, encryption: EncryptionLevel) -> &mut Self {
+        self.inner.encryption(encryption);
+        self
+    }
+
+    /// See [`Config::trust_cert`].
+    ///
+    /// # Panics
+    /// Will panic in case `trust_cert_ca` was called before.
+    pub fn trust_cert(&mut self) -> &mut Self {
+        self.inner.trust_cert();
+        self
+    }
+
+    /// See [`Config::trust_cert_ca`].
+    ///
+    /// # Panics
+    /// Will panic in case `trust_cert` was called before.
+    pub fn trust_cert_ca(&mut self, path: impl ToString) -> &mut Self {
+        self.inner.trust_cert_ca(path);
+        self
+    }
+
+    /// See [`Config::host_name_in_certificate`].
+    pub fn host_name_in_certificate(&mut self, name: impl ToString) -> &mut Self {
+        self.inner.host_name_in_certificate(name);
+        self
+    }
+
+    /// See [`Config::authentication`].
+    pub fn authentication(&mut self, auth: AuthMethod) -> &mut Self {
+        self.inner.authentication(auth);
+        self
+    }
+
+    /// See [`Config::readonly`].
+    pub fn readonly(&mut self, readonly: bool) -> &mut Self {
+        self.inner.readonly(readonly);
+        self
+    }
+
+    /// See [`Config::send_string_parameters_as_unicode`].
+    pub fn send_string_parameters_as_unicode(&mut self, enabled: bool) -> &mut Self {
+        self.inner.send_string_parameters_as_unicode(enabled);
+        self
+    }
+
+    /// See [`Config::multi_subnet_failover`].
+    pub fn multi_subnet_failover(&mut self, multi_subnet_failover: bool) -> &mut Self {
+        self.inner.multi_subnet_failover(multi_subnet_failover);
+        self
+    }
+
+    /// See [`Config::packet_size`]. Unlike this builder's other setters,
+    /// returns a [`Result`](crate::Result) since the packet size is range-
+    /// validated; use `?` to keep chaining on success.
+    pub fn packet_size(&mut self, size: u32) -> crate::Result<&mut Self> {
+        self.inner.packet_size(size)?;
+        Ok(self)
+    }
+
+    /// Finalizes this builder into a [`Config`]. The builder remains usable
+    /// afterward (e.g. to `build()` a second, slightly different `Config`
+    /// from a shared base).
+    pub fn build(&self) -> Config {
+        self.inner.clone()
+    }
+}
+
 pub(crate) struct ServerDefinition {
     host: Option<String>,
     port: Option<u16>,
@@ -650,5 +790,78 @@ mod tests {
     fn packet_size_rejects_zero() {
         let mut config = Config::new();
         assert!(config.packet_size(0).is_err());
+    }
+
+    // Regression tests for prisma/tiberius#366 (ConfigBuilder): it must be a
+    // pure addition alongside Config::new()'s existing direct setters, not a
+    // replacement - the upstream PR removed Config::new() and every setter
+    // entirely, breaking every existing caller.
+
+    #[test]
+    fn config_new_and_its_setters_still_exist() {
+        // Compiles only if Config::new() and its setters are all still
+        // present with their original (non-builder) signatures.
+        let mut config = Config::new();
+        config.host("localhost");
+        config.port(1433);
+        config.database("master");
+        config.application_name("app");
+        config.readonly(true);
+        assert_eq!(Some("localhost".to_string()), config.host);
+    }
+
+    #[test]
+    fn builder_produces_equivalent_config_to_direct_setters() {
+        let mut direct = Config::new();
+        direct.host("db.example.com");
+        direct.port(1433);
+        direct.database("my_db");
+        direct.readonly(true);
+
+        let built = Config::builder()
+            .host("db.example.com")
+            .port(1433)
+            .database("my_db")
+            .readonly(true)
+            .build();
+
+        assert_eq!(direct.host, built.host);
+        assert_eq!(direct.port, built.port);
+        assert_eq!(direct.database, built.database);
+        assert_eq!(direct.readonly, built.readonly);
+    }
+
+    #[test]
+    fn builder_can_be_reused_after_build() {
+        let mut builder = Config::builder();
+        builder.host("localhost");
+
+        let first = builder.build();
+        builder.port(9999);
+        let second = builder.build();
+
+        assert_eq!(Some("localhost".to_string()), first.host);
+        assert_eq!(None, first.port);
+        assert_eq!(Some("localhost".to_string()), second.host);
+        assert_eq!(Some(9999), second.port);
+    }
+
+    #[test]
+    fn builder_packet_size_propagates_validation_error() {
+        let mut builder = Config::builder();
+        assert!(builder.packet_size(0).is_err());
+    }
+
+    #[test]
+    fn builder_packet_size_chains_on_success() {
+        let built = Config::builder()
+            .host("localhost")
+            .packet_size(8192)
+            .unwrap()
+            .database("master")
+            .build();
+
+        assert_eq!(Some(8192), built.get_packet_size());
+        assert_eq!(Some("master".to_string()), built.database);
     }
 }

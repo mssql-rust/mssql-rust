@@ -279,7 +279,7 @@ mod bulk_options;
 mod sql_browser;
 
 pub use bulk_options::{ColumnOrderHint, SortOrder, SqlBulkCopyOption, SqlBulkCopyOptions};
-pub use client::{AuthMethod, Client, Config};
+pub use client::{AuthMethod, Client, Config, ConfigBuilder};
 pub(crate) use error::Error;
 pub use from_sql::{FromSql, FromSqlOwned};
 pub use query::Query;
