@@ -92,6 +92,23 @@ impl PacketHeader {
         }
     }
 
+    /// Header for an SSPI response packet, sent during the NTLM/SSPI
+    /// challenge-response continuation of a login. Per MS-TDS, this is a
+    /// distinct packet type (0x11) from the initial LOGIN7 (0x10); servers
+    /// that enforce the distinction reject a continuation framed as another
+    /// LOGIN7.
+    #[cfg(any(
+        all(windows, feature = "winauth"),
+        all(unix, feature = "integrated-auth-gssapi")
+    ))]
+    pub fn sspi(id: u8) -> Self {
+        Self {
+            ty: PacketType::Sspi,
+            status: PacketStatus::EndOfMessage,
+            ..Self::new(0, id)
+        }
+    }
+
     pub fn batch(id: u8) -> Self {
         Self {
             ty: PacketType::SQLBatch,
