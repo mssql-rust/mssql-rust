@@ -59,11 +59,12 @@ original would have broken the default build), plus direct fixes for issues
   code, passes on the fix, live). Done: `d346db2`.
 - [x] **#314** — `ColumnData` `FromSql`/`ToSql`/`IntoSql` impls. Verified
   compiling and clippy-clean in an isolated worktree. Done: `622372d`.
-- [ ] **#359** — Bulk insert for a specified column list. Well-tested,
-  additive, addresses upstream issue #311.
-- [ ] **#331** — `Row` → `TokenRow` conversion. Trivial once `impl Into<..>
-  for Row` is swapped for `impl From<Row> for TokenRow` (current diff fails
-  this fork's own `-D warnings` clippy gate: `from_over_into`).
+- [x] **#359** — Bulk insert for a specified column list. Well-tested,
+  additive, addresses upstream issue #311. Verified live (8 new + 80
+  existing bulk tests). Done: `3c0e3e1`.
+- [x] **#331** — `Row` → `TokenRow` conversion. Implemented as `From<Row> for
+  TokenRow` (the PR's `Into<TokenRow> for Row` fails this fork's own `-D
+  warnings` clippy gate: `from_over_into`). Verified live. Done: `b98bfc2`.
 
 ## Build with modifications — needs rework first
 
