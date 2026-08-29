@@ -60,6 +60,7 @@ async-trait = "0.1"
 connection-string = "0.2"
 num-traits = "0.2"
 uuid = "1.26"
+zeroize = "1.8.2"
 
 [target.'cfg(windows)'.dependencies]
 winauth = { version = "0.0.5", optional = true }
