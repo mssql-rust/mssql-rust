@@ -1,13 +1,21 @@
 //! An asynchronous, runtime-independent, pure-rust Tabular Data Stream (TDS)
 //! implementation for Microsoft SQL Server.
 //!
+//! This crate, `mssql`, is a fork of [Tiberius](https://github.com/prisma/tiberius),
+//! the excellent TDS client originally created by Prisma and its contributors.
+//! Many thanks to the Tiberius team and community for the foundation this crate
+//! builds on. This fork exists to prioritize ongoing maintenance and security
+//! updates, favoring small, focused changes over large rewrites, and to track
+//! current SQL Server and TDS protocol versions. It is distributed under the
+//! same MIT/Apache-2.0 dual license as Tiberius.
+//!
 //! # Connecting with async-std
 //!
 //! Being not bound to any single runtime, a `TcpStream` must be created
 //! separately and injected to the [`Client`].
 //!
 //! ```no_run
-//! use tiberius::{Client, Config, Query, AuthMethod};
+//! use mssql::{Client, Config, Query, AuthMethod};
 //! use async_std::net::TcpStream;
 //!
 //! #[async_std::main]
@@ -60,11 +68,11 @@
 //! # Connecting with Tokio
 //!
 //! Tokio is using their own version of `AsyncRead` and `AsyncWrite` traits,
-//! meaning that when wanting to use Tiberius with Tokio, their `TcpStream`
+//! meaning that when wanting to use `mssql` with Tokio, their `TcpStream`
 //! needs to be wrapped in Tokio's `Compat` module.
 //!
 //! ```no_run
-//! use tiberius::{Client, Config, AuthMethod};
+//! use mssql::{Client, Config, AuthMethod};
 //! use tokio::net::TcpStream;
 //! use tokio_util::compat::TokioAsyncWriteCompatExt;
 //!
@@ -92,7 +100,7 @@
 //!
 //! # Ways of querying
 //!
-//! Tiberius offers two ways to query the database: directly from the [`Client`]
+//! `mssql` offers two ways to query the database: directly from the [`Client`]
 //! with the [`Client#query`] and [`Client#execute`], or additionally through
 //! the [`Query`] object.
 //!
@@ -102,7 +110,7 @@
 //! are easy to use.
 //!
 //! ```no_run
-//! # use tiberius::{Client, Config, AuthMethod};
+//! # use mssql::{Client, Config, AuthMethod};
 //! # use tokio::net::TcpStream;
 //! # use tokio_util::compat::TokioAsyncWriteCompatExt;
 //! # #[tokio::main]
@@ -126,7 +134,7 @@
 //! wanting to pass them by-value, use the [`Query`] object.
 //!
 //! ```no_run
-//! # use tiberius::{Client, Query, Config, AuthMethod};
+//! # use mssql::{Client, Query, Config, AuthMethod};
 //! # use tokio::net::TcpStream;
 //! # use tokio_util::compat::TokioAsyncWriteCompatExt;
 //! # #[tokio::main]
@@ -153,7 +161,7 @@
 //!
 //! # Authentication
 //!
-//! Tiberius supports different [ways of authentication] to the SQL Server:
+//! `mssql` supports different [ways of authentication] to the SQL Server:
 //!
 //! - SQL Server authentication uses the facilities of the database to
 //! authenticate the user.
@@ -164,10 +172,10 @@
 //!
 //! ## AAD(Azure Active Directory) Authentication
 //!
-//! Tiberius supports AAD authentication by taking an AAD token. Suggest using
+//! `mssql` supports AAD authentication by taking an AAD token. Suggest using
 //! [azure_identity](https://crates.io/crates/azure_identity) crate to retrieve
-//! the token, and config tiberius with token. There is an example in examples
-//! folder on how to setup this.
+//! the token, and config `mssql` with the token. There is an example in the
+//! examples folder on how to setup this.
 //!
 //! # TLS
 //!
@@ -185,14 +193,14 @@
 //!
 //! ```no_run
 //! # #[cfg(any(feature = "sql-browser-async-std", feature = "sql-browser-tokio"))]
-//! use tiberius::{Client, Config, AuthMethod};
+//! use mssql::{Client, Config, AuthMethod};
 //! # #[cfg(any(feature = "sql-browser-async-std", feature = "sql-browser-tokio"))]
 //! use async_std::net::TcpStream;
 //!
 //! // An extra trait that allows connecting to a named instance with the given
 //! // `TcpStream`.
 //! # #[cfg(any(feature = "sql-browser-async-std", feature = "sql-browser-tokio"))]
-//! use tiberius::SqlBrowser;
+//! use mssql::SqlBrowser;
 //!
 //! #[async_std::main]
 //! # #[cfg(any(feature = "sql-browser-async-std", feature = "sql-browser-tokio"))]
@@ -229,7 +237,7 @@
 //! - If using an [ADO.NET connection string], it is possible to create a
 //!   [`Config`] from one. Please see the documentation for
 //!   [`from_ado_string`] for details.
-//! - If wanting to use Tiberius with SQL Server version 2005, one must
+//! - If wanting to use `mssql` with SQL Server version 2005, one must
 //!   disable the `tds73` feature.
 //!
 //! [`EncryptionLevel`]: enum.EncryptionLevel.html

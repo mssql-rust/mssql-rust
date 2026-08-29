@@ -34,19 +34,19 @@ use std::{
 /// # Example
 ///
 /// ```
-/// # use tiberius::{Config, QueryItem};
+/// # use mssql::{Config, QueryItem};
 /// # use tokio_util::compat::TokioAsyncWriteCompatExt;
 /// # use std::env;
 /// # use futures_util::stream::TryStreamExt;
 /// # #[tokio::main]
 /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// # let c_str = env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or(
+/// # let c_str = env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or(
 /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
 /// # );
 /// # let config = Config::from_ado_string(&c_str)?;
 /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
 /// # tcp.set_nodelay(true)?;
-/// # let mut client = tiberius::Client::connect(config, tcp.compat_write()).await?;
+/// # let mut client = mssql::Client::connect(config, tcp.compat_write()).await?;
 /// let mut stream = client
 ///     .query(
 ///         "SELECT @P1 AS first; SELECT @P2 AS second",
@@ -145,19 +145,19 @@ impl<'a> QueryStream<'a> {
     /// # Example
     ///
     /// ```
-    /// # use tiberius::Config;
+    /// # use mssql::Config;
     /// # use tokio_util::compat::TokioAsyncWriteCompatExt;
     /// # use std::env;
     /// # use futures_util::stream::TryStreamExt;
     /// # #[tokio::main]
     /// # async fn main() -> anyhow::Result<()> {
-    /// # let c_str = env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or(
+    /// # let c_str = env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or(
     /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
     /// # );
     /// # let config = Config::from_ado_string(&c_str)?;
     /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
     /// # tcp.set_nodelay(true)?;
-    /// # let mut client = tiberius::Client::connect(config, tcp.compat_write()).await?;
+    /// # let mut client = mssql::Client::connect(config, tcp.compat_write()).await?;
     /// let mut stream = client
     ///     .query(
     ///         "SELECT @P1 AS first; SELECT @P2 AS second",

@@ -182,7 +182,7 @@ impl<'a> LoginMessage<'a> {
             option_flags_1: OptionFlag1::UseDbNotify | OptionFlag1::InitDbFatal,
             option_flags_2: OptionFlag2::InitLangFatal | OptionFlag2::OdbcDriver,
             option_flags_3: BitFlags::from_flag(OptionFlag3::UnknownCollationHandling),
-            app_name: "tiberius".into(),
+            app_name: "mssql".into(),
             ..Default::default()
         }
     }
