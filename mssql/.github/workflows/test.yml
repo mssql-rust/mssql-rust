@@ -35,6 +35,26 @@ jobs:
       - name: Rustfmt
         run: cargo fmt --check
 
+  msrv:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: "1.96"
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+      - name: Install dependencies
+        run: sudo apt install -y openssl libkrb5-dev
+      # Verifies the rust-version declared in Cargo.toml (see
+      # spec/rust-msrv-n-minus-2/index.md): the code must compile on this pinned
+      # toolchain, not just claim to. A red msrv job means a change started
+      # requiring a newer compiler than the policy allows.
+      - name: Check MSRV
+        run: cargo check --all-targets --workspace
+
   cargo-test-linux:
     runs-on: ubuntu-latest
 

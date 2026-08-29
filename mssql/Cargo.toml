@@ -14,10 +14,18 @@ license = "MIT/Apache-2.0"
 name = "mssql"
 readme = "README.md"
 repository = "https://github.com/mssql-rust/mssql-rust"
+rust-version.workspace = true
 version = "0.12.3"
 
 [workspace]
 members = ["runtimes-macro"]
+
+[workspace.package]
+# MSRV policy: current stable minus two minor versions. See
+# spec/rust-msrv-n-minus-2/index.md for the rule and the maintenance steps to
+# follow when stable Rust advances. Every workspace member inherits this
+# via `rust-version.workspace = true` instead of declaring its own value.
+rust-version = "1.96"
 
 [[test]]
 path = "tests/query.rs"
