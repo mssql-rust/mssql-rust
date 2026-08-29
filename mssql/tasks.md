@@ -147,9 +147,13 @@ original would have broken the default build), plus direct fixes for issues
   approach). 7 unit tests + 2 live tests (including a real multi-cert
   bundle) — verified live over both rustls and vendored-openssl (310
   tests each). Done: `01ccaa2`.
-- [ ] **#330** — webpki-roots support (avoid relying on native/OS cert
-  store). Same situation as #290 — targets rustls APIs removed in ≥0.22;
-  needs a full rewrite against the current TLS internals, not a patch.
+- [x] **#330** — webpki-roots support (avoid relying on native/OS cert
+  store). Reimplemented from scratch against current rustls internals
+  (0.23/pki_types) — the PR targeted an even older, already-removed API
+  than #290 did. New `rustls-webpki-roots` feature + `Config::
+  trust_webpki_roots()`. 4 unit tests + a live test proving the test
+  server's self-signed cert is correctly rejected (311 tests total).
+  Added to the CI Linux live-database matrix. Done: `11a2707`.
 
 ## Defer — not wrong, just low priority or already covered
 
