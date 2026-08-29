@@ -1,3 +1,9 @@
+// The manual_unwrap_or_default lint fires on code darling's FromMeta derive
+// generates for the #[darling(default)] field below, not on anything in
+// this crate's own source, so it can't be fixed at the call site; the
+// derive's expansion lives outside MacroArgs's own item scope.
+#![allow(clippy::manual_unwrap_or_default)]
+
 extern crate proc_macro;
 use darling::FromMeta;
 
