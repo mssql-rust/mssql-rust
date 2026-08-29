@@ -99,7 +99,7 @@ impl PacketHeader {
     /// LOGIN7.
     #[cfg(any(
         all(windows, feature = "winauth"),
-        all(unix, feature = "integrated-auth-gssapi")
+        all(unix, any(feature = "integrated-auth-gssapi", feature = "sspi-rs"))
     ))]
     pub fn sspi(id: u8) -> Self {
         Self {

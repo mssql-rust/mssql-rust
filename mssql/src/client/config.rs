@@ -546,23 +546,47 @@ pub(crate) trait ConfigString {
             .or_else(|| self.dict().get("pwd"))
             .map(|s| s.as_str());
 
-        match self
+        // Checked once here rather than repeated in a `#[cfg(...)]`-gated
+        // match arm per backend (winauth/sspi-rs/integrated-auth-gssapi),
+        // which would otherwise duplicate this same guard condition up to
+        // three times.
+        let integrated_security_requested = match self
             .dict()
             .get("integratedsecurity")
             .or_else(|| self.dict().get("integrated security"))
         {
-            #[cfg(all(windows, feature = "winauth"))]
-            Some(val) if val.to_lowercase() == "sspi" || Self::parse_bool(val)? => match (user, pw)
-            {
-                (None, None) => Ok(AuthMethod::Integrated),
-                _ => Ok(AuthMethod::windows(user.unwrap_or(""), pw.unwrap_or(""))),
-            },
-            #[cfg(feature = "integrated-auth-gssapi")]
-            Some(val) if val.to_lowercase() == "sspi" || Self::parse_bool(val)? => {
-                Ok(AuthMethod::Integrated)
+            Some(val) => val.to_lowercase() == "sspi" || Self::parse_bool(val)?,
+            None => false,
+        };
+
+        if integrated_security_requested {
+            cfg_if::cfg_if! {
+                if #[cfg(all(windows, feature = "winauth"))] {
+                    return match (user, pw) {
+                        (None, None) => Ok(AuthMethod::Integrated),
+                        _ => Ok(AuthMethod::windows(user.unwrap_or(""), pw.unwrap_or(""))),
+                    };
+                } else if #[cfg(all(unix, feature = "sspi-rs", feature = "integrated-auth-gssapi"))] {
+                    // Both a pure-Rust NTLM backend and a real Kerberos
+                    // ticket cache are available: prefer explicit
+                    // credentials (NTLM) when given, otherwise fall back
+                    // to the current user's Kerberos ticket.
+                    return match (user, pw) {
+                        (Some(user), Some(pw)) => Ok(AuthMethod::windows(user, pw)),
+                        _ => Ok(AuthMethod::Integrated),
+                    };
+                } else if #[cfg(all(unix, feature = "sspi-rs"))] {
+                    return match (user, pw) {
+                        (Some(user), Some(pw)) => Ok(AuthMethod::windows(user, pw)),
+                        _ => Ok(AuthMethod::sql_server(user.unwrap_or(""), pw.unwrap_or(""))),
+                    };
+                } else if #[cfg(all(unix, feature = "integrated-auth-gssapi"))] {
+                    return Ok(AuthMethod::Integrated);
+                }
             }
-            _ => Ok(AuthMethod::sql_server(user.unwrap_or(""), pw.unwrap_or(""))),
         }
+
+        Ok(AuthMethod::sql_server(user.unwrap_or(""), pw.unwrap_or("")))
     }
 
     fn database(&self) -> Option<String> {
@@ -743,6 +767,76 @@ mod tests {
         )
         .unwrap();
         assert!(config.get_multi_subnet_failover());
+    }
+
+    // Regression tests for prisma/tiberius#408 (SSPI/NTLM on Unix without
+    // Kerberos): covers the connection-string dispatch for
+    // `IntegratedSecurity`, which previously had no test coverage at all
+    // regardless of backend, and which this fork's version of the feature
+    // deduplicates into a single guard-condition check (see `authentication`
+    // above) rather than repeating it per enabled backend.
+
+    #[cfg(all(unix, feature = "sspi-rs"))]
+    #[test]
+    fn integrated_security_with_credentials_uses_windows_auth_via_sspi_rs() {
+        let config = Config::from_ado_string(
+            "server=tcp:localhost,1433;IntegratedSecurity=true;uid=DOMAIN\\alice;password=secret",
+        )
+        .unwrap();
+
+        assert!(matches!(config.auth, AuthMethod::Windows(_)));
+    }
+
+    #[cfg(all(unix, feature = "sspi-rs", not(feature = "integrated-auth-gssapi")))]
+    #[test]
+    fn integrated_security_without_credentials_falls_back_to_sql_auth_when_only_sspi_rs() {
+        // No Kerberos ticket-cache backend is available in this combo, so
+        // without explicit credentials there's nothing sspi-rs (NTLM) can
+        // do - falling back to SQL auth (which will simply fail server-side
+        // for an empty user/password) is safer than attempting NTLM with
+        // blank credentials.
+        let config =
+            Config::from_ado_string("server=tcp:localhost,1433;IntegratedSecurity=true").unwrap();
+
+        assert!(matches!(config.auth, AuthMethod::SqlServer(_)));
+    }
+
+    #[cfg(all(unix, feature = "integrated-auth-gssapi", not(feature = "sspi-rs")))]
+    #[test]
+    fn integrated_security_uses_gssapi_regardless_of_credentials() {
+        // Preserves this crate's original behavior for gssapi-only builds:
+        // GSSAPI always uses the system's Kerberos ticket cache, ignoring
+        // any user/password given in the connection string.
+        let config = Config::from_ado_string(
+            "server=tcp:localhost,1433;IntegratedSecurity=true;uid=alice;password=secret",
+        )
+        .unwrap();
+
+        assert!(matches!(config.auth, AuthMethod::Integrated));
+    }
+
+    #[cfg(all(unix, feature = "sspi-rs", feature = "integrated-auth-gssapi"))]
+    #[test]
+    fn integrated_security_prefers_explicit_credentials_over_gssapi_when_both_enabled() {
+        let with_creds = Config::from_ado_string(
+            "server=tcp:localhost,1433;IntegratedSecurity=true;uid=alice;password=secret",
+        )
+        .unwrap();
+        assert!(matches!(with_creds.auth, AuthMethod::Windows(_)));
+
+        let without_creds =
+            Config::from_ado_string("server=tcp:localhost,1433;IntegratedSecurity=true").unwrap();
+        assert!(matches!(without_creds.auth, AuthMethod::Integrated));
+    }
+
+    #[test]
+    fn integrated_security_false_uses_sql_auth() {
+        let config = Config::from_ado_string(
+            "server=tcp:localhost,1433;IntegratedSecurity=false;uid=alice;password=secret",
+        )
+        .unwrap();
+
+        assert!(matches!(config.auth, AuthMethod::SqlServer(_)));
     }
 
     #[test]

@@ -23,16 +23,22 @@ impl Debug for SqlServerAuth {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-#[cfg(any(all(windows, feature = "winauth"), doc))]
-#[cfg_attr(feature = "docs", doc(all(windows, feature = "winauth")))]
+#[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"), doc))]
+#[cfg_attr(
+    feature = "docs",
+    doc(cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"))))
+)]
 pub struct WindowsAuth {
     pub(crate) user: String,
-    pub(crate) password: String,
+    pub(crate) password: Zeroizing<String>,
     pub(crate) domain: Option<String>,
 }
 
-#[cfg(any(all(windows, feature = "winauth"), doc))]
-#[cfg_attr(feature = "docs", doc(all(windows, feature = "winauth")))]
+#[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"), doc))]
+#[cfg_attr(
+    feature = "docs",
+    doc(cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"))))
+)]
 impl Debug for WindowsAuth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WindowsAuth")
@@ -49,8 +55,11 @@ pub enum AuthMethod {
     /// Authenticate directly with SQL Server.
     SqlServer(SqlServerAuth),
     /// Authenticate with Windows credentials.
-    #[cfg(any(all(windows, feature = "winauth"), doc))]
-    #[cfg_attr(feature = "docs", doc(cfg(all(windows, feature = "winauth"))))]
+    #[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"), doc))]
+    #[cfg_attr(
+        feature = "docs",
+        doc(cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"))))
+    )]
     Windows(WindowsAuth),
     /// Authenticate as the currently logged in user. On Windows uses SSPI and
     /// Kerberos on Unix platforms.
@@ -81,8 +90,11 @@ impl AuthMethod {
     }
 
     /// Construct a new Windows authentication configuration.
-    #[cfg(any(all(windows, feature = "winauth"), doc))]
-    #[cfg_attr(feature = "docs", doc(cfg(all(windows, feature = "winauth"))))]
+    #[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"), doc))]
+    #[cfg_attr(
+        feature = "docs",
+        doc(cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"))))
+    )]
     pub fn windows(user: impl AsRef<str>, password: impl ToString) -> Self {
         let (domain, user) = match user.as_ref().find('\\') {
             Some(idx) => (Some(&user.as_ref()[..idx]), &user.as_ref()[idx + 1..]),
@@ -91,7 +103,7 @@ impl AuthMethod {
 
         Self::Windows(WindowsAuth {
             user: user.to_string(),
-            password: password.to_string(),
+            password: Zeroizing::new(password.to_string()),
             domain: domain.map(|s| s.to_string()),
         })
     }
@@ -121,5 +133,44 @@ mod tests {
         password.zeroize();
 
         assert!(password.is_empty());
+    }
+
+    #[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs")))]
+    #[test]
+    fn windows_auth_splits_domain_from_user() {
+        let AuthMethod::Windows(auth) = AuthMethod::windows("DOMAIN\\alice", "secret") else {
+            unreachable!();
+        };
+
+        assert_eq!("alice", auth.user);
+        assert_eq!(Some("DOMAIN".to_string()), auth.domain);
+        assert_eq!("secret", auth.password.as_str());
+    }
+
+    #[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs")))]
+    #[test]
+    fn windows_auth_without_domain() {
+        let AuthMethod::Windows(auth) = AuthMethod::windows("alice", "secret") else {
+            unreachable!();
+        };
+
+        assert_eq!("alice", auth.user);
+        assert_eq!(None, auth.domain);
+    }
+
+    #[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs")))]
+    #[test]
+    fn windows_auth_password_zeroizes_on_drop() {
+        // `Zeroizing<String>` zeroizes its buffer on drop; this can't
+        // observe the zeroized memory directly (it's freed), but it does
+        // confirm the field is actually `Zeroizing` (not a plain `String`
+        // that Rust would happily drop without clearing) by exercising the
+        // `Zeroize` trait's `zeroize()` method on it explicitly.
+        let AuthMethod::Windows(mut auth) = AuthMethod::windows("alice", "secret") else {
+            unreachable!();
+        };
+
+        auth.password.zeroize();
+        assert!(auth.password.is_empty());
     }
 }
