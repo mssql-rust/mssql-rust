@@ -86,11 +86,14 @@ original would have broken the default build), plus direct fixes for issues
   against this fork's current `tls_stream.rs`. Reapplied just the
   `tls_stream.rs`/`Cargo.toml` hunks (its chrono hunks were already applied
   here). Verified live (292 tests over rustls). Done: `64845fd`.
-- [ ] **#398** — `column_metadata()` + `bulk_insert_columns`. Useful, tested
-  API, but its `ColumnFlag` bitflag renumbering is only partially correct
-  against the MS-TDS spec (`Updateable=0x04, Unknown=0x08, Identity=0x10,
-  Computed=0x20`) — redo those bit values properly before making the type
-  public.
+- [x] **#398** — `column_metadata()` + `bulk_insert_columns`. Fixed all
+  7 wrong `ColumnFlag` bit positions per MS-TDS 2.2.7.4 (not just the 4
+  originally flagged), fixed `bulk_insert_columns`'s filter accordingly
+  (`usUpdateable` is a 2-bit value, not two flags), and added the public
+  `column_metadata()` method. 12 new unit tests (verified 7 fail against
+  the pre-fix bit numbering) + a live regression test for identity/computed
+  column exclusion. Verified live (294 tests over rustls). Done: `e7eb6e4`,
+  `7e7c40e`.
 - [ ] **#378** — MultiSubnetFailover. Complete, dependency-clean (supersedes
   draft #357). Needs basic tests on the default (non-failover) path before
   merging, since it refactors the common connect path too.
