@@ -27,7 +27,7 @@ use super::{Encode, FixedLenType, TypeInfo, VarLenType};
 use crate::tds::time::{Date, DateTime2, DateTimeOffset, Time};
 use crate::{
     tds::{time::DateTime, time::SmallDateTime, xml::XmlData, Numeric},
-    SqlReadBytes,
+    FromSql, FromSqlOwned, IntoSql, SqlReadBytes, ToSql,
 };
 use bytes::BufMut;
 pub(crate) use bytes_mut_with_type_info::BytesMutWithTypeInfo;
@@ -780,6 +780,33 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
         }
 
         Ok(())
+    }
+}
+
+/// Lets a `ColumnData` already read from one row be bound straight back into
+/// a query parameter (e.g. to copy a value between statements) without
+/// round-tripping through a concrete Rust type.
+impl<'a> FromSql<'a> for ColumnData<'a> {
+    fn from_sql(value: &'a ColumnData<'a>) -> crate::Result<Option<Self>> {
+        Ok(Some(value.clone()))
+    }
+}
+
+impl<'a> FromSqlOwned for ColumnData<'a> {
+    fn from_sql_owned(value: ColumnData<'a>) -> crate::Result<Option<Self>> {
+        Ok(Some(value))
+    }
+}
+
+impl<'a> ToSql for ColumnData<'a> {
+    fn to_sql(&self) -> ColumnData<'a> {
+        self.clone()
+    }
+}
+
+impl<'a> IntoSql<'a> for ColumnData<'a> {
+    fn into_sql(self) -> ColumnData<'a> {
+        self
     }
 }
 
@@ -1781,5 +1808,23 @@ mod tests {
             Err(Error::Conversion(_)) => {}
             other => panic!("Expected Error::Conversion, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn column_data_round_trips_through_its_own_sql_traits() {
+        let original = ColumnData::I32(Some(42));
+
+        assert_eq!(original, original.to_sql());
+        assert_eq!(original.clone(), original.clone().into_sql());
+
+        let from_ref = <ColumnData<'_> as FromSql>::from_sql(&original)
+            .expect("from_sql must succeed")
+            .expect("value must be Some");
+        assert_eq!(original, from_ref);
+
+        let from_owned = ColumnData::from_sql_owned(original.clone())
+            .expect("from_sql_owned must succeed")
+            .expect("value must be Some");
+        assert_eq!(original, from_owned);
     }
 }
