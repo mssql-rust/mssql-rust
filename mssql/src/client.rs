@@ -22,7 +22,8 @@ use crate::{
         stream::{QueryStream, TokenStream},
         Collation,
     },
-    BulkLoadRequest, ColumnFlag, MetaDataColumn, SqlReadBytes, ToSql,
+    BulkLoadRequest, ColumnFlag, ColumnOrderHint, MetaDataColumn, SortOrder, SqlBulkCopyOption,
+    SqlBulkCopyOptions, SqlReadBytes, ToSql,
 };
 use codec::{
     BatchRequest, ColumnData, PacketHeader, RpcParam, RpcProcId, TokenRpcRequest, TypeInfo,
@@ -315,7 +316,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         &'a mut self,
         table: &'a str,
     ) -> crate::Result<BulkLoadRequest<'a, S>> {
-        self.bulk_insert_columns(table, &["*"]).await
+        self.bulk_insert_with_options(table, &["*"], SqlBulkCopyOptions::empty(), &[])
+            .await
     }
 
     /// Retrieve the column metadata for a table (or a subset of its
@@ -428,6 +430,57 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         table: &'a str,
         columns: &'a [&'a str],
     ) -> crate::Result<BulkLoadRequest<'a, S>> {
+        self.bulk_insert_with_options(table, columns, SqlBulkCopyOptions::empty(), &[])
+            .await
+    }
+
+    /// Execute a `BULK INSERT` statement with fine-grained control over its
+    /// `INSERT BULK ... WITH (...)` options and `ORDER` hint, mirroring
+    /// .NET's [`SqlBulkCopy`](https://learn.microsoft.com/en-us/dotnet/api/system.data.sqlclient.sqlbulkcopy).
+    /// `bulk_insert` and `bulk_insert_columns` are convenience wrappers
+    /// around this method with no options and no order hints.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use mssql::{Config, IntoRow, SqlBulkCopyOption, SortOrder};
+    /// # use tokio_util::compat::TokioAsyncWriteCompatExt;
+    /// # use std::env;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let c_str = env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or(
+    /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
+    /// # );
+    /// # let config = Config::from_ado_string(&c_str)?;
+    /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
+    /// # tcp.set_nodelay(true)?;
+    /// # let mut client = mssql::Client::connect(config, tcp.compat_write()).await?;
+    /// client.simple_query("CREATE TABLE ##bulk_opts_test (val INT NOT NULL)").await?;
+    ///
+    /// let options = SqlBulkCopyOption::TableLock | SqlBulkCopyOption::FireTriggers;
+    /// let order_hints = [("val", SortOrder::Ascending)];
+    /// let mut req = client
+    ///     .bulk_insert_with_options("##bulk_opts_test", &["*"], options, &order_hints)
+    ///     .await?;
+    ///
+    /// for i in [0i32, 1i32, 2i32] {
+    ///     req.send(i.into_row()).await?;
+    /// }
+    ///
+    /// let res = req.finalize().await?;
+    /// assert_eq!(3, res.total());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn bulk_insert_with_options<'a>(
+        &'a mut self,
+        table: &'a str,
+        columns: &'a [&'a str],
+        options: SqlBulkCopyOptions,
+        order_hints: &'a [ColumnOrderHint<'a>],
+    ) -> crate::Result<BulkLoadRequest<'a, S>> {
+        let keep_identity = options.contains(SqlBulkCopyOption::KeepIdentity);
+
         let columns: Vec<_> = self
             .column_metadata(table, columns)
             .await?
@@ -438,19 +491,65 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
             // identity/computed columns). Checking `Updateable` alone would
             // wrongly exclude ordinary columns, since servers commonly
             // report plain `SELECT` columns as updateable-unknown rather
-            // than definitively read/write.
+            // than definitively read/write. `KeepIdentity` overrides this
+            // for identity columns specifically, mirroring how BULK
+            // INSERT/SqlBulkCopy's own KeepIdentity works: by including the
+            // identity column in the column list instead of relying on a
+            // WITH-clause keyword (the TDS bulk-load protocol has none).
             .filter(|column| {
-                column
-                    .base
-                    .flags
-                    .intersects(ColumnFlag::Updateable | ColumnFlag::UpdateableUnknown)
+                let flags = column.base.flags;
+
+                flags.intersects(ColumnFlag::Updateable | ColumnFlag::UpdateableUnknown)
+                    || (keep_identity && flags.contains(ColumnFlag::Identity))
             })
             .collect();
 
         // now start bulk upload
         self.connection.flush_stream().await?;
         let col_data = columns.iter().map(|c| format!("{}", c)).join(", ");
-        let query = format!("INSERT BULK {} ({})", table, col_data);
+        let mut query = format!("INSERT BULK {} ({})", table, col_data);
+
+        // Note: `KeepIdentity` never contributes a hint here - it's handled
+        // entirely by the column filter above, since the TDS bulk-load
+        // protocol has no WITH-clause keyword for it. So `hints` can end up
+        // empty even when `options` isn't, and the WITH(...) clause must
+        // only be emitted when there's actually something to put in it -
+        // `WITH ()` is invalid syntax.
+        let mut hints = Vec::with_capacity(4);
+
+        if options.contains(SqlBulkCopyOption::CheckConstraints) {
+            hints.push("CHECK_CONSTRAINTS".to_owned());
+        }
+        if options.contains(SqlBulkCopyOption::FireTriggers) {
+            hints.push("FIRE_TRIGGERS".to_owned());
+        }
+        if options.contains(SqlBulkCopyOption::KeepNulls) {
+            hints.push("KEEP_NULLS".to_owned());
+        }
+        if options.contains(SqlBulkCopyOption::TableLock) {
+            hints.push("TABLOCK".to_owned());
+        }
+        if !order_hints.is_empty() {
+            let order = order_hints
+                .iter()
+                .map(|(col, order)| {
+                    let dir = match order {
+                        SortOrder::Ascending => "ASC",
+                        SortOrder::Descending => "DESC",
+                    };
+
+                    format!("[{col}] {dir}")
+                })
+                .join(", ");
+
+            hints.push(format!("ORDER ({order})"));
+        }
+
+        if !hints.is_empty() {
+            query.push_str(" WITH (");
+            query.push_str(&hints.join(", "));
+            query.push(')');
+        }
 
         let req = BatchRequest::new(query, self.connection.context().transaction_descriptor());
         let id = self.connection.context_mut().next_packet_id();
