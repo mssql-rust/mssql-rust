@@ -3099,3 +3099,32 @@ where
 
     Ok(())
 }
+
+// Regression test for prisma/tiberius#400: a requested TDS packet size
+// should still yield a working connection. Built manually (rather than via
+// `#[test_on_runtimes]`'s connection-string-only setup) since
+// `Config::packet_size` currently has no connection-string equivalent.
+#[tokio::test]
+async fn connect_with_custom_packet_size() -> Result<()> {
+    use mssql::Config;
+    use tokio_util::compat::TokioAsyncWriteCompatExt;
+
+    let mut config = Config::from_ado_string(&CONN_STR)?;
+    config.packet_size(8192).unwrap();
+
+    let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
+    tcp.set_nodelay(true)?;
+
+    let mut conn = mssql::Client::connect(config, tcp.compat_write()).await?;
+
+    let row = conn
+        .query("SELECT @P1", &[&-4i32])
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+
+    assert_eq!(Some(-4i32), row.get(0));
+
+    Ok(())
+}
