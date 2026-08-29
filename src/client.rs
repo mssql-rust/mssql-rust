@@ -72,7 +72,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     /// options required to connect to the database using an established
     /// tcp connection
     ///
+    /// Note: `tcp_stream` is already a connected stream, so options that
+    /// only affect how the connection is established - such as
+    /// [`Config::multi_subnet_failover`], which only applies to the
+    /// [`SqlBrowser::connect_named`] named-instance connect path - have no
+    /// effect here and must be handled by the caller before constructing
+    /// `tcp_stream`.
+    ///
     /// [`Config`]: struct.Config.html
+    /// [`SqlBrowser::connect_named`]: crate::SqlBrowser::connect_named
     pub async fn connect(config: Config, tcp_stream: S) -> crate::Result<Client<S>> {
         Ok(Client {
             connection: Connection::connect(config, tcp_stream).await?,
