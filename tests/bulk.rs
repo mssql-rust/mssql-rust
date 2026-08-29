@@ -28,7 +28,7 @@ async fn random_table() -> String {
 
 macro_rules! test_bulk_type {
     ($name:ident($sql_type:literal, $total_generated:expr, $generator:expr)) => {
-        paste::item! {
+        pastey::item! {
             #[test_on_runtimes]
             async fn [< bulk_load_optional_ $name >]<S>(mut conn: mssql::Client<S>) -> Result<()>
             where
