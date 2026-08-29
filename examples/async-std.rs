@@ -1,10 +1,10 @@
 use async_std::net::TcpStream;
+use mssql::{Client, Config};
 use once_cell::sync::Lazy;
 use std::env;
-use tiberius::{Client, Config};
 
 static CONN_STR: Lazy<String> = Lazy::new(|| {
-    env::var("TIBERIUS_TEST_CONNECTION_STRING").unwrap_or_else(|_| {
+    env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or_else(|_| {
         "server=tcp:localhost,1433;IntegratedSecurity=true;TrustServerCertificate=true".to_owned()
     })
 });
@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(all(windows, feature = "sql-browser-async-std"))]
 #[async_std::main]
 async fn main() -> anyhow::Result<()> {
-    use tiberius::SqlBrowser;
+    use mssql::SqlBrowser;
 
     let config = Config::from_ado_string(&CONN_STR)?;
 

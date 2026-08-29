@@ -9,9 +9,9 @@
 //!   - TENANT_ID: tenant id of service principal and sql instance;
 //!   - SERVER: SQL server URI
 use azure_identity::client_credentials_flow;
+use mssql::{AuthMethod, Client, Config, Query};
 use oauth2::{ClientId, ClientSecret};
 use std::{env, sync::Arc};
-use tiberius::{AuthMethod, Client, Config, Query};
 use tokio::net::TcpStream;
 use tokio_util::compat::TokioAsyncWriteCompatExt;
 
