@@ -163,6 +163,31 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
                     });
                 }
             }
+            TrustConfig::CaCertificateBundle(bundle) => {
+                let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(bundle)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| crate::Error::Io {
+                        kind: IoErrorKind::InvalidData,
+                        message: format!("Failed to parse PEM certificate bundle: {e}"),
+                    })?;
+
+                if certs.is_empty() {
+                    return Err(crate::Error::Io {
+                        kind: IoErrorKind::InvalidInput,
+                        message: "Provided CA certificate bundle contains no certificates"
+                            .to_string(),
+                    });
+                }
+
+                let mut cert_store = RootCertStore::empty();
+                for cert in certs {
+                    cert_store.add(cert)?;
+                }
+
+                builder
+                    .with_root_certificates(cert_store)
+                    .with_no_client_auth()
+            }
             TrustConfig::TrustAll => {
                 event!(
                     Level::WARN,

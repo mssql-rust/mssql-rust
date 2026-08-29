@@ -47,6 +47,8 @@ const PACKET_SIZE_RANGE: std::ops::RangeInclusive<u32> = 512..=32767;
 pub(crate) enum TrustConfig {
     #[allow(dead_code)]
     CaCertificateLocation(PathBuf),
+    #[allow(dead_code)]
+    CaCertificateBundle(Vec<u8>),
     TrustAll,
     Default,
 }
@@ -163,33 +165,59 @@ impl Config {
     /// as-is.
     ///
     /// On production setting, the certificate should be added to the local key
-    /// storage (or use `trust_cert_ca` instead), using this setting is potentially dangerous.
+    /// storage (or use `trust_cert_ca`/`trust_cert_ca_bundle` instead), using this setting is potentially dangerous.
     ///
     /// # Panics
-    /// Will panic in case `trust_cert_ca` was called before.
+    /// Will panic in case `trust_cert_ca` or `trust_cert_ca_bundle` was called before.
     ///
     /// - Defaults to `default`, meaning server certificate is validated against system-truststore.
     pub fn trust_cert(&mut self) {
-        if let TrustConfig::CaCertificateLocation(_) = &self.trust {
-            panic!("'trust_cert' and 'trust_cert_ca' are mutual exclusive! Only use one.")
+        if !matches!(&self.trust, TrustConfig::Default) {
+            panic!(
+                "'trust_cert', 'trust_cert_ca' and 'trust_cert_ca_bundle' are mutually exclusive! Only use one."
+            )
         }
         self.trust = TrustConfig::TrustAll;
     }
 
-    /// If set, the server certificate will be validated against the given CA certificate in
-    /// in addition to the system-truststore.
+    /// If set, the server certificate will be validated against the given CA certificate file, in
+    /// addition to the system-truststore.
     /// Useful when using self-signed certificates on the server without having to disable the
     /// trust-chain.
     ///
     /// # Panics
-    /// Will panic in case `trust_cert` was called before.
+    /// Will panic in case `trust_cert` or `trust_cert_ca_bundle` was called before.
     ///
     /// - Defaults to validating the server certificate is validated against system's certificate storage.
     pub fn trust_cert_ca(&mut self, path: impl ToString) {
-        if let TrustConfig::TrustAll = &self.trust {
-            panic!("'trust_cert' and 'trust_cert_ca' are mutual exclusive! Only use one.")
+        if !matches!(&self.trust, TrustConfig::Default) {
+            panic!(
+                "'trust_cert', 'trust_cert_ca' and 'trust_cert_ca_bundle' are mutually exclusive! Only use one."
+            )
         } else {
             self.trust = TrustConfig::CaCertificateLocation(PathBuf::from(path.to_string()))
+        }
+    }
+
+    /// Like [`trust_cert_ca`](Config::trust_cert_ca), but takes the CA
+    /// certificate bundle's PEM-encoded bytes directly instead of a
+    /// filesystem path - useful when the certificate data comes from
+    /// somewhere other than a local file (a secret manager, an embedded
+    /// asset, a value already held in memory). The bundle may contain more
+    /// than one PEM-encoded certificate concatenated together (e.g. a
+    /// standard `ca-bundle.crt`-style file).
+    ///
+    /// # Panics
+    /// Will panic in case `trust_cert` or `trust_cert_ca` was called before.
+    ///
+    /// - Defaults to validating the server certificate is validated against system's certificate storage.
+    pub fn trust_cert_ca_bundle(&mut self, bundle: impl Into<Vec<u8>>) {
+        if !matches!(&self.trust, TrustConfig::Default) {
+            panic!(
+                "'trust_cert', 'trust_cert_ca' and 'trust_cert_ca_bundle' are mutually exclusive! Only use one."
+            )
+        } else {
+            self.trust = TrustConfig::CaCertificateBundle(bundle.into())
         }
     }
 
@@ -459,7 +487,7 @@ impl ConfigBuilder {
     /// See [`Config::trust_cert`].
     ///
     /// # Panics
-    /// Will panic in case `trust_cert_ca` was called before.
+    /// Will panic in case `trust_cert_ca` or `trust_cert_ca_bundle` was called before.
     pub fn trust_cert(&mut self) -> &mut Self {
         self.inner.trust_cert();
         self
@@ -468,9 +496,18 @@ impl ConfigBuilder {
     /// See [`Config::trust_cert_ca`].
     ///
     /// # Panics
-    /// Will panic in case `trust_cert` was called before.
+    /// Will panic in case `trust_cert` or `trust_cert_ca_bundle` was called before.
     pub fn trust_cert_ca(&mut self, path: impl ToString) -> &mut Self {
         self.inner.trust_cert_ca(path);
+        self
+    }
+
+    /// See [`Config::trust_cert_ca_bundle`].
+    ///
+    /// # Panics
+    /// Will panic in case `trust_cert` or `trust_cert_ca` was called before.
+    pub fn trust_cert_ca_bundle(&mut self, bundle: impl Into<Vec<u8>>) -> &mut Self {
+        self.inner.trust_cert_ca_bundle(bundle);
         self
     }
 

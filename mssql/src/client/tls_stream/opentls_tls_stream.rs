@@ -1,3 +1,4 @@
+use super::split_pem_certs;
 use crate::{
     client::{config::Config, TrustConfig},
     error::{Error, IoErrorKind},
@@ -39,6 +40,11 @@ pub(crate) async fn create_tls_stream<S: AsyncRead + AsyncWrite + Unpin + Send>(
                     kind: IoErrorKind::InvalidData,
                     message: "Could not read provided CA certificate!".to_string(),
                 });
+            }
+        }
+        TrustConfig::CaCertificateBundle(bundle) => {
+            for cert in split_pem_certs(bundle) {
+                builder = builder.add_root_certificate(Certificate::from_pem(cert)?);
             }
         }
         TrustConfig::TrustAll => {
