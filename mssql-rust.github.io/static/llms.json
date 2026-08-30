@@ -4,6 +4,7 @@
   "description": "An asynchronous, runtime-independent, pure-Rust Tabular Data Stream (TDS) client for Microsoft SQL Server. A fork of Tiberius, focused on ongoing maintenance and security updates via small, targeted changes.",
   "fork_of": "Tiberius (https://github.com/prisma/tiberius)",
   "license": "MIT/Apache-2.0",
+  "website": "https://mssql-rust.github.io/",
   "repository": "https://github.com/mssql-rust/mssql-rust",
   "documentation": "https://docs.rs/mssql/",
   "import_as": "mssql",

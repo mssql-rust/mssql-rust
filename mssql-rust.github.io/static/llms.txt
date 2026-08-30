@@ -11,9 +11,11 @@ license as Tiberius.
 
 ## Docs
 
-- [README](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/README.md): quickstart, configuration, encryption, authentication, bulk insert, redirects, security.
+- [mssql-rust.github.io](https://mssql-rust.github.io/): this site — an overview of the crate's features, install command, and links out to everything below.
 - [API reference](https://docs.rs/mssql/): full rustdoc, generated from source.
-- [llms.json](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/llms.json): machine-readable map of the crate's public exports and feature flags.
+- [crates.io](https://crates.io/crates/mssql): published releases.
+- [llms.json](https://mssql-rust.github.io/llms.json): machine-readable map of the crate's public exports and feature flags.
+- [README](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/README.md): quickstart, configuration, encryption, authentication, bulk insert, redirects, security.
 - [CHANGELOG](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/CHANGELOG.md): release history.
 - [CONTRIBUTING](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/CONTRIBUTING.md): how to contribute, MSRV policy, local test setup.
 
@@ -31,5 +33,5 @@ license as Tiberius.
 
 ## Optional
 
-- [LICENSE-MIT](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/LICENSE-MIT.txt) and [LICENSE-APACHE](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/LICENSE-APACHE.txt): dual license terms.
+- [Source repository](https://github.com/mssql-rust/mssql-rust): the mssql crate and this site's source, including LICENSE-MIT.txt and LICENSE-APACHE.txt (dual license terms).
 - [Tiberius](https://github.com/prisma/tiberius): the upstream project this crate forks.
