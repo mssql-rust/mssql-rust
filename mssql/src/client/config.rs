@@ -188,13 +188,13 @@ impl Config {
     /// Will panic in case `trust_cert` or `trust_cert_ca_bundle` was called before.
     ///
     /// - Defaults to validating the server certificate is validated against system's certificate storage.
-    pub fn trust_cert_ca(&mut self, path: impl ToString) {
+    pub fn trust_cert_ca(&mut self, path: impl Into<PathBuf>) {
         if !matches!(&self.trust, TrustConfig::Default) {
             panic!(
                 "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle' and 'trust_webpki_roots' are mutually exclusive! Only use one."
             )
         } else {
-            self.trust = TrustConfig::CaCertificateLocation(PathBuf::from(path.to_string()))
+            self.trust = TrustConfig::CaCertificateLocation(path.into())
         }
     }
 
@@ -530,7 +530,7 @@ impl ConfigBuilder {
     /// # Panics
     /// Will panic in case `trust_cert`, `trust_cert_ca_bundle` or
     /// `trust_webpki_roots` was called before.
-    pub fn trust_cert_ca(&mut self, path: impl ToString) -> &mut Self {
+    pub fn trust_cert_ca(&mut self, path: impl Into<PathBuf>) -> &mut Self {
         self.inner.trust_cert_ca(path);
         self
     }
@@ -781,6 +781,25 @@ mod tests {
         let mut config = Config::new();
         config.client_name("app-host-01");
         assert_eq!(Some("app-host-01".to_string()), config.client_name);
+    }
+
+    // Regression test for #336: trust_cert_ca used to take `impl ToString`,
+    // which can't represent a non-UTF8 path. `Into<PathBuf>` (implemented
+    // for `&str`/`String`/`PathBuf`, among others) covers every caller the
+    // old bound did, plus a `PathBuf` built from non-UTF8 bytes directly.
+    #[test]
+    fn trust_cert_ca_accepts_a_pathbuf_directly() {
+        use std::path::{Path, PathBuf};
+
+        let mut config = Config::new();
+        config.trust_cert_ca(PathBuf::from("some/path.crt"));
+
+        match &config.trust {
+            TrustConfig::CaCertificateLocation(path) => {
+                assert_eq!(Path::new("some/path.crt"), path)
+            }
+            other => panic!("expected CaCertificateLocation, got {:?}", other),
+        }
     }
 
     #[test]
