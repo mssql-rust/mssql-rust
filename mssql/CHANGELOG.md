@@ -61,6 +61,17 @@ forward.
   LOGIN7 packet buffer after it's sent on the wire.
 - `docker/test-server.sh`, a podman/docker helper for running the
   integration test suite against a local SQL Server container.
+- `QueryIdx`, `TypeInfo`, and `BaseMetaDataColumn` exported from the crate
+  root — all three were already `pub` internally but unreachable from
+  outside the crate, blocking generic wrappers over `Row::try_get` and
+  full use of `Client::column_metadata`'s return type.
+- `Row::new` — a public constructor, for building `Row` fixtures in tests
+  without a live connection.
+- `PartialEq` for `Column`, `TokenRow`, and `Row`, for `assert_eq!`-style
+  test comparisons (deliberately not `Eq`: `ColumnData` can hold `f32`/
+  `f64`, and NaN breaks `Eq`'s reflexivity contract).
+- `impl Debug for dyn ToSql`, so a struct holding a `&dyn ToSql`/
+  `Box<dyn ToSql>` field (e.g. a query builder) can derive `Debug`.
 
 ### Changed
 
@@ -82,6 +93,21 @@ forward.
   own escaping rule).
 - Minimum Supported Rust Version policy: current stable minus two minor
   releases, checked in CI against the pinned version in `rust-version`.
+- `Config::trust_cert_ca`/`ConfigBuilder::trust_cert_ca` now take
+  `impl Into<PathBuf>` instead of `impl ToString`, so a path built from
+  non-UTF8 bytes can be passed directly; every existing `&str`/`String`
+  caller keeps compiling unchanged.
+- Column-name lookup (`row.get("name")`/`try_get`) now strips a leading
+  `r#` raw-identifier prefix before matching, so a column literally named
+  `type` can be found via the `r#type` identifier a `FromRow`-style derive
+  macro generates for a Rust keyword.
+- Routine connection-lifecycle logs (TLS handshake, database/collation/
+  packet-size change, login-ack version, feature-ack, server info
+  messages) moved from `INFO` to `DEBUG`, so they no longer flood logs for
+  short-lived pooled connections.
+- PLP-encoded values (`VARCHAR(MAX)`/`NVARCHAR(MAX)`/`VARBINARY(MAX)` and
+  similar) are now bulk-read instead of one byte at a time, for a
+  measurable throughput improvement on large text/blob columns.
 
 ### Fixed
 
@@ -99,6 +125,27 @@ forward.
 - Malformed UTF-16 in a row value is now replaced rather than causing a
   decode error.
 - `DateTime2` can now be converted to `Datetimen` for `bulk_insert`.
+- `Row::try_get`/`get` no longer panic on an out-of-range `usize` index;
+  `try_get` now returns the same `Error::Conversion` a missing column name
+  already did, and `get` (which unwraps `try_get`) documents that as its
+  panic condition rather than an out-of-bounds slice access.
+- A `DATE` column's `TYPE_INFO` no longer has a spurious length/scale byte
+  written for it, which used to shift every subsequent column's
+  `TYPE_INFO` in the same `COLMETADATA` token by one byte and corrupt
+  `bulk_insert` whenever a `DATE` column wasn't last.
+- `FromSql` null-widening is now symmetric across all six numeric widths
+  (`u8`/`i16`/`i32`/`i64`/`f32`/`f64`): reading a NULL column as a
+  different-width Rust type (e.g. a NULL `smallint` as `i32`) no longer
+  fails with "cannot interpret ... as an ... value" unless a previous fix
+  happened to add that specific pair.
+- Bulk-inserting a value whose encoded length exceeds 65535 bytes into a
+  `VARCHAR(MAX)`/`NVARCHAR(MAX)`/`VARBINARY(MAX)` column no longer fails
+  with a nonsensical "exceed column limit 65535" — that check was
+  comparing against the wire's MAX-column sentinel as if it were a real
+  limit.
+- Binding a non-finite (`NAN`/`INFINITY`) `f32`/`f64` query parameter is
+  now rejected client-side with a clear error, instead of round-tripping
+  to the server for a cryptic error 8023.
 
 ### Security
 
@@ -114,6 +161,23 @@ against upstream Tiberius, both cherry-picked here:
   an error, when the client requested `EncryptionLevel::On` and the server
   refused with `Off`/`NotSupported` during PRELOGIN, before authentication
   and before TLS is established (prisma/tiberius#425).
+
+Two more, found in this fork's own issue triage rather than reported
+upstream:
+
+- With no TLS feature (`rustls`/`native-tls`/`vendored-openssl`) compiled
+  in, requesting `EncryptionLevel::On`/`Required` used to silently connect
+  in cleartext instead of erroring — leaking the login credentials and all
+  query traffic on the wire while the caller believed `encrypt=true` was
+  in effect. Only `Strict` had a hard-error guard for this case; `On`/
+  `Required` now get the same treatment (`Off`/`NotSupported` still
+  proceed, since cleartext is what was actually requested/negotiated
+  there).
+- Decoding a legacy `datetime` value before 1900 (a negative day offset
+  from 1900-01-01, valid back to SQL Server's minimum of 1753-01-01) used
+  to panic with an integer overflow — ordinary, in-range data (a
+  birthdate, a founding date) could crash the client, the same DoS class
+  as the two decoder panics above.
 
 Dependency updates and `cargo audit` findings are tracked in
 `.cargo/audit.toml`; GitHub Dependabot is enabled for both scheduled
