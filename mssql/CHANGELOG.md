@@ -12,6 +12,113 @@ Changes below this point are entries from Tiberius's own changelog, kept for
 history. New entries for `mssql` will be added above this section going
 forward.
 
+## Unreleased
+
+### Added
+
+- `Config::builder()` / `ConfigBuilder`, a chainable alternative to
+  `Config::new()` plus setters — purely additive, every existing setter is
+  unchanged.
+- `Config::packet_size` — request a non-default TDS packet size
+  (512–32767), with client-side range validation.
+- `Config::multi_subnet_failover` — race a connection attempt against every
+  address a SQL Server Always On availability group listener resolves to,
+  concurrently, instead of trying them one at a time.
+- `Config::client_name`, `Config::host_name_in_certificate`,
+  `Config::send_string_parameters_as_unicode` — LOGIN7 workstation name,
+  certificate hostname override for proxies/load balancers, and an escape
+  hatch to send `&str`/`String` parameters as `VARCHAR` instead of always
+  `NVARCHAR`.
+- `Config::trust_cert_ca_bundle` — trust a CA certificate from bytes
+  already in memory (a secret manager, an embedded asset), not just a file
+  path.
+- `rustls-webpki-roots` feature and `Config::trust_webpki_roots` — validate
+  against Mozilla's bundled root CA list instead of the OS trust store,
+  for containers that don't ship one.
+- `EncryptionLevel::Strict` — TDS 8.0 "Strict" encryption, moving the TLS
+  handshake before PRELOGIN (SQL Server 2022+ or Azure SQL).
+- `sspi-rs` feature — a pure-Rust NTLM backend for `AuthMethod::Windows` on
+  Unix, without needing a real Kerberos ticket cache (unlike
+  `integrated-auth-gssapi`).
+- `Client::bulk_insert_columns` and `Client::bulk_insert_with_options` —
+  bulk-insert into a specific column list (in any order), with
+  `SqlBulkCopyOptions` (`TABLOCK`, `KEEP_NULLS`, `CHECK_CONSTRAINTS`,
+  `FIRE_TRIGGERS`, preserving identity values) and an `ORDER` hint,
+  mirroring .NET's `SqlBulkCopy`. `bulk_insert` is now a thin wrapper
+  around `bulk_insert_with_options`.
+- `Client::column_metadata` — inspect a table's columns (name, type,
+  nullability, identity/computed) without touching row data.
+- `FromSql`/`FromSqlOwned`/`ToSql`/`IntoSql` implementations for
+  `ColumnData` itself, and `IntoSql` for `rust_decimal`'s `Decimal`
+  (`ToSql` already existed).
+- `From<Row> for TokenRow`, to re-insert a row read from one query as bulk
+  insert or statement parameters without copying each cell by hand.
+- `Query::placeholders`, `Query::bind_iter`, and `Query::MAX_PARAMETERS` —
+  build a SQL `IN (...)` placeholder list, bind an iterator of values in
+  order, and the server's 2100-parameter-per-statement limit.
+- Zeroizing of SQL Server and Windows/NTLM passwords in memory
+  (`SqlServerAuth`/`WindowsAuth` now hold `Zeroizing<String>`), and of the
+  LOGIN7 packet buffer after it's sent on the wire.
+- `docker/test-server.sh`, a podman/docker helper for running the
+  integration test suite against a local SQL Server container.
+
+### Changed
+
+- `bulk_insert`'s identity/computed-column exclusion now correctly checks
+  `usUpdateable` as the 2-bit value MS-TDS defines it as (0 = read-only,
+  1 = read/write, 2 = unknown), rather than checking one bit of it in
+  isolation — several `ColumnFlag` bit positions were also off by 1–2 bits
+  against the MS-TDS spec (`Identity`, `Computed`, `FixedLenClrType`,
+  `SparseColumnSet`, `Encrypted`, and the two `Updateable` bits).
+- Selecting a non-default TLS backend (`rustls` or `vendored-openssl`)
+  without `--no-default-features` no longer fails to compile with a
+  duplicate-symbol error; exactly one backend now compiles in, at priority
+  `rustls` > `vendored-openssl` > `native-tls`.
+- `QueryStream::into_results` no longer miscounts result sets when a
+  multi-statement batch includes an empty one.
+- Column names that are SQL Server reserved words or contain spaces no
+  longer break `bulk_insert`'s generated `INSERT BULK`/`SELECT TOP 0`
+  statement text (bracket-quoted now, with `]` doubled per SQL Server's
+  own escaping rule).
+- Minimum Supported Rust Version policy: current stable minus two minor
+  releases, checked in CI against the pinned version in `rust-version`.
+
+### Fixed
+
+- Two protocol-encoding bugs found via live-server testing rather than unit
+  tests alone: a panic when bulk-inserting into a `money`/`smallmoney`
+  column, and RPC parameters with an overridden type (e.g. sending a
+  `&str`/`String` as `VARCHAR` instead of `NVARCHAR`) corrupting the wire
+  stream by omitting the `TYPE_INFO` header.
+- The NTLM/GSSAPI continuation packet now uses the SSPI packet type (0x11)
+  instead of LOGIN7's (0x10), across all three call sites that send one
+  (`winauth` Integrated and Windows auth, and Unix GSSAPI Integrated auth).
+- `PacketSize` and `Database` `ENVCHANGE` `Display` output no longer swaps
+  the old and new values (MS-TDS 2.2.7.10 puts the new value first).
+- Sign and padding in `Numeric`'s string formatting for negative values.
+- Malformed UTF-16 in a row value is now replaced rather than causing a
+  decode error.
+- `DateTime2` can now be converted to `Datetimen` for `bulk_insert`.
+
+### Security
+
+Two denial-of-service fixes reported by North Echo Security Research
+against upstream Tiberius, both cherry-picked here:
+
+- Seven sites in the TDS decoder responded to unexpected but
+  server-controlled bytes with `panic!`, `unimplemented!`, or `.unwrap()`
+  instead of returning `Err` — a malicious, compromised, or
+  protocol-confused server could crash the client process
+  (prisma/tiberius#424).
+- `PreloginMessage::negotiated_encryption` panicked, rather than returning
+  an error, when the client requested `EncryptionLevel::On` and the server
+  refused with `Off`/`NotSupported` during PRELOGIN, before authentication
+  and before TLS is established (prisma/tiberius#425).
+
+Dependency updates and `cargo audit` findings are tracked in
+`.cargo/audit.toml`; GitHub Dependabot is enabled for both scheduled
+version updates and security updates.
+
 ## Version 0.12.3
 - feat: improve column type accuracy (#347)
 - fix: encoding of zero-length values for large varlen columns (#315)
