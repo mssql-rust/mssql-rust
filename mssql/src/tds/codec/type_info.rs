@@ -18,16 +18,28 @@ pub enum TypeLength {
 /// Describes a type of a column.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeInfo {
+    /// A type with a size fixed by its type alone (e.g. `INT`, `BIT`).
     FixedLen(FixedLenType),
+    /// A variable-length type whose size is carried alongside its type
+    /// (e.g. `VARCHAR(n)`, `NUMERIC`, `DATETIME2`).
     VarLenSized(VarLenContext),
+    /// A variable-length type that additionally carries a decimal precision
+    /// and scale (e.g. `DECIMAL(p, s)`).
     VarLenSizedPrecision {
+        /// The underlying wire type.
         ty: VarLenType,
+        /// The size, in bytes.
         size: usize,
+        /// The total number of digits.
         precision: u8,
+        /// The number of digits to the right of the decimal point.
         scale: u8,
     },
+    /// An `XML` column, optionally associated with a schema collection.
     Xml {
+        /// The schema associated with this column, if any.
         schema: Option<Arc<XmlSchema>>,
+        /// The size, in bytes.
         size: usize,
     },
 }

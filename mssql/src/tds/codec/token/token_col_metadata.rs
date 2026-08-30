@@ -129,9 +129,14 @@ impl<'a> Display for MetaDataColumn<'a> {
     }
 }
 
+/// The type and flags describing a column, shared between `COLMETADATA`
+/// columns and bulk-insert column declarations.
 #[derive(Debug, Clone)]
 pub struct BaseMetaDataColumn {
+    /// The column's attributes (nullability, identity, computed, etc.), as
+    /// reported by the server.
     pub flags: BitFlags<ColumnFlag>,
+    /// The column's wire type.
     pub ty: TypeInfo,
 }
 

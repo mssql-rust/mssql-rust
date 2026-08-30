@@ -349,7 +349,8 @@ pub use row::{Column, ColumnType, QueryIdx, Row};
 pub use sql_browser::SqlBrowser;
 pub use tds::{
     codec::{
-        BulkLoadRequest, ColumnData, ColumnFlag, IntoRow, MetaDataColumn, TokenRow, TypeLength,
+        BaseMetaDataColumn, BulkLoadRequest, ColumnData, ColumnFlag, IntoRow, MetaDataColumn,
+        TokenRow, TypeInfo, TypeLength,
     },
     numeric,
     stream::QueryStream,
