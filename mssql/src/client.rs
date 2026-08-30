@@ -61,8 +61,6 @@ use std::{borrow::Cow, fmt::Debug};
 /// # Ok(())
 /// # }
 /// ```
-///
-/// [`Config`]: struct.Config.html
 #[derive(Debug)]
 pub struct Client<S: AsyncRead + AsyncWrite + Unpin + Send> {
     pub(crate) connection: Connection<S>,
@@ -76,12 +74,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     /// Note: `tcp_stream` is already a connected stream, so options that
     /// only affect how the connection is established - such as
     /// [`Config::multi_subnet_failover`], which only applies to the
-    /// [`SqlBrowser::connect_named`] named-instance connect path - have no
+    /// [`SqlBrowser::connect_named`](crate::SqlBrowser::connect_named) named-instance connect path - have no
     /// effect here and must be handled by the caller before constructing
     /// `tcp_stream`.
-    ///
-    /// [`Config`]: struct.Config.html
-    /// [`SqlBrowser::connect_named`]: crate::SqlBrowser::connect_named
     pub async fn connect(config: Config, tcp_stream: S) -> crate::Result<Client<S>> {
         Ok(Client {
             connection: Connection::connect(config, tcp_stream).await?,
@@ -97,10 +92,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     ///
     /// For mapping of Rust types when writing, see the documentation for
     /// [`ToSql`]. For reading data from the database, see the documentation for
-    /// [`FromSql`].
+    /// [`FromSql`](crate::FromSql).
     ///
     /// This API is not quite suitable for dynamic query parameters. In these
-    /// cases using a [`Query`] object might be easier.
+    /// cases using a [`Query`](crate::Query) object might be easier.
     ///
     /// # Example
     ///
@@ -126,11 +121,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     /// # Ok(())
     /// # }
     /// ```
-    ///
-    /// [`ExecuteResult`]: struct.ExecuteResult.html
-    /// [`ToSql`]: trait.ToSql.html
-    /// [`FromSql`]: trait.FromSql.html
-    /// [`Query`]: struct.Query.html
     pub async fn execute<'a>(
         &mut self,
         query: impl Into<Cow<'a, str>>,
@@ -155,11 +145,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     ///
     /// For mapping of Rust types when writing, see the documentation for
     /// [`ToSql`]. For reading data from the database, see the documentation for
-    /// [`FromSql`].
+    /// [`FromSql`](crate::FromSql).
     ///
     /// This API can be cumbersome for dynamic query parameters. In these cases,
-    /// if fighting too much with the compiler, using a [`Query`] object might be
-    /// easier.
+    /// if fighting too much with the compiler, using a [`Query`](crate::Query)
+    /// object might be easier.
     ///
     /// # Example
     ///
@@ -185,11 +175,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     /// # Ok(())
     /// # }
     /// ```
-    ///
-    /// [`QueryStream`]: struct.QueryStream.html
-    /// [`Query`]: struct.Query.html
-    /// [`ToSql`]: trait.ToSql.html
-    /// [`FromSql`]: trait.FromSql.html
     pub async fn query<'a, 'b>(
         &'a mut self,
         query: impl Into<Cow<'b, str>>,
@@ -589,8 +574,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     /// column-specific collation is otherwise available. Corresponds to
     /// LCID `0x0409` (English - United States), matching SQL Server's most
     /// common installation default (`SQL_Latin1_General_CP1_CI_AS`).
-    ///
-    /// [`Config::send_string_parameters_as_unicode`]: struct.Config.html#method.send_string_parameters_as_unicode
     fn default_varchar_collation() -> Collation {
         Collation::new(0x0409, 0)
     }

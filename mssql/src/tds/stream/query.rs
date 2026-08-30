@@ -15,8 +15,8 @@ use std::{
 /// metadata or a row.
 ///
 /// The `QueryStream` needs to be polled empty before sending another query to
-/// the [`Client`], failing to do so causes a flush before the next query,
-/// slowing it down in an undeterministic way.
+/// the [`Client`](crate::Client), failing to do so causes a flush before the
+/// next query, slowing it down in an undeterministic way.
 ///
 /// Every stream starts with metadata, describing the structure of the incoming
 /// rows, e.g. the columns in the order they are presented in every row.
@@ -25,11 +25,14 @@ use std::{
 /// means the stream has multiple results from different queries. This new
 /// metadata item will describe the next rows from here forwards.
 ///
-/// If having one set of results in the response, using [`into_row_stream`]
-/// might be more convenient to use.
+/// If having one set of results in the response, using
+/// [`into_row_stream`](QueryStream::into_row_stream) might be more
+/// convenient to use.
 ///
-/// The struct provides non-streaming APIs with [`into_results`],
-/// [`into_first_result`] and [`into_row`].
+/// The struct provides non-streaming APIs with
+/// [`into_results`](QueryStream::into_results),
+/// [`into_first_result`](QueryStream::into_first_result) and
+/// [`into_row`](QueryStream::into_row).
 ///
 /// # Example
 ///
@@ -82,12 +85,6 @@ use std::{
 /// # Ok(())
 /// # }
 /// ```
-///
-/// [`Client`]: struct.Client.html
-/// [`into_row_stream`]: struct.QueryStream.html#method.into_row_stream
-/// [`into_results`]: struct.QueryStream.html#method.into_results
-/// [`into_first_result`]: struct.QueryStream.html#method.into_first_result
-/// [`into_row`]: struct.QueryStream.html#method.into_row
 pub struct QueryStream<'a> {
     token_stream: Peekable<BoxStream<'a, crate::Result<ReceivedToken>>>,
     columns: Option<Arc<Vec<Column>>>,

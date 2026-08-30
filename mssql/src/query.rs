@@ -130,8 +130,6 @@ impl<'a> Query<'a> {
     /// let ids: Vec<i32> = Vec::new();
     /// assert!(Query::placeholders(1, ids.len()).is_empty());
     /// ```
-    ///
-    /// [`Query::new`]: #method.new
     pub fn placeholders(first: usize, count: usize) -> String {
         use std::fmt::Write;
 
@@ -150,7 +148,7 @@ impl<'a> Query<'a> {
 
     /// Executes SQL statements in the SQL Server, returning the number rows
     /// affected. Useful for `INSERT`, `UPDATE` and `DELETE` statements. See
-    /// [`Client#execute`] for a simpler API if the parameters are statically
+    /// [`Client::execute`] for a simpler API if the parameters are statically
     /// known.
     ///
     /// # Example
@@ -178,10 +176,6 @@ impl<'a> Query<'a> {
     /// # Ok(())
     /// # }
     /// ```
-    ///
-    /// [`ToSql`]: trait.ToSql.html
-    /// [`FromSql`]: trait.FromSql.html
-    /// [`Client#execute`]: struct.Client.html#method.execute
     pub async fn execute<S>(self, client: &mut Client<S>) -> crate::Result<ExecuteResult>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send,
@@ -198,7 +192,7 @@ impl<'a> Query<'a> {
     }
 
     /// Executes SQL statements in the SQL Server, returning resulting rows.
-    /// Useful for `SELECT` statements. See [`Client#query`] for a simpler API
+    /// Useful for `SELECT` statements. See [`Client::query`] for a simpler API
     /// if the parameters are statically known.
     ///
     /// # Example
@@ -226,11 +220,6 @@ impl<'a> Query<'a> {
     /// # Ok(())
     /// # }
     /// ```
-    ///
-    /// [`QueryStream`]: struct.QueryStream.html
-    /// [`ToSql`]: trait.ToSql.html
-    /// [`FromSql`]: trait.FromSql.html
-    /// [`Client#query`]: struct.Client.html#method.query
     pub async fn query<'b, S>(self, client: &'b mut Client<S>) -> crate::Result<QueryStream<'b>>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send,

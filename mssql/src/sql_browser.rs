@@ -18,10 +18,9 @@ use async_trait::async_trait;
 #[async_trait]
 pub trait SqlBrowser {
     /// If the given builder defines a named instance, finds the correct port
-    /// and returns a `TcpStream` to be used in the [`Client`]. If instance name
-    /// is not defined, connects directly to the given host and port.
-    ///
-    /// [`Client`]: struct.Client.html
+    /// and returns a `TcpStream` to be used in the [`Client`](crate::Client).
+    /// If instance name is not defined, connects directly to the given host
+    /// and port.
     async fn connect_named(builder: &Config) -> crate::Result<Self>
     where
         Self: Sized + Send + Sync;

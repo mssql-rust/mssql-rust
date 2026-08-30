@@ -8,9 +8,9 @@ use uuid::Uuid;
 /// A conversion trait to a TDS type.
 ///
 /// A `ToSql` implementation for a Rust type is needed for using it as a
-/// parameter in the [`Client#query`] or [`Client#execute`] methods. The
-/// following Rust types are already implemented to match the given server
-/// types:
+/// parameter in the [`Client::query`](crate::Client::query) or
+/// [`Client::execute`](crate::Client::execute) methods. The following Rust
+/// types are already implemented to match the given server types:
 ///
 /// |Rust type|Server type|
 /// |--------|--------|
@@ -27,14 +27,14 @@ use uuid::Uuid;
 /// |`Vec<u8>`/`&[u8]`|`varbinary(max)`|
 /// |[`Uuid`]|`uniqueidentifier`|
 /// |[`Numeric`]|`numeric`/`decimal`|
-/// |[`Decimal`] (with feature flag `rust_decimal`)|`numeric`/`decimal`|
-/// |[`BigDecimal`] (with feature flag `bigdecimal`)|`numeric`/`decimal`|
+/// |`Decimal` (with feature flag `rust_decimal`, see [`crate::numeric`])|`numeric`/`decimal`|
+/// |`BigDecimal` (with feature flag `bigdecimal`, see [`crate::numeric`])|`numeric`/`decimal`|
 /// |[`XmlData`]|`xml`|
-/// |[`NaiveDate`] (with `chrono` feature, TDS 7.3 >)|`date`|
-/// |[`NaiveTime`] (with `chrono` feature, TDS 7.3 >)|`time`|
-/// |[`DateTime`] (with `chrono` feature, TDS 7.3 >)|`datetimeoffset`|
-/// |[`NaiveDateTime`] (with `chrono` feature, TDS 7.3 >)|`datetime2`|
-/// |[`NaiveDateTime`] (with `chrono` feature, TDS 7.2)|`datetime`|
+/// |`NaiveDate` (with `chrono` feature, TDS 7.3 >)|`date`|
+/// |`NaiveTime` (with `chrono` feature, TDS 7.3 >)|`time`|
+/// |`DateTime` (with `chrono` feature, TDS 7.3 >)|`datetimeoffset`|
+/// |`NaiveDateTime` (with `chrono` feature, TDS 7.3 >)|`datetime2`|
+/// |`NaiveDateTime` (with `chrono` feature, TDS 7.2)|`datetime`|
 ///
 /// It is possible to use some of the types to write into columns that are not
 /// of the same type. For example on systems following the TDS 7.3 standard (SQL
@@ -44,20 +44,8 @@ use uuid::Uuid;
 /// columns. All binary types can also be used with `binary` and `image`
 /// columns.
 ///
-/// See the [`time`] module for more information about the date and time structs.
-///
-/// [`Client#query`]: struct.Client.html#method.query
-/// [`Client#execute`]: struct.Client.html#method.execute
-/// [`time`]: time/index.html
-/// [`Uuid`]: struct.Uuid.html
-/// [`Numeric`]: numeric/struct.Numeric.html
-/// [`Decimal`]: numeric/struct.Decimal.html
-/// [`BigDecimal`]: numeric/struct.BigDecimal.html
-/// [`XmlData`]: xml/struct.XmlData.html
-/// [`NaiveDateTime`]: time/chrono/struct.NaiveDateTime.html
-/// [`NaiveDate`]: time/chrono/struct.NaiveDate.html
-/// [`NaiveTime`]: time/chrono/struct.NaiveTime.html
-/// [`DateTime`]: time/chrono/struct.DateTime.html
+/// See the [`time`](crate::time) module for more information about the date
+/// and time structs.
 pub trait ToSql: Send + Sync {
     /// Convert to a value understood by the SQL Server. Conversion
     /// by-reference.

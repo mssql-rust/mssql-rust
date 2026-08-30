@@ -38,10 +38,6 @@ use std::fmt::Debug;
 /// # Ok(())
 /// # }
 /// ```
-///
-/// [`Client`]: struct.Client.html
-/// [`Rows`]: struct.Row.html
-/// [`next_resultset`]: #method.next_resultset
 #[derive(Debug)]
 pub struct ExecuteResult {
     rows_affected: Vec<u64>,

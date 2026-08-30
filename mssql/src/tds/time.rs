@@ -1,25 +1,21 @@
 //! Date and time handling.
 //!
 //! When using the `tds73` feature flag together with SQL Server 2008 or later,
-//! the following [`time`] mappings to and from the database are available:
+//! the following `time` crate mappings to and from the database are available
+//! (re-exported from the `time` submodule, enabled by the `time` feature):
 //!
-//! - `Time` -> [`Time`](time/struct.Time.html)
-//! - `Date` -> [`Date`]
-//! - `DateTime` -> [`PrimitiveDateTime`]
-//! - `DateTime2` -> [`PrimitiveDateTime`]
-//! - `SmallDateTime` -> [`PrimitiveDateTime`]
-//! - `DateTimeOffset` -> [`OffsetDateTime`]
+//! - `Time` -> `Time`
+//! - `Date` -> `Date`
+//! - `DateTime` -> `PrimitiveDateTime`
+//! - `DateTime2` -> `PrimitiveDateTime`
+//! - `SmallDateTime` -> `PrimitiveDateTime`
+//! - `DateTimeOffset` -> `OffsetDateTime`
 //!
 //! With SQL Server 2005 and the `tds73` feature flag disabled, the mapping is
 //! different:
 //!
-//! - `DateTime` -> [`PrimitiveDateTime`]
-//! - `SmallDateTime` -> [`PrimitiveDateTime`]
-//!
-//! [`time`]: time/index.html
-//! [`Date`]: time/struct.Date.html
-//! [`PrimitiveDateTime`]: time/struct.PrimitiveDateTime.html
-//! [`OffsetDateTime`]: time/struct.OffsetDateTime.html
+//! - `DateTime` -> `PrimitiveDateTime`
+//! - `SmallDateTime` -> `PrimitiveDateTime`
 
 #[cfg(feature = "chrono")]
 #[cfg_attr(feature = "docs", doc(cfg(feature = "chrono")))]

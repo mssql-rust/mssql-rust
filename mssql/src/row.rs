@@ -425,10 +425,8 @@ impl IntoIterator for Row {
 }
 
 /// Lets a `Row` read from a query be sent straight back into a
-/// [`BulkLoadRequest`] or another statement's parameters, without manually
-/// copying each cell.
-///
-/// [`BulkLoadRequest`]: struct.BulkLoadRequest.html
+/// [`BulkLoadRequest`](crate::BulkLoadRequest) or another statement's
+/// parameters, without manually copying each cell.
 impl From<Row> for TokenRow<'static> {
     fn from(row: Row) -> Self {
         row.data

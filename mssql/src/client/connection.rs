@@ -47,15 +47,12 @@ use sspi::{
     SecurityBuffer, Sspi, SspiImpl, Username,
 };
 
-/// A `Connection` is an abstraction between the [`Client`] and the server. It
-/// can be used as a `Stream` to fetch [`Packet`]s from and to `send` packets
-/// splitting them to the negotiated limit automatically.
+/// A `Connection` is an abstraction between the [`Client`](crate::Client) and
+/// the server. It can be used as a `Stream` to fetch [`Packet`]s from and to
+/// `send` packets splitting them to the negotiated limit automatically.
 ///
 /// `Connection` is not meant to use directly, but as an abstraction layer for
 /// the numerous `Stream`s for easy packet handling.
-///
-/// [`Client`]: struct.Encode.html
-/// [`Packet`]: ../protocol/codec/struct.Packet.html
 pub(crate) struct Connection<S>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
@@ -210,8 +207,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
     ///
     /// The `send` will split the packet into multiple packets if bigger than
     /// the negotiated packet size, and handle flushing to the wire in an optimal way.
-    ///
-    /// [`Encode`]: ../protocol/codec/trait.Encode.html
     pub async fn send<E>(&mut self, mut header: PacketHeader, item: E) -> crate::Result<()>
     where
         E: Sized + Encode<BytesMut>,
