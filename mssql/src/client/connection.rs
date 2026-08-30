@@ -695,13 +695,36 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         feature = "native-tls",
         feature = "vendored-openssl"
     )))]
-    async fn tls_handshake(self, _: &Config, _: EncryptionLevel) -> crate::Result<Self> {
-        event!(
-            Level::WARN,
-            "TLS encryption is not enabled. All traffic including the login credentials are not encrypted."
-        );
+    async fn tls_handshake(self, _: &Config, encryption: EncryptionLevel) -> crate::Result<Self> {
+        match encryption {
+            // The caller explicitly asked for no encryption, or the server
+            // told us during PRELOGIN that it doesn't support any - either
+            // way, proceeding in cleartext here matches what was actually
+            // requested/negotiated, not a silent downgrade.
+            EncryptionLevel::Off | EncryptionLevel::NotSupported => {
+                event!(
+                    Level::WARN,
+                    "TLS encryption is not enabled. All traffic including the login credentials are not encrypted."
+                );
 
-        Ok(self)
+                Ok(self)
+            }
+            // `On`/`Required` mean the caller asked for encryption and the
+            // server confirmed it supports it, but no TLS backend is
+            // compiled into this build to actually perform the handshake.
+            // Silently falling through to cleartext here (the old
+            // behavior) would leak the login credentials and all query
+            // traffic on the wire while the caller believes `encrypt=true`
+            // is in effect - fail loudly instead. `Strict` can't reach this
+            // function at all (see the hard error in `Connection::connect`
+            // when no TLS feature is compiled in), but is included for
+            // defense in depth.
+            EncryptionLevel::On | EncryptionLevel::Required | EncryptionLevel::Strict => {
+                Err(crate::Error::Tls(
+                    "TLS encryption was requested (or negotiated with the server), but no TLS feature (rustls, native-tls, or vendored-openssl) is enabled".into(),
+                ))
+            }
+        }
     }
 
     pub(crate) async fn close(mut self) -> crate::Result<()> {
