@@ -156,6 +156,14 @@ Beyond host/port/credentials, `Config` also covers:
 - `multi_subnet_failover` — race a connection attempt against every address
   a SQL Server Always On availability group listener resolves to,
   concurrently, instead of trying them one at a time.
+- `readonly` — sets the LOGIN7 `ReadOnlyIntent` flag (equivalent to
+  `ApplicationIntent=ReadOnly` in an ADO.NET/JDBC connection string), so a
+  connection to an Always On availability group listener gets routed to a
+  read-only replica instead of the primary. `mssql` only sets the flag;
+  routing itself is the listener's job — if connections keep landing on the
+  primary, check the availability group's read-only routing configuration
+  (`ALTER AVAILABILITY GROUP ... MODIFY REPLICA ... READ_ONLY_ROUTING_URL`)
+  rather than the client.
 
 ## Encryption (TLS/SSL)
 
