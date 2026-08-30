@@ -259,6 +259,36 @@ mod tests {
         Ok(())
     }
 
+    // Investigating #333, JDBC-string half (see the ADO.NET-string tests of
+    // the same name for the full context): confirms this crate's JDBC
+    // connection-string parsing doesn't mangle a `$`/`%`-containing
+    // password either, brace-quoted or not.
+    #[test]
+    fn parsing_password_with_dollar_sign_unquoted() -> crate::Result<()> {
+        let test_str = "jdbc:sqlserver://my-server.com:4200;User ID=musti;Password=Password$1337";
+        let jdbc: JdbcConfig = test_str.parse()?;
+
+        assert_eq!(
+            AuthMethod::sql_server("musti", "Password$1337"),
+            jdbc.authentication()?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn parsing_password_with_dollar_sign_braced() -> crate::Result<()> {
+        let test_str = "jdbc:sqlserver://my-server.com:4200;User ID=musti;Password={Password$1337}";
+        let jdbc: JdbcConfig = test_str.parse()?;
+
+        assert_eq!(
+            AuthMethod::sql_server("musti", "Password$1337"),
+            jdbc.authentication()?
+        );
+
+        Ok(())
+    }
+
     #[test]
     #[cfg(any(
         feature = "rustls",

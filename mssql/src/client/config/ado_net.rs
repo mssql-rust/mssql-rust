@@ -410,6 +410,50 @@ mod tests {
         Ok(())
     }
 
+    // Investigating #333: a password containing `$`/`%` reportedly fails
+    // login even though a wire capture showed the "correct" password sent.
+    // If this crate's ADO.NET-string parsing were mangling such passwords
+    // (e.g. not stripping quoting correctly around a `$`), it would show up
+    // right here before the value even reaches the TDS login layer.
+    #[test]
+    fn parsing_password_with_dollar_sign_unquoted() -> crate::Result<()> {
+        let test_str = "User ID=musti; Password=Password$1337;";
+        let ado: AdoNetConfig = test_str.parse()?;
+
+        assert_eq!(
+            AuthMethod::sql_server("musti", "Password$1337"),
+            ado.authentication()?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn parsing_password_with_dollar_sign_quoted() -> crate::Result<()> {
+        let test_str = "User ID=musti; Password='Password$1337';";
+        let ado: AdoNetConfig = test_str.parse()?;
+
+        assert_eq!(
+            AuthMethod::sql_server("musti", "Password$1337"),
+            ado.authentication()?
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn parsing_password_with_percent_sign() -> crate::Result<()> {
+        let test_str = "User ID=musti; Password=abc%123;";
+        let ado: AdoNetConfig = test_str.parse()?;
+
+        assert_eq!(
+            AuthMethod::sql_server("musti", "abc%123"),
+            ado.authentication()?
+        );
+
+        Ok(())
+    }
+
     #[test]
     #[cfg(any(
         feature = "rustls",

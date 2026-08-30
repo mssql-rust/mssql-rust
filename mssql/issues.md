@@ -144,14 +144,6 @@ the `ColumnFlag` bit-position bug underlying #403.
   API (e.g. `stream.output_params()`). High real-world value — OUTPUT params
   are extremely common in enterprise MSSQL codebases; flagged "good first
   issue" by the maintainer in 2023 and never done.
-- [ ] **#333** — Passwords containing `$`/`%` fail login (`Login failed for
-  user`) even when Wireshark confirms the wire packet has the "correct"
-  password; two independent reporters over 7 months. TDS password
-  obfuscation itself (`login.rs`'s nibble-swap + XOR-0xA5) looks
-  byte-value-agnostic and correct. Leading hypothesis: the `connection-string`
-  crate may not be stripping ADO.NET-style quoting (`PWD='Password$1337'`)
-  around values. First step: a unit test on `Config::from_ado_string` with a
-  quoted special-character password to confirm before writing a fix.
 - [ ] **#322** — Bulk-inserting large text into `VARCHAR(MAX)`/`NVARCHAR(MAX)`
   columns reportedly fails server-side (error 4816). Static review of the
   current PLP "unknown length" chunked encoding and COLMETADATA length
@@ -244,6 +236,21 @@ the `ColumnFlag` bit-position bug underlying #403.
 54 of the 104 issues fall here — either pure usage/support questions with no
 code gap, or already fixed (inherited from upstream or landed earlier this
 session). Grouped for reference, not tracked as open work:
+
+**Investigated, hypothesis disproven:** #333 — passwords containing `$`/`%`
+reportedly fail login even when a wire capture showed the "correct" password
+sent. The leading hypothesis was that the `connection-string` crate wasn't
+stripping ADO.NET/JDBC-style quoting around such a value. Added regression
+tests covering `$`/`%`, quoted and unquoted, in both `Config::from_ado_string`
+and `Config::from_jdbc_string` (`src/client/config/ado_net.rs`,
+`src/client/config/jdbc.rs`) — all pass on the current code, disproving the
+hypothesis. Also re-examined the TDS password obfuscation itself
+(`login.rs`'s nibble-swap + XOR-0xA5): it's applied uniformly per byte with
+no value-dependent branching, so it can't selectively corrupt specific
+characters either. Kept the new tests as coverage against a future
+regression in either code path; could not reproduce the reported failure
+with what's checkable from this codebase alone; the two reporters' actual
+root cause is most likely elsewhere in their own environment or code.
 
 **Already resolved** (confirmed via source/git-log inspection):
 #224 (`host_name_in_certificate` covers the realistic case),
