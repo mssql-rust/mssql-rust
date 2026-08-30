@@ -127,44 +127,74 @@ the `ColumnFlag` bit-position bug underlying #403.
 
 ## Build with modifications — needs scoping or verification first
 
-- [ ] **#402** — Implement `PartialEq` (not `Eq`) for `Column`, `TokenRow`,
+All five landed. Two (**#275**, originally listed here) turned out to need
+real feature-design work once investigated and moved to Defer with the
+findings recorded there; **#333** (also originally here) turned out to be a
+disproven hypothesis rather than a fix and moved to "Not actionable" with
+its findings recorded there too.
+
+- [x] **#402** — Implement `PartialEq` (not `Eq`) for `Column`, `TokenRow`,
   `Row` for `assert_eq!`-style test comparisons. Skip `Eq`: `ColumnData`
   contains `f32`/`f64`, and an `Eq` impl would be dishonest (NaN breaks
   reflexivity) even though nothing stops you from writing one. Bundle with
-  #383.
-- [ ] **#404** — Wants `Debug` derivable on structs holding `&dyn ToSql`/
+  #383. Done: `c276e7e`.
+- [x] **#404** — Wants `Debug` derivable on structs holding `&dyn ToSql`/
   `Box<dyn ToSql>`. Don't add `ToSql: Debug` as a supertrait (breaking change
   for every external implementor); instead `impl fmt::Debug for dyn ToSql`
   inside this crate, delegating to `ColumnData`'s existing `Debug`. Small,
-  non-breaking.
-- [ ] **#275** — Stored-procedure OUTPUT parameters are decoded
-  (`TokenReturnValue` in `token_return_value.rs`) but discarded —
-  `QueryStream` skips `ReceivedToken::ReturnValue` with no way for callers to
-  read it. Medium effort: thread `TokenReturnValue`s through to a documented
-  API (e.g. `stream.output_params()`). High real-world value — OUTPUT params
-  are extremely common in enterprise MSSQL codebases; flagged "good first
-  issue" by the maintainer in 2023 and never done.
-- [ ] **#322** — Bulk-inserting large text into `VARCHAR(MAX)`/`NVARCHAR(MAX)`
+  non-breaking. Done: `da89a9d`.
+- [x] **#322** — Bulk-inserting large text into `VARCHAR(MAX)`/`NVARCHAR(MAX)`
   columns reportedly fails server-side (error 4816). Static review of the
   current PLP "unknown length" chunked encoding and COLMETADATA length
   declaration now looks spec-correct end-to-end (unlike when #315's narrower
   zero-length fix landed) — but this fork's own history shows protocol bugs
   like this have only surfaced under live-server testing. Next step: add a
   `docker/test-server.sh`-based integration test bulk-inserting a >8000-char
-  string before declaring this fixed or writing more code.
-- [ ] **#221** — Binding `f64::NAN`/`Infinity` as a query parameter gets a
+  string before declaring this fixed or writing more code. Done: `4cea67e`
+  (the test-first approach found a real bug: the encoded-length check
+  wrongly ran against the 0xffff MAX-column sentinel as if it were a real
+  limit, for `VARCHAR(MAX)`/`NVARCHAR(MAX)`/`VARBINARY(MAX)` alike).
+- [x] **#221** — Binding `f64::NAN`/`Infinity` as a query parameter gets a
   cryptic SQL Server error 8023 round-trip. No documented TDS encoding for
   NaN exists, so don't try to encode it specially; instead validate and
   reject client-side with a clear `Error::Conversion` before sending the RPC.
-  Small.
-- [ ] **#335** / **#348** — `Config::readonly`/`ApplicationIntent=ReadOnly`
+  Small. Done: `525999d`.
+- [x] **#335** / **#348** — `Config::readonly`/`ApplicationIntent=ReadOnly`
   is fully implemented and correctly wired through connection-string parsing
   and the Login7 `ReadOnlyIntent` flag, but completely undocumented — the
   README never mentions it. Docs-only fix, near-zero cost, resolves two
   duplicate issues asking essentially "how do I do AG read-only routing."
+  Done: `e709c84`.
 
 ## Defer — legitimate, but large or low-urgency
 
+- [ ] **#275** — Stored-procedure OUTPUT parameters are decoded
+  (`TokenReturnValue` in `token_return_value.rs`) but discarded —
+  `QueryStream::poll_next` has a `_ => continue` arm that silently drops
+  `ReceivedToken::ReturnValue` along with everything else it doesn't handle.
+  Originally assessed as "medium effort: thread `TokenReturnValue`s through
+  to a documented API" - investigation found the real scope is larger:
+  - Surfacing the already-decoded tokens (e.g. a `QueryStream::
+    into_output_params()` consuming method, mirroring `into_results()`) is
+    the small part and still worth doing on its own.
+  - But nothing in the current public API can ever cause the server to
+    *send* one. `Client::execute`/`query` and `Query::execute`/`query` all
+    hardcode `RpcProcId::ExecuteSQL` (`sp_executesql`), and `RpcStatus::
+    ByRefValue` (the per-parameter "this is OUTPUT" flag) is defined but
+    never set anywhere - so binding a parameter as OUTPUT isn't possible at
+    all today, regardless of the surfacing gap.
+  - The natural way to call a stored procedure with real OUTPUT semantics
+    is the native RPC-by-name mechanism (not the `sp_executesql` wrapper),
+    but `RpcProcIdValue::Name`'s `Encode` impl is a literal `todo!()` -
+    though it's currently unreachable dead code, not a live bug: every
+    existing caller passes a numeric `RpcProcId`, none constructs `Name`.
+  - A genuinely useful version of this feature needs all three pieces
+    built together (a new `Client` method to call a procedure by name,
+    `ByRefValue`-aware parameter binding, and the surfacing API) - shipping
+    only the surfacing half would add a documented method nothing could
+    ever populate, which is worse than not shipping it. This is a small
+    feature project, not a targeted fix; revisit with dedicated design time
+    rather than folded into a triage pass.
 - [ ] **#352** — Bulk-inserting a `String` into an `NTEXT` column fails;
   doc comments claim ntext is supported but `column_data.rs`'s bulk-insert
   encode match has no arm for `VarLenType::NText`. Investigated live against
@@ -286,13 +316,16 @@ non-security pick is wanted. Everything under "Build with modifications"
 is legitimate but benefits from the scoping/verification step noted above
 before writing code.
 
-**Status: the entire "Build now" list above is done** (11 commits,
-`3148e0a`..`7d542d7`). Each fix has a regression test verified live against
-a running SQL Server (via `docker/test-server.sh`, over `rustls`), confirmed
-to reproduce the original bug/error without the fix and pass with it, and
-was verified compiling and clippy-clean under multiple feature-flag
-combinations (default, `--features=all`, and `--no-default-features
---features=tds73` where relevant) plus the pinned MSRV toolchain (1.96)
-before being committed. Next up, if wanted: the "Build with modifications"
-list, starting with #402 (`PartialEq` for `Row`/`TokenRow`/`Column`, pairs
-naturally with the already-done #383) or #404 (`Debug` for `dyn ToSql`).
+**Status: both the "Build now" and "Build with modifications" lists above
+are done.** Every fix has a regression test verified live against a running
+SQL Server (via `docker/test-server.sh`, over `rustls`), confirmed to
+reproduce the original bug/error without the fix and pass with it, and was
+verified compiling and clippy-clean under multiple feature-flag combinations
+(default, `--features=all`, and `--no-default-features --features=tds73`
+where relevant) plus the pinned MSRV toolchain (1.96) before being
+committed. Two items didn't end up as fixes: #275 turned out to need real
+feature-design work once the RPC-by-name/OUTPUT-parameter-binding gaps were
+found, and #333's leading hypothesis was disproven by the regression tests
+written to check it — both are recorded with their findings under Defer /
+Not actionable respectively, rather than left as stale entries in the tier
+they started in. What's left to build, if wanted: the "Defer" list.
