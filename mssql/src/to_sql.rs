@@ -52,6 +52,17 @@ pub trait ToSql: Send + Sync {
     fn to_sql(&self) -> ColumnData<'_>;
 }
 
+// Lets a struct holding a `&dyn ToSql`/`Box<dyn ToSql>` field (e.g. a query
+// builder) derive `Debug` (#404). Adding `Debug` as a supertrait on `ToSql`
+// itself would be a breaking change for every external implementor, so this
+// implements it just for the trait object instead, delegating to the
+// `ColumnData` that `to_sql()` already produces (which derives `Debug`).
+impl std::fmt::Debug for dyn ToSql + '_ {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.to_sql(), f)
+    }
+}
+
 /// A by-value conversion trait to a TDS type.
 pub trait IntoSql<'a>: Send + Sync {
     /// Convert to a value understood by the SQL Server. Conversion by-value.
@@ -187,3 +198,23 @@ to_sql!(self_,
         XmlData: (ColumnData::Xml, Cow::Borrowed(self_));
         Uuid: (ColumnData::Guid, *self_);
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression test for #404: a query-builder-style struct holding a
+    // `&dyn ToSql` field couldn't derive `Debug`, since `ToSql` itself
+    // doesn't require `Debug`.
+    #[derive(Debug)]
+    struct Param<'a> {
+        value: &'a dyn ToSql,
+    }
+
+    #[test]
+    fn struct_holding_dyn_to_sql_can_derive_debug() {
+        let param = Param { value: &42i32 };
+        assert_eq!(ColumnData::I32(Some(42)), param.value.to_sql());
+        assert_eq!("Param { value: I32(Some(42)) }", format!("{:?}", param));
+    }
+}
