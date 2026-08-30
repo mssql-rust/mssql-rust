@@ -955,6 +955,61 @@ where
     Ok(())
 }
 
+// Regression test for #263: a NULL column always decodes to whichever
+// ColumnData variant matches its own declared width (e.g. a NULL
+// `smallint` is always `I16(None)`, never `I32(None)`), but reading it
+// back as a *different* Rust integer/float width used to error with
+// "cannot interpret I16(None) as an i32 value" unless a previous ad hoc
+// fix happened to add that specific pair. Exercise every numeric width
+// against every other width, not just the pairs #263 itself reported.
+#[test_on_runtimes]
+async fn read_nullable_integers_across_widths<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = random_table().await;
+
+    conn.simple_query(format!(
+        "CREATE TABLE ##{} (a tinyint null, b smallint null, c int null, d bigint null, e real null, f float null)",
+        table
+    ))
+    .await?
+    .into_results()
+    .await?;
+
+    conn.execute(
+        format!(
+            "INSERT INTO ##{} (a, b, c, d, e, f) values (null, null, null, null, null, null)",
+            table
+        ),
+        &[],
+    )
+    .await?;
+
+    let row = conn
+        .query(format!("SELECT a, b, c, d, e, f FROM ##{}", table), &[])
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+
+    // tinyint, smallint, int, and bigint, each read back as every width.
+    for idx in 0..4 {
+        assert_eq!(Option::<u8>::None, row.get(idx));
+        assert_eq!(Option::<i16>::None, row.get(idx));
+        assert_eq!(Option::<i32>::None, row.get(idx));
+        assert_eq!(Option::<i64>::None, row.get(idx));
+    }
+
+    // real and float, each read back as the other's width.
+    for idx in 4..6 {
+        assert_eq!(Option::<f32>::None, row.get(idx));
+        assert_eq!(Option::<f64>::None, row.get(idx));
+    }
+
+    Ok(())
+}
+
 #[test_on_runtimes]
 async fn short_strings<S>(mut conn: mssql::Client<S>) -> Result<()>
 where

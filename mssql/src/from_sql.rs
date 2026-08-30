@@ -48,12 +48,44 @@ where
 }
 
 from_sql!(bool: ColumnData::Bit(val) => (*val, val));
-from_sql!(u8: ColumnData::U8(val) => (*val, val), ColumnData::I32(None) => (None, None));
-from_sql!(i16: ColumnData::I16(val) => (*val, val), ColumnData::U8(None) => (None, None), ColumnData::I32(None) => (None, None));
-from_sql!(i32: ColumnData::I32(val) => (*val, val), ColumnData::U8(None) => (None, None));
-from_sql!(i64: ColumnData::I64(val) => (*val, val), ColumnData::U8(None) => (None, None), ColumnData::I32(None) => (None, None));
-from_sql!(f32: ColumnData::F32(val) => (*val, val));
-from_sql!(f64: ColumnData::F64(val) => (*val, val));
+// A NULL integer column decodes to whichever `ColumnData` variant matches
+// its own declared width (e.g. a NULL `smallint` is always `I16(None)`,
+// never `I32(None)`), regardless of which width the caller reads it back
+// as. Since a NULL carries no value to actually widen or narrow, every
+// integer width's `FromSql` accepts every other width's `None` variant as
+// `None` too - not just the ones a previous fix happened to add (#263).
+from_sql!(
+    u8:
+        ColumnData::U8(val) => (*val, val),
+        ColumnData::I16(None) => (None, None),
+        ColumnData::I32(None) => (None, None),
+        ColumnData::I64(None) => (None, None)
+);
+from_sql!(
+    i16:
+        ColumnData::I16(val) => (*val, val),
+        ColumnData::U8(None) => (None, None),
+        ColumnData::I32(None) => (None, None),
+        ColumnData::I64(None) => (None, None)
+);
+from_sql!(
+    i32:
+        ColumnData::I32(val) => (*val, val),
+        ColumnData::U8(None) => (None, None),
+        ColumnData::I16(None) => (None, None),
+        ColumnData::I64(None) => (None, None)
+);
+from_sql!(
+    i64:
+        ColumnData::I64(val) => (*val, val),
+        ColumnData::U8(None) => (None, None),
+        ColumnData::I16(None) => (None, None),
+        ColumnData::I32(None) => (None, None)
+);
+// Same reasoning for the two floating-point widths: a NULL `float(24)` is
+// always `F32(None)`, a NULL `float(53)` always `F64(None)`.
+from_sql!(f32: ColumnData::F32(val) => (*val, val), ColumnData::F64(None) => (None, None));
+from_sql!(f64: ColumnData::F64(val) => (*val, val), ColumnData::F32(None) => (None, None));
 from_sql!(Uuid: ColumnData::Guid(val) => (*val, val));
 from_sql!(Numeric: ColumnData::Numeric(n) => (*n, n));
 
