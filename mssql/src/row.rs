@@ -6,7 +6,7 @@ use crate::{
 use std::{fmt::Display, sync::Arc};
 
 /// A column of data from a query.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Column {
     pub(crate) name: String,
     pub(crate) column_type: ColumnType,
@@ -245,7 +245,11 @@ impl From<&TypeInfo> for ColumnType {
 /// [`get`]: #method.get
 /// [`try_get`]: #method.try_get
 /// [`IntoIterator`]: #impl-IntoIterator
-#[derive(Debug)]
+// `PartialEq`, not `Eq`: `ColumnData` (via `TokenRow`) can hold `f32`/`f64`,
+// and an `Eq` impl would be dishonest about that - NaN != NaN breaks `Eq`'s
+// reflexivity contract even though nothing in the type system stops you
+// from deriving it anyway (#402).
+#[derive(Debug, PartialEq)]
 pub struct Row {
     pub(crate) columns: Arc<Vec<Column>>,
     pub(crate) data: TokenRow<'static>,
@@ -471,5 +475,44 @@ impl IntoIterator for Row {
 impl From<Row> for TokenRow<'static> {
     fn from(row: Row) -> Self {
         row.data
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression test for #402: `Row` (and `Column`/`TokenRow`, which it's
+    // built from) had no `PartialEq`, so test code couldn't
+    // `assert_eq!` a `Row` built with `Row::new` against one read back
+    // from a query without manually comparing cell-by-cell. Deliberately
+    // `PartialEq` only, not `Eq` - see the derive site above.
+    #[test]
+    fn rows_with_equal_columns_and_data_are_equal() {
+        let columns = vec![Column::new("id".into(), ColumnType::Int4)];
+
+        let mut data = TokenRow::new();
+        data.push(ColumnData::I32(Some(1)));
+
+        let a = Row::new(columns.clone(), data.clone());
+        let b = Row::new(columns, data);
+
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn rows_with_different_data_are_not_equal() {
+        let columns = vec![Column::new("id".into(), ColumnType::Int4)];
+
+        let mut data_a = TokenRow::new();
+        data_a.push(ColumnData::I32(Some(1)));
+
+        let mut data_b = TokenRow::new();
+        data_b.push(ColumnData::I32(Some(2)));
+
+        let a = Row::new(columns.clone(), data_a);
+        let b = Row::new(columns, data_b);
+
+        assert_ne!(a, b);
     }
 }
