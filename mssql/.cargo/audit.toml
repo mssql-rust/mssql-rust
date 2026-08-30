@@ -32,4 +32,15 @@ ignore = [
   # is about unsoundness when a custom logger interacts with rand::rng(),
   # which winauth's internal NTLM/SSPI nonce generation does not do.
   "RUSTSEC-2026-0097",
+
+  # rsa 0.10.0-rc.18 ("Marvin Attack" timing side-channel in PKCS#1 v1.5
+  # decrypt/sign), pulled in unconditionally by the `sspi` crate (via
+  # `picky`) for the sspi-rs feature (Unix, opt-in, off by default). `picky`
+  # is a mandatory dependency of `sspi` with no Cargo feature to disable it
+  # -- it backs sspi's Kerberos/PKU2U/certificate-based SSPs, none of which
+  # this crate uses: the sspi-rs feature only calls `sspi::Ntlm`, and NTLM
+  # is HMAC-MD5/MD4-based, never touching RSA. `cargo update -p rsa
+  # --dry-run` confirms 0.10.0-rc.18 is already the newest version picky
+  # accepts, matching the advisory's own "No fixed upgrade is available".
+  "RUSTSEC-2023-0071",
 ]
