@@ -9,10 +9,15 @@ pub use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
 
 use crate::tds::codec::ColumnData;
 
+// `days` is signed because the legacy `DATETIME` type (unlike `SMALLDATETIME`
+// or the TDS73 `DATE`) can carry a *negative* offset from 1900-01-01 for any
+// date between SQL Server's minimum (1753-01-01) and 1899-12-31. Casting that
+// to `u64` before multiplying (the old implementation) wraps to a huge value
+// and overflows the multiply, panicking the client on an ordinary, in-range
+// `datetime` value.
 #[inline]
-fn from_days(days: u64, start_year: i32) -> Date {
-    Date::from_calendar_date(start_year, Month::January, 1).unwrap()
-        + Duration::from_secs(60 * 60 * 24 * days)
+fn from_days(days: i64, start_year: i32) -> Date {
+    Date::from_calendar_date(start_year, Month::January, 1).unwrap() + time::Duration::days(days)
 }
 
 #[inline]
@@ -46,15 +51,15 @@ fn to_sec_fragments(from: Time) -> i64 {
 from_sql!(
     PrimitiveDateTime:
         ColumnData::SmallDateTime(ref dt) => dt.map(|dt| PrimitiveDateTime::new(
-            from_days(dt.days as u64, 1900),
+            from_days(dt.days as i64, 1900),
             from_secs(dt.seconds_fragments as u64 * 60),
         )),
         ColumnData::DateTime2(ref dt) => dt.map(|dt| PrimitiveDateTime::new(
-            from_days(dt.date.days() as u64, 1),
+            from_days(dt.date.days() as i64, 1),
             Time::from_hms(0,0,0).unwrap() + Duration::from_nanos(dt.time.increments * 10u64.pow(9 - dt.time.scale as u32))
         )),
         ColumnData::DateTime(ref dt) => dt.map(|dt| PrimitiveDateTime::new(
-            from_days(dt.days as u64, 1900),
+            from_days(dt.days as i64, 1900),
             from_sec_fragments(dt.seconds_fragments as u64)
         ));
     Time:
@@ -63,10 +68,10 @@ from_sql!(
             Time::from_hms(0,0,0).unwrap() + Duration::from_nanos(ns)
         });
     Date:
-        ColumnData::Date(ref date) => date.map(|date| from_days(date.days() as u64, 1));
+        ColumnData::Date(ref date) => date.map(|date| from_days(date.days() as i64, 1));
     OffsetDateTime:
         ColumnData::DateTimeOffset(ref dto) => dto.map(|dto| {
-            let date = from_days(dto.datetime2.date.days() as u64, 1);
+            let date = from_days(dto.datetime2.date.days() as i64, 1);
             let dt = dto.datetime2;
 
             let time = Time::from_hms(0,0,0).unwrap()
@@ -129,6 +134,6 @@ to_sql!(self_,
 from_sql!(
     PrimitiveDateTime:
     ColumnData::DateTime(ref dt) => dt.map(|dt| {
-        from_days(dt.days as u64, 1900).with_time(from_sec_fragments(dt.seconds_fragments as u64))
+        from_days(dt.days as i64, 1900).with_time(from_sec_fragments(dt.seconds_fragments as u64))
     })
 );

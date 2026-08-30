@@ -2443,6 +2443,35 @@ where
     Ok(())
 }
 
+// Regression test for #316: SQL Server's legacy `datetime` type supports
+// dates back to 1753-01-01, but decoding one before 1900 used to panic with
+// "attempt to multiply with overflow" - a negative days-since-1900 offset
+// was cast to `u64` before the multiply, wrapping to a huge value. Not
+// gated on `tds73`: a `datetime` column always decodes through the same
+// `ColumnData::DateTime` path regardless of that feature.
+#[cfg(feature = "time")]
+#[test_on_runtimes]
+async fn primitive_date_time_before_1900_time_crate<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let dt = time::Date::from_calendar_date(1899, time::Month::December, 30)
+        .unwrap()
+        .with_hms(12, 34, 56)
+        .unwrap();
+
+    let row = conn
+        .query("SELECT CAST('1899-12-30T12:34:56' AS datetime)", &[])
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+
+    assert_eq!(Some(dt), row.get(0));
+
+    Ok(())
+}
+
 #[cfg(all(feature = "tds73", feature = "time"))]
 #[test_on_runtimes]
 async fn primitive_small_date_time_tds73_time_crate<S>(mut conn: mssql::Client<S>) -> Result<()>
