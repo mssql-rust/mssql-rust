@@ -1,0 +1,35 @@
+# mssql
+
+> An asynchronous, runtime-independent, pure-Rust Tabular Data Stream (TDS) client for Microsoft SQL Server.
+
+`mssql` is a fork of [Tiberius](https://github.com/prisma/tiberius), the TDS
+client originally created by Prisma and its contributors. This fork exists
+to prioritize ongoing maintenance and security updates, favoring small,
+focused changes over large rewrites. It works with the Tokio, async-std, or
+smol async runtimes, and is distributed under the same MIT/Apache-2.0 dual
+license as Tiberius.
+
+## Docs
+
+- [README](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/README.md): quickstart, configuration, encryption, authentication, bulk insert, redirects, security.
+- [API reference](https://docs.rs/mssql/): full rustdoc, generated from source.
+- [llms.json](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/llms.json): machine-readable map of the crate's public exports and feature flags.
+- [CHANGELOG](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/CHANGELOG.md): release history.
+- [CONTRIBUTING](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/CONTRIBUTING.md): how to contribute, MSRV policy, local test setup.
+
+## Examples
+
+- [tokio.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/tokio.rs): connect and query on the Tokio runtime.
+- [async-std.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/async-std.rs): connect and query on async-std.
+- [smol.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/smol.rs): connect and query on smol.
+- [config_builder.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/config_builder.rs): building a Config with ConfigBuilder.
+- [bulk.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/bulk.rs) and [bulk_insert_with_options.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/bulk_insert_with_options.rs): bulk insert.
+- [windows_auth.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/windows_auth.rs) and [aad-auth.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/aad-auth.rs): Windows-integrated and Azure AD authentication.
+- [strict_encryption.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/strict_encryption.rs), [ca_certificate_bundle.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/ca_certificate_bundle.rs), and [webpki_roots.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/webpki_roots.rs): TLS configuration variants.
+- [redirects.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/redirects.rs): following server-initiated redirects.
+- [in_list.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/in_list.rs): parameterized `IN (...)` queries.
+
+## Optional
+
+- [LICENSE-MIT](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/LICENSE-MIT.txt) and [LICENSE-APACHE](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/LICENSE-APACHE.txt): dual license terms.
+- [Tiberius](https://github.com/prisma/tiberius): the upstream project this crate forks.
