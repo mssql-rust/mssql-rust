@@ -359,18 +359,24 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                         ));
                     }
 
-                    if bytes.len() > vlc.len() {
-                        return Err(crate::Error::BulkInput(
-                            format!(
-                                "Encoded string length {} exceed column limit {}",
-                                bytes.len(),
-                                vlc.len()
-                            )
-                            .into(),
-                        ));
-                    }
-
+                    // `vlc.len()` is a real column limit only for a bounded
+                    // column; for a MAX column it's the wire's 0xffff "size
+                    // unknown" sentinel, not an actual byte limit, so this
+                    // check must not apply there - it used to reject any
+                    // bulk-inserted VARCHAR(MAX) value over 65535 bytes with
+                    // a nonsensical "exceed column limit 65535" (#322).
                     if vlc.len() < 0xffff {
+                        if bytes.len() > vlc.len() {
+                            return Err(crate::Error::BulkInput(
+                                format!(
+                                    "Encoded string length {} exceed column limit {}",
+                                    bytes.len(),
+                                    vlc.len()
+                                )
+                                .into(),
+                            ));
+                        }
+
                         dst.put_u16_le(bytes.len() as u16);
                         dst.extend_from_slice(bytes.as_slice());
                     } else {
@@ -442,17 +448,16 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
 
                         let length = dst.len() - len_pos - 4;
 
-                        if length > vlc.len() {
-                            return Err(crate::Error::BulkInput(
-                                format!(
-                                    "Encoded string length {} exceed column limit {}",
-                                    length,
-                                    vlc.len()
-                                )
-                                .into(),
-                            ));
-                        }
-
+                        // No column-limit check here: this is the unknown
+                        // size (MAX column) branch, where `vlc.len()` is the
+                        // wire's 0xffff sentinel, not an actual byte limit -
+                        // comparing against it rejected any bulk-inserted
+                        // NVARCHAR(MAX) value whose UTF-16 encoding exceeded
+                        // 65535 bytes (32767 characters) with a nonsensical
+                        // "exceed column limit 65535" (#322). The `assert!`
+                        // above already guards the real limit (this
+                        // single-chunk encoding needs the byte length to fit
+                        // in a u32).
                         if length > 0 {
                             // no next blob
                             dst.put_u32_le(0u32);
@@ -528,18 +533,21 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                     || vlc.r#type() == VarLenType::BigVarBin =>
             {
                 if let Some(bytes) = opt {
-                    if bytes.len() > vlc.len() {
-                        return Err(crate::Error::BulkInput(
-                            format!(
-                                "Binary length {} exceed column limit {}",
-                                bytes.len(),
-                                vlc.len()
-                            )
-                            .into(),
-                        ));
-                    }
-
+                    // See the equivalent comment in the BigChar/BigVarChar
+                    // arm above: `vlc.len()` is only a real column limit
+                    // when the column is bounded (#322).
                     if vlc.len() < 0xffff {
+                        if bytes.len() > vlc.len() {
+                            return Err(crate::Error::BulkInput(
+                                format!(
+                                    "Binary length {} exceed column limit {}",
+                                    bytes.len(),
+                                    vlc.len()
+                                )
+                                .into(),
+                            ));
+                        }
+
                         dst.put_u16_le(bytes.len() as u16);
                         dst.extend(bytes.into_owned());
                     } else {

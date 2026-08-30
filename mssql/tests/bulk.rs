@@ -119,6 +119,27 @@ test_bulk_type!(empty_varbinary(
     vec![b""; 100].into_iter()
 ));
 
+// Regression test for #322: bulk-inserting a large (well past the 8000-byte
+// non-MAX limit) value into a MAX-typed column was reported to fail
+// server-side with error 4816. The existing empty_varchar/empty_nvarchar/
+// empty_varbinary tests above only cover the zero-length case (#315's
+// original fix scope) - nothing exercised an actual large value.
+test_bulk_type!(large_varchar(
+    "VARCHAR(MAX)",
+    5,
+    vec!["a".repeat(80_000); 5].into_iter()
+));
+test_bulk_type!(large_nvarchar(
+    "NVARCHAR(MAX)",
+    5,
+    vec!["a".repeat(80_000); 5].into_iter()
+));
+test_bulk_type!(large_varbinary(
+    "VARBINARY(MAX)",
+    5,
+    vec![vec![0xABu8; 80_000]; 5].into_iter()
+));
+
 test_bulk_type!(real(
     "REAL",
     1000,
