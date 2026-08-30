@@ -1,0 +1,252 @@
+# Issues: upstream tiberius issue triage
+
+Assessment of all 104 open issues on [prisma/tiberius](https://github.com/prisma/tiberius/issues)
+as of 2026-08-29, done for the purpose of deciding what this fork should build.
+Every issue's full body and comments were read (via `gh issue view --comments`),
+cross-checked against this fork's actual source and git history, with an
+emphasis on security risk first, then viability, importance, and complexity.
+Recommendations below double as a build queue — check items off as they land.
+
+Context: a maintainer-volunteer proposal appeared on the upstream repo 10 days
+before this triage (issue #427), and a comment there mentions a second,
+independent fork already underway (`MattJackson/tiberius`) — upstream is
+recognized as abandoned by multiple parties right now, which is useful
+context for this fork's positioning but not itself an action item.
+
+## 🔒 Security — not yet fixed
+
+- [ ] **#305** — With no TLS feature compiled in, `encrypt=On`/`Required`
+  silently falls back to **cleartext** instead of erroring. Only
+  `EncryptionLevel::Strict` got the hard-error guard when TDS 8.0 support was
+  added this session; `On`/`Required` still just log a `WARN` and proceed
+  unencrypted. Login credentials and all query traffic go over the wire in
+  the clear while the caller believes `encrypt=true` is in effect. Small fix
+  (a few lines in `tls_handshake`'s no-TLS-feature fallback, mirroring the
+  `Strict` guard already in place).
+- [ ] **#316** — Reading a legitimate, in-spec `datetime` value before 1900
+  (e.g. `1899-12-30`) panics via an `i32→u64` cast overflow in
+  `src/tds/time/time.rs` (`from_days(dt.days as u64, 1900)`). SQL Server's
+  `datetime` type supports dates back to 1753; ordinary historical data
+  (birthdates, founding dates) crashes the client. Same bug class as the
+  #424/#425 decoder panics already fixed this session, just not covered by
+  that fix. Small, self-contained.
+- [ ] **#257** (crash half only) — Any column type the decoder doesn't yet
+  implement (geography, geometry, hierarchyid, sql_variant, ...) hits
+  `todo!()`/`unimplemented!()` in `column_data.rs`/`type_info.rs`/`var_len.rs`
+  and panics the client on a normal, valid server response — not just
+  malicious input. Same DoS class as #424/#425. Reject the "implement full
+  geography support" half of this issue (large, out of scope); build only the
+  crash-to-`Err` fix.
+
+Already fixed this session, confirmed via fresh `cargo audit`/source
+inspection, no action needed: #424, #425 (7 decoder panic sites), #417 / #428
+(rustls-webpki RUSTSEC-2026-0098/0099/0104), #343 (libgssapi debug-mode
+panic), #368 (numeric sign/padding bug), #380 (result-set miscounting), and
+the `ColumnFlag` bit-position bug underlying #403.
+
+## 🚩 Reject — conflicts with fork's security mission or out of scope
+
+- [ ] **#381** — Wants TLS 1.0 support and disabled certificate verification
+  knobs to connect to EOL SQL Server 2008. The feature being requested is
+  itself a security downgrade; conflicts directly with this fork's
+  maintenance/security mission.
+- [ ] **#289** — Service Broker / `SqlDependency` support. An entirely
+  different protocol subsystem, no existing scaffolding, zero community
+  signal (zero comments in 3+ years).
+- [ ] **#344** — SQL Server 2000 (TDS 7.1) support. Predates this crate's
+  protocol range by two decades; opposite of "prioritize current SQL
+  Server/TDS versions."
+- [ ] **#329** — Requested a `tokio-rustls`/`rustls-pemfile` bump this fork
+  has already passed (now on `tokio-rustls 0.26`/rustls 0.23/aws_lc_rs).
+  Superseded, nothing left to do.
+
+## Build now — small, safe, real value
+
+- [ ] **#305** — see Security above; do this one first.
+- [ ] **#316** — see Security above.
+- [ ] **#211** — `Row::try_get`/`QueryIdx for usize` has no bounds check;
+  an out-of-range index panics via `self.data.get(idx).unwrap()` instead of
+  returning `None`, defeating the entire point of `try_get` existing as the
+  non-panicking alternative to `get`. Trivial one-line fix.
+- [ ] **#373** + **#410** — same root cause, two independent reports (4 total
+  reporters over 9 months): `VarLenType::Daten` (DATE) is wrongly grouped
+  with `Timen`/`DatetimeOffsetn`/`Datetime2` in `VarLenContext::encode`
+  (`src/tds/codec/type_info.rs`), writing a spurious length/scale byte that
+  DATE's TYPE_INFO doesn't have. This corrupts whatever bulk-insert column
+  follows a DATE column, producing SQL Server errors 4816/4804. One
+  match-arm split fixes both issues; #346 upstream has a reference patch to
+  port.
+- [ ] **#258** + **#262** — `QueryIdx` is `pub` in `src/row.rs` but never
+  re-exported from `src/lib.rs`, so external code can't write generic
+  wrapper functions over `try_get`. One-line fix
+  (`pub use row::{Column, ColumnType, QueryIdx, Row};`); maintainer agreed
+  back in 2022. Closes both (duplicate) issues.
+- [ ] **#397** + **#403** — `TypeInfo` and `BaseMetaDataColumn` are `pub`
+  internally but not re-exported, so `Client::column_metadata()` (added
+  earlier this session) returns a `MetaDataColumn` whose own `base` field
+  type external code can't name. One-line export fix completes work already
+  landed this session. #403's underlying flag-bit bug is already fixed; only
+  the export gap remains.
+- [ ] **#336** — `Config::trust_cert_ca`/`ConfigBuilder::trust_cert_ca` take
+  `impl ToString` instead of `impl Into<PathBuf>`, so non-UTF8 paths can't be
+  represented. Two-site signature change; `Into<PathBuf>` is implemented for
+  `&str`/`String`/`PathBuf` so no realistic caller breaks. Author already
+  supplied the diff.
+- [ ] **#263** — `FromSql` impls are missing null-widening arms (e.g.
+  `ColumnData::I16(None)` has no arm in `i32`'s `FromSql` impl, producing
+  "cannot interpret I16(None) as an i32 value" for a NULL `smallint` read as
+  a wider type). Mechanical fix: add the missing `ColumnData::<Type>(None) =>
+  (None, None)` arms across `u8`/`i16`/`i32`/`i64`/`f32`/`f64`. Same bug class
+  already fixed for bigdecimal (#271).
+- [ ] **#226** — PLP (partially-length-prefixed) decoder reads one byte at a
+  time via `data.push(src.read_u8().await?)` in a loop
+  (`src/tds/codec/column_data/plp.rs`) instead of a bulk read. Reporter
+  measured a 3x slowdown for varchar-heavy workloads; corroborated
+  independently by #294's large-blob benchmark thread. Small-medium fix
+  (scratch buffer + bulk read), patch sketch already in the issue.
+- [ ] **#281** — Routine connection-lifecycle logs (TLS handshake success,
+  database/collation/version/packet-size change) are at `Level::INFO`
+  instead of `DEBUG`, flooding logs for anyone using a connection pool with
+  short-lived connections. ~6 call sites in `connection.rs`/`token.rs`,
+  trivial level change, two independent reporters agree.
+- [ ] **#382** — Column-name lookup (`impl QueryIdx for &str` in `row.rs`)
+  does an exact match with no raw-identifier handling, so a column named
+  `type` can't be looked up via the `r#type` identifier that `FromRow`-style
+  derive macros generate via `stringify!`. Trivial: strip a leading `r#`
+  before matching.
+- [ ] **#383** — `Row` has no public constructor (`pub(crate)` fields only),
+  so test code can't build `Row` values for functions accepting `&[Row]`.
+  Small: add `pub fn new(columns: Vec<Column>, data: TokenRow<'static>) ->
+  Self`. Bundle with #402.
+
+## Build with modifications — needs scoping or verification first
+
+- [ ] **#402** — Implement `PartialEq` (not `Eq`) for `Column`, `TokenRow`,
+  `Row` for `assert_eq!`-style test comparisons. Skip `Eq`: `ColumnData`
+  contains `f32`/`f64`, and an `Eq` impl would be dishonest (NaN breaks
+  reflexivity) even though nothing stops you from writing one. Bundle with
+  #383.
+- [ ] **#404** — Wants `Debug` derivable on structs holding `&dyn ToSql`/
+  `Box<dyn ToSql>`. Don't add `ToSql: Debug` as a supertrait (breaking change
+  for every external implementor); instead `impl fmt::Debug for dyn ToSql`
+  inside this crate, delegating to `ColumnData`'s existing `Debug`. Small,
+  non-breaking.
+- [ ] **#352** — Bulk-inserting a `String` into an `NTEXT` column fails;
+  doc comments claim ntext is supported but `column_data.rs`'s bulk-insert
+  encode match has no arm for `VarLenType::NText`. Small-medium: add one
+  encode arm reusing the existing var-len blob-encoding pattern. Note NTEXT
+  is a deprecated SQL Server type — scope the fix to NText only, not a
+  broader "all deprecated LOB types" effort.
+- [ ] **#275** — Stored-procedure OUTPUT parameters are decoded
+  (`TokenReturnValue` in `token_return_value.rs`) but discarded —
+  `QueryStream` skips `ReceivedToken::ReturnValue` with no way for callers to
+  read it. Medium effort: thread `TokenReturnValue`s through to a documented
+  API (e.g. `stream.output_params()`). High real-world value — OUTPUT params
+  are extremely common in enterprise MSSQL codebases; flagged "good first
+  issue" by the maintainer in 2023 and never done.
+- [ ] **#333** — Passwords containing `$`/`%` fail login (`Login failed for
+  user`) even when Wireshark confirms the wire packet has the "correct"
+  password; two independent reporters over 7 months. TDS password
+  obfuscation itself (`login.rs`'s nibble-swap + XOR-0xA5) looks
+  byte-value-agnostic and correct. Leading hypothesis: the `connection-string`
+  crate may not be stripping ADO.NET-style quoting (`PWD='Password$1337'`)
+  around values. First step: a unit test on `Config::from_ado_string` with a
+  quoted special-character password to confirm before writing a fix.
+- [ ] **#322** — Bulk-inserting large text into `VARCHAR(MAX)`/`NVARCHAR(MAX)`
+  columns reportedly fails server-side (error 4816). Static review of the
+  current PLP "unknown length" chunked encoding and COLMETADATA length
+  declaration now looks spec-correct end-to-end (unlike when #315's narrower
+  zero-length fix landed) — but this fork's own history shows protocol bugs
+  like this have only surfaced under live-server testing. Next step: add a
+  `docker/test-server.sh`-based integration test bulk-inserting a >8000-char
+  string before declaring this fixed or writing more code.
+- [ ] **#221** — Binding `f64::NAN`/`Infinity` as a query parameter gets a
+  cryptic SQL Server error 8023 round-trip. No documented TDS encoding for
+  NaN exists, so don't try to encode it specially; instead validate and
+  reject client-side with a clear `Error::Conversion` before sending the RPC.
+  Small.
+- [ ] **#335** / **#348** — `Config::readonly`/`ApplicationIntent=ReadOnly`
+  is fully implemented and correctly wired through connection-string parsing
+  and the Login7 `ReadOnlyIntent` flag, but completely undocumented — the
+  README never mentions it. Docs-only fix, near-zero cost, resolves two
+  duplicate issues asking essentially "how do I do AG read-only routing."
+
+## Defer — legitimate, but large or low-urgency
+
+- [ ] **#300** / **#79** — Dropping or timing out an in-flight query (e.g.
+  wrapping `simple_query` in `tokio::time::timeout`) leaves the connection
+  permanently unusable — no TDS Attention (cancel) packet is sent, no
+  attention-ack handling exists at all. Real, common footgun, but genuine
+  protocol work (new packet type, send-on-drop wiring, consuming the
+  server's ack before reuse), not a quick fix.
+- [ ] **#365** — Wants an owned (`'static`, non-borrowing) row stream like
+  `tokio-postgres`'s `query_raw`/`sqlx`'s `fetch`, instead of one bound to
+  `&mut Client`. Legitimate repository-pattern pain point, but would need a
+  real API/ownership redesign, not a small change.
+- [ ] **#354** — Add `jiff` as a third date/time backend alongside `chrono`
+  and `time`. Would triple the already-nontrivial time-crate feature-matrix
+  maintenance burden for a newer, less-adopted crate with only one low-signal
+  comment.
+- [ ] **#299** — Connection reset (`sp_reset_connection`-equivalent) for
+  pool reuse without full re-login. The wire-level `PacketStatus::
+  ResetConnection` flag and `EnvChangeTy::ResetConnection` ack already exist
+  in the protocol layer but are unused; exposing a `Client::reset()` is
+  medium effort and only benefits people hand-rolling pool integrations
+  (bb8/deadpool users recycle whole `Client`s today, which works fine).
+- [ ] **#219** — Case-insensitive `row.get()`/`try_get()` lookup for
+  inconsistently-cased legacy schemas. Small feature, but an easy SQL-side
+  workaround exists (`AS` to normalize casing).
+- [ ] **#364** — TLS handshake fails from macOS 15 against SQL Server 2014
+  across all three TLS backends. Plausible legacy-server TLS-stack
+  incompatibility; no live SQL Server 2014 test infrastructure to diagnose
+  properly, and low priority given the fork deprioritizes legacy SQL Server
+  versions.
+- [ ] **#375** — azure-sql-edge on macOS hangs indefinitely with default
+  features (native-tls) but works with `--no-default-features`. Likely
+  already explained by the documented native-tls-on-macOS/SQL-Server-TLS
+  incompatibility (the README already recommends rustls on macOS); no
+  distinct code defect confirmed.
+- [ ] **#313** — A plain ADO-style connection string
+  (`Server=...;Database=...;User Id=...;Password=...`) reportedly fails to
+  parse. No reproduction attempted yet against the current
+  `connection-string = "0.2"` dependency; needs that before it's actionable.
+
+## Not actionable / already resolved
+
+54 of the 104 issues fall here — either pure usage/support questions with no
+code gap, or already fixed (inherited from upstream or landed earlier this
+session). Grouped for reference, not tracked as open work:
+
+**Already resolved** (confirmed via source/git-log inspection):
+#224 (`host_name_in_certificate` covers the realistic case),
+#276 (`sspi-rs` feature), #278 (`Row::cells()`, upstream PR #303),
+#283 (mitigated via `sspi-rs`), #302 (`SqlBulkCopyOption`), #311
+(`bulk_insert_columns`), #317 / #323 (TLS-backend priority selection),
+#325 (lossy UTF-16 decode), #337 (`MultiSubnetFailover`), #340
+(`host_name_in_certificate`), #348 (tiberius-side flag correctly set;
+remaining gap is Prisma-side), #358 (money/smallmoney bulk insert), #367
+(`send_string_parameters_as_unicode`), #386 (async-net/async-io/futures-lite
+2.x bump), #401 (`IntoSql` for `rust_decimal`), #407 (`sspi-rs`), #412 (TDS
+8.0 Strict), #414 (`Config::client_name`), #418 (EnvChange Display
+old/new swap).
+
+**Not actionable — usage/support questions, no code gap:** #236, #244, #279,
+#282, #301, #307, #310, #319, #320, #321, #327, #332, #334, #345, #360, #371,
+#377, #399. Several of these (#236 `execute()` vs `simple_query()` for DDL,
+#320 `EncryptionLevel::Off` still handshaking, #332 quieting `tracing`
+output) would benefit from a one-paragraph README callout if a docs pass is
+ever done, but none warrant a code change.
+
+**Governance, not engineering:** #427 (maintainer-volunteer proposal on the
+upstream repo — context noted above, no fork action).
+
+## Recommendation
+
+Start with the two open security items (**#305**, **#316**) — both small,
+both real risk, both squarely this fork's stated mission. Then the
+trivial-to-small, high-leverage cluster (**#211, #373/#410, #258/#262,
+#397/#403, #336, #263, #281, #382, #383**) — nine issues, several closeable
+in pairs. **#226** (PLP perf) is the best next substantive item if a
+non-security pick is wanted. Everything under "Build with modifications"
+is legitimate but benefits from the scoping/verification step noted above
+before writing code.
