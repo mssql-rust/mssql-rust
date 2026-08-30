@@ -137,12 +137,6 @@ the `ColumnFlag` bit-position bug underlying #403.
   for every external implementor); instead `impl fmt::Debug for dyn ToSql`
   inside this crate, delegating to `ColumnData`'s existing `Debug`. Small,
   non-breaking.
-- [ ] **#352** — Bulk-inserting a `String` into an `NTEXT` column fails;
-  doc comments claim ntext is supported but `column_data.rs`'s bulk-insert
-  encode match has no arm for `VarLenType::NText`. Small-medium: add one
-  encode arm reusing the existing var-len blob-encoding pattern. Note NTEXT
-  is a deprecated SQL Server type — scope the fix to NText only, not a
-  broader "all deprecated LOB types" effort.
 - [ ] **#275** — Stored-procedure OUTPUT parameters are decoded
   (`TokenReturnValue` in `token_return_value.rs`) but discarded —
   `QueryStream` skips `ReceivedToken::ReturnValue` with no way for callers to
@@ -179,6 +173,34 @@ the `ColumnFlag` bit-position bug underlying #403.
 
 ## Defer — legitimate, but large or low-urgency
 
+- [ ] **#352** — Bulk-inserting a `String` into an `NTEXT` column fails;
+  doc comments claim ntext is supported but `column_data.rs`'s bulk-insert
+  encode match has no arm for `VarLenType::NText`. Investigated live against
+  the test server rather than shipped on a static read, and turned out to
+  need more than the "one encode arm" originally assessed:
+  - Found and can fix independently: `BaseMetaDataColumn::encode` (the
+    outgoing COLMETADATA this crate sends to describe a bulk-load target)
+    omits the TABLENAME part MS-TDS requires for TEXT/NTEXT/IMAGE columns —
+    the decode side already reads and discards it for incoming COLMETADATA,
+    but the encode side never wrote it. Since `bulk_insert()`'s wildcard
+    column list includes every column of a table, this desyncs the server's
+    COLMETADATA parse for *any* bulk load into a table that merely *has* a
+    TEXT/NTEXT/IMAGE column anywhere in it, even one that load never
+    touches — a real, independently-shippable bug.
+  - Could not confirm despite three attempts, each tested live: what row
+    value-format the server actually expects for a bulk-loaded (not
+    SELECT-returned) NTEXT value. Tried (a) the legacy TEXTPTR_LEN +
+    TEXTPTR + 8-byte timestamp + length-prefixed UTF-16 format that
+    `column_data/text.rs`'s decode reads on the way out, (b) a plain
+    length-prefixed blob with no TEXTPTR preamble, and (c) the PLP
+    "unknown length" chunked format the newer MAX types use. All three —
+    and even the byte-minimal NULL case with the TABLENAME fix applied —
+    produced the server's identical "premature end of message" (error
+    4804), which stopped being informative after the third confirmation.
+  - Reverted all of it rather than ship a guess. Needs either a packet
+    capture from a known-working bulk-copy client (`bcp.exe`, .NET
+    `SqlBulkCopy`) doing the same insert to compare against, or primary
+    MS-TDS spec text more authoritative than this session had access to.
 - [ ] **#300** / **#79** — Dropping or timing out an in-flight query (e.g.
   wrapping `simple_query` in `tokio::time::timeout`) leaves the connection
   permanently unusable — no TDS Attention (cancel) packet is sent, no
