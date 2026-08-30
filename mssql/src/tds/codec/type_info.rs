@@ -82,11 +82,17 @@ impl Encode<BytesMut> for VarLenContext {
 
         // length
         match self.r#type {
+            // DATE's TYPE_INFO carries no length/scale byte at all - its
+            // wire value is always a fixed 3 bytes (see the decode side
+            // below, which reads no such byte either). Writing one here
+            // (as this used to, grouped with the genuinely variable-scale
+            // types below) shifted every subsequent column's TYPE_INFO in
+            // the same COLMETADATA token by one byte, corrupting bulk
+            // insert whenever a DATE column wasn't last (#373, #410).
             #[cfg(feature = "tds73")]
-            VarLenType::Daten
-            | VarLenType::Timen
-            | VarLenType::DatetimeOffsetn
-            | VarLenType::Datetime2 => {
+            VarLenType::Daten => (),
+            #[cfg(feature = "tds73")]
+            VarLenType::Timen | VarLenType::DatetimeOffsetn | VarLenType::Datetime2 => {
                 dst.put_u8(self.len() as u8);
             }
             VarLenType::Bitn

@@ -1,4 +1,6 @@
 use futures_util::io::{AsyncRead, AsyncWrite};
+#[cfg(all(feature = "tds73", feature = "time"))]
+use mssql::ToSql;
 use mssql::{ColumnData, IntoSql, Result, SortOrder, SqlBulkCopyOption, TokenRow};
 use once_cell::sync::Lazy;
 use std::env;
@@ -346,6 +348,56 @@ where
     assert_eq!(Some(6), rows[0].get(0));
     assert_eq!(Some(7), rows[1].get(0));
     assert_eq!(Some(8), rows[2].get(0));
+
+    Ok(())
+}
+
+// Regression test for #373/#410: DATE's TYPE_INFO wrongly wrote a
+// length/scale byte it doesn't have, shifting every subsequent column's
+// TYPE_INFO in the same COLMETADATA token by one byte and corrupting
+// bulk_insert for any row where DATE wasn't the last column. A single-column
+// DATE bulk insert (like the `test_bulk_type!` macro above generates) can't
+// catch this - it only manifests when something follows.
+#[cfg(all(feature = "tds73", feature = "time"))]
+#[test_on_runtimes]
+async fn bulk_insert_date_before_time_column<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("##{}", random_table().await);
+
+    conn.execute(
+        &format!(
+            "CREATE TABLE {} (id BIGINT, a_date DATE, a_time TIME(7))",
+            table
+        ),
+        &[],
+    )
+    .await?;
+
+    let date = time::Date::from_calendar_date(2024, time::Month::June, 15).unwrap();
+    let clock = time::Time::from_hms(13, 45, 30).unwrap();
+
+    let mut req = conn.bulk_insert(&table).await?;
+    let mut row = TokenRow::new();
+    row.push(1i64.into_sql());
+    row.push(date.to_sql());
+    row.push(clock.to_sql());
+    req.send(row).await?;
+
+    let result = req.finalize().await?;
+    assert_eq!(result.rows_affected(), &[1]);
+
+    let rows = conn
+        .query(format!("SELECT id, a_date, a_time FROM {}", table), &[])
+        .await?
+        .into_first_result()
+        .await?;
+
+    assert_eq!(1, rows.len());
+    assert_eq!(Some(1i64), rows[0].get(0));
+    assert_eq!(Some(date), rows[0].get(1));
+    assert_eq!(Some(clock), rows[0].get(2));
 
     Ok(())
 }
