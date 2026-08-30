@@ -72,6 +72,10 @@ forward.
   `f64`, and NaN breaks `Eq`'s reflexivity contract).
 - `impl Debug for dyn ToSql`, so a struct holding a `&dyn ToSql`/
   `Box<dyn ToSql>` field (e.g. a query builder) can derive `Debug`.
+- `serde` feature — optional `Serialize`/`Deserialize` for the query
+  result types (`Row`, `Column`, `ColumnType`, `ColumnData`, `TokenRow`,
+  `Numeric`, and the `time`/`xml` types), so results can be shipped over
+  the network as JSON. Off by default.
 
 ### Changed
 

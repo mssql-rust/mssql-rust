@@ -42,6 +42,7 @@ use futures_util::io::AsyncReadExt;
 /// It isn't recommended to use this type directly. For dealing with `datetime`,
 /// use the `time` feature of this crate and its `PrimitiveDateTime` type.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DateTime {
     days: i32,
     seconds_fragments: u32,
@@ -98,6 +99,7 @@ impl Encode<BytesMut> for DateTime {
 /// `smalldatetime`, use the `time` feature of this crate and its
 /// `PrimitiveDateTime` type.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SmallDateTime {
     days: u16,
     seconds_fragments: u16,
@@ -151,6 +153,7 @@ impl Encode<BytesMut> for SmallDateTime {
 /// It isn't recommended to use this type directly. If you want to deal with
 /// `date`, use the `time` feature of this crate and its `Date` type.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg(feature = "tds73")]
 #[cfg_attr(feature = "docs", doc(cfg(feature = "tds73")))]
 pub struct Date(u32);
@@ -204,6 +207,7 @@ impl Encode<BytesMut> for Date {
 /// It isn't recommended to use this type directly. If you want to deal with
 /// `time`, use the `time` feature of this crate and its `Time` type.
 #[derive(Copy, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg(feature = "tds73")]
 #[cfg_attr(feature = "docs", doc(cfg(feature = "tds73")))]
 pub struct Time {
@@ -317,6 +321,7 @@ impl Encode<BytesMut> for Time {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg(feature = "tds73")]
 #[cfg_attr(feature = "docs", doc(cfg(feature = "tds73")))]
 /// A presentation of `datetime2` type in the server.
@@ -379,6 +384,7 @@ impl Encode<BytesMut> for DateTime2 {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg(feature = "tds73")]
 #[cfg_attr(feature = "docs", doc(cfg(feature = "tds73")))]
 /// A presentation of `datetimeoffset` type in the server.

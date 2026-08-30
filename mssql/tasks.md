@@ -170,10 +170,15 @@ original would have broken the default build), plus direct fixes for issues
   already shipped via `Row::cells()` (merged from upstream #303).
 - [ ] **#388** — column-name space fix. Superseded by the combined
   #387+#388-tests fix above; don't merge both.
-- [ ] **#416** — optional serde `Serialize`/`Deserialize` feature. Solid,
-  low-risk, well-tested, but still marked draft by its author — revisit once
-  it's marked ready for review. Consider a doc caveat that the derived
-  format isn't a stability promise.
+- [x] **#416** — optional serde `Serialize`/`Deserialize` feature.
+  Reimplemented as a pure addition, cherry-picking just the `cfg_attr`
+  derives + `tests/serde.rs` (skipped its unrelated `rustls-pemfile` hunk,
+  already absent from this fork's Cargo.toml). Built despite the PR still
+  being draft upstream (checked 2026-08-30, unchanged since 2026-04-25) —
+  the approach itself (derive-based, off-by-default via `dep:serde` +
+  `uuid/serde`) held up on review. Verified: 17 new round-trip tests +
+  the existing 215 lib tests, clean `clippy -D warnings` under both default
+  and `all` features. Done: see commit.
 
 ## Already superseded — no action needed
 
