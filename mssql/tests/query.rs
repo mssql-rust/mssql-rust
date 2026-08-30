@@ -1010,6 +1010,53 @@ where
     Ok(())
 }
 
+// Regression test for #221: binding f64::NAN/INFINITY as a query parameter
+// used to round-trip to the server and fail with a cryptic error 8023.
+// There's no documented TDS wire encoding for a non-finite float, so this
+// is now rejected client-side with a clear error instead.
+#[test_on_runtimes]
+async fn binding_a_non_finite_f64_parameter_is_rejected<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let err = conn
+            .query("SELECT @P1", &[&value])
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("non-finite f64"),
+            "unexpected error for {value}: {err}"
+        );
+    }
+
+    Ok(())
+}
+
+// Same as above, for f32/real.
+#[test_on_runtimes]
+async fn binding_a_non_finite_f32_parameter_is_rejected<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let err = conn
+            .query("SELECT @P1", &[&value])
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("non-finite f32"),
+            "unexpected error for {value}: {err}"
+        );
+    }
+
+    Ok(())
+}
+
 #[test_on_runtimes]
 async fn short_strings<S>(mut conn: mssql::Client<S>) -> Result<()>
 where

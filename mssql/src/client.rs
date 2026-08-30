@@ -606,6 +606,24 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         let mut param_str = String::new();
 
         for (i, param) in params.enumerate() {
+            // SQL Server has no documented wire encoding for a NaN or
+            // infinite float parameter - sending one round-trips to a
+            // cryptic server-side error 8023. Reject it client-side with a
+            // clear message instead (#221).
+            match param {
+                ColumnData::F32(Some(f)) if !f.is_finite() => {
+                    return Err(crate::Error::Conversion(
+                        format!("cannot send non-finite f32 value {f} as a query parameter").into(),
+                    ));
+                }
+                ColumnData::F64(Some(f)) if !f.is_finite() => {
+                    return Err(crate::Error::Conversion(
+                        format!("cannot send non-finite f64 value {f} as a query parameter").into(),
+                    ));
+                }
+                _ => {}
+            }
+
             if i > 0 {
                 param_str.push(',')
             }
