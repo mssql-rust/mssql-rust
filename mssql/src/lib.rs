@@ -98,10 +98,14 @@
 //! }
 //! ```
 //!
+//! Connecting with [smol](https://crates.io/crates/smol) follows the same
+//! shape as async-std (`smol::net::TcpStream` already implements the right
+//! traits, no compat wrapper needed) — see `examples/smol.rs`.
+//!
 //! # Ways of querying
 //!
 //! `mssql` offers two ways to query the database: directly from the [`Client`]
-//! with the [`Client#query`] and [`Client#execute`], or additionally through
+//! with [`Client::query`] and [`Client::execute`], or additionally through
 //! the [`Query`] object.
 //!
 //! ### With the client methods
@@ -159,37 +163,81 @@
 //! # }
 //! ```
 //!
+//! # Configuration
+//!
+//! [`Config`] can be built either with `Config::new()` plus its setters, or
+//! with the equivalent chainable [`Config::builder`] — both produce the same
+//! `Config` and remain fully supported; use whichever reads better at the
+//! call site:
+//!
+//! ```
+//! # use mssql::{Config, AuthMethod};
+//! let config = Config::builder()
+//!     .host("localhost")
+//!     .port(1433)
+//!     .authentication(AuthMethod::sql_server("SA", "<YourStrong@Passw0rd>"))
+//!     .trust_cert()
+//!     .build();
+//! # let _ = config;
+//! ```
+//!
+//! A [`Config`] can also be parsed from an [ADO.NET connection string] (see
+//! [`Config::from_ado_string`]) or a JDBC connection string (see
+//! [`Config::from_jdbc_string`]), which is often the more convenient way to
+//! carry settings through an environment variable or a configuration file.
+//!
 //! # Authentication
 //!
-//! `mssql` supports different [ways of authentication] to the SQL Server:
+//! `mssql` supports different [ways of authentication][`AuthMethod`] to the
+//! SQL Server:
 //!
 //! - SQL Server authentication uses the facilities of the database to
-//!   authenticate the user.
-//! - On Windows, you can authenticate using the currently logged in user or
-//!   specified Windows credentials.
-//! - If enabling the `integrated-auth-gssapi` feature, it is possible to login
-//!   with the currently active Kerberos credentials.
-//!
-//! ## AAD(Azure Active Directory) Authentication
-//!
-//! `mssql` supports AAD authentication by taking an AAD token. Suggest using
-//! [azure_identity](https://crates.io/crates/azure_identity) crate to retrieve
-//! the token, and config `mssql` with the token. There is an example in the
-//! examples folder on how to setup this.
+//!   authenticate the user ([`AuthMethod::sql_server`]).
+//! - On Windows, or on Unix with the `sspi-rs` feature enabled, you can
+//!   authenticate with a Windows/NTLM username and password
+//!   ([`AuthMethod::windows`]), or as the currently logged-in user
+//!   ([`AuthMethod::Integrated`]).
+//! - With the `integrated-auth-gssapi` feature enabled on Unix, it is
+//!   possible to log in with the currently active Kerberos credentials
+//!   ([`AuthMethod::Integrated`]) using a real ticket cache — `sspi-rs` is a
+//!   pure-Rust alternative that doesn't need one, at the cost of only
+//!   supporting explicit credentials, not the current-user case.
+//! - AAD (Azure Active Directory) tokens are supported via
+//!   [`AuthMethod::AADToken`] — see `examples/aad-auth.rs`, and the
+//!   [azure_identity](https://crates.io/crates/azure_identity) crate for
+//!   retrieving the token itself.
 //!
 //! # TLS
 //!
-//! When compiled using the default features, a TLS encryption will be available
-//! and by default, used for all traffic. TLS is handled with the given
-//! `TcpStream`. Please see the documentation for [`EncryptionLevel`] for
-//! details.
+//! When compiled with a TLS feature (`native-tls` by default, or `rustls`
+//! and `vendored-openssl` as alternatives), traffic is encrypted for all
+//! [`EncryptionLevel`]s except `Off`/`NotSupported`. TLS is handled with the
+//! given `TcpStream`, so it works the same regardless of which runtime
+//! connected it.
+//!
+//! Server certificate trust defaults to the operating system's certificate
+//! store; [`Config::trust_cert`] disables validation entirely (development
+//! only), while [`Config::trust_cert_ca`] and [`Config::trust_cert_ca_bundle`]
+//! trust one specific CA certificate — from a file or from bytes already in
+//! memory, respectively — in addition to the system store. With the
+//! `rustls-webpki-roots` feature, `Config::trust_webpki_roots` validates
+//! against Mozilla's bundled root CA list instead of the OS store, which is
+//! useful in minimal containers that don't ship one.
+//!
+//! [`EncryptionLevel::Strict`] additionally implements TDS 8.0's mandatory
+//! encryption: the TLS handshake happens *before* any TDS bytes at all
+//! (closing a downgrade window the other levels leave open), and pairs with
+//! [`Config::host_name_in_certificate`] for validating a certificate issued
+//! for a name other than the connection address. This needs SQL Server 2022
+//! or later, or Azure SQL Database/Managed Instance.
 //!
 //! # SQL Browser
 //!
 //! On Windows platforms, connecting to the SQL Server might require going through
 //! the SQL Browser service to get the correct port for the named instance. This
-//! feature requires either the `sql-browser-async-std` or `sql-browser-tokio` feature
-//! flag to be enabled and has a bit different way of connecting:
+//! feature requires either the `sql-browser-async-std`, `sql-browser-tokio`, or
+//! `sql-browser-smol` feature flag to be enabled and has a bit different way of
+//! connecting:
 //!
 //! ```no_run
 //! # #[cfg(any(feature = "sql-browser-async-std", feature = "sql-browser-tokio"))]
@@ -232,24 +280,37 @@
 //! # fn main() {}
 //! ```
 //!
+//! [`Config::multi_subnet_failover`] additionally speeds up connecting to a
+//! SQL Server Always On availability group listener whose DNS name resolves
+//! to addresses on multiple subnets, by racing a connection attempt against
+//! every resolved address concurrently instead of trying them one at a time.
+//!
+//! # Bulk insert
+//!
+//! [`Client::bulk_insert`] efficiently loads a large number of rows into a
+//! table. [`Client::bulk_insert_columns`] restricts the load to a specific
+//! column list (in any order), and [`Client::bulk_insert_with_options`]
+//! additionally accepts [`SqlBulkCopyOptions`] (`TABLOCK`, `KEEP_NULLS`,
+//! `CHECK_CONSTRAINTS`, `FIRE_TRIGGERS`, preserving identity values) and an
+//! `ORDER` hint for rows that already arrive sorted — see
+//! `examples/bulk-insert-with-options.rs` and [`Client::column_metadata`]
+//! for inspecting a table's columns ahead of time.
+//!
 //! # Other features
 //!
-//! - If using an [ADO.NET connection string], it is possible to create a
-//!   [`Config`] from one. Please see the documentation for
-//!   [`from_ado_string`] for details.
 //! - If wanting to use `mssql` with SQL Server version 2005, one must
 //!   disable the `tds73` feature.
+//! - [`Config::packet_size`] requests a non-default TDS packet size, which
+//!   can reduce the number of network round-trips for large queries or bulk
+//!   inserts; the server may negotiate a different size than requested.
 //!
-//! [`EncryptionLevel`]: enum.EncryptionLevel.html
-//! [`Client`]: struct.Client.html
-//! [`Client#query`]: struct.Client.html#method.query
-//! [`Client#execute`]: struct.Client.html#method.execute
-//! [`Query`]: struct.Query.html
-//! [`Query#bind`]: struct.Query.html#method.bind
-//! [`Config`]: struct.Config.html
-//! [`from_ado_string`]: struct.Config.html#method.from_ado_string
-//! [`time`]: time/index.html
-//! [ways of authentication]: enum.AuthMethod.html
+//! # Minimum Supported Rust Version (MSRV)
+//!
+//! This crate tracks current stable Rust minus two minor releases, checked
+//! in CI against the exact version declared in `Cargo.toml`'s
+//! `rust-version`. A change that requires a newer compiler than the policy
+//! allows is a bug, not an intentional bump.
+//!
 //! [ADO.NET connection string]: https://docs.microsoft.com/en-us/dotnet/framework/data/adonet/connection-strings
 #![cfg_attr(feature = "docs", feature(doc_cfg))]
 #![recursion_limit = "512"]
