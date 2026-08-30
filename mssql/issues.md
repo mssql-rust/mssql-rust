@@ -62,62 +62,68 @@ the `ColumnFlag` bit-position bug underlying #403.
 
 ## Build now — small, safe, real value
 
-- [ ] **#305** — see Security above; do this one first.
-- [ ] **#316** — see Security above.
-- [ ] **#211** — `Row::try_get`/`QueryIdx for usize` has no bounds check;
+- [x] **#305** — see Security above; did this one first. Done: `5a070b0`.
+- [x] **#316** — see Security above. Done: `dafc1fe`.
+- [x] **#211** — `Row::try_get`/`QueryIdx for usize` has no bounds check;
   an out-of-range index panics via `self.data.get(idx).unwrap()` instead of
   returning `None`, defeating the entire point of `try_get` existing as the
-  non-panicking alternative to `get`. Trivial one-line fix.
-- [ ] **#373** + **#410** — same root cause, two independent reports (4 total
+  non-panicking alternative to `get`. Trivial one-line fix. Done: `3148e0a`.
+- [x] **#373** + **#410** — same root cause, two independent reports (4 total
   reporters over 9 months): `VarLenType::Daten` (DATE) is wrongly grouped
   with `Timen`/`DatetimeOffsetn`/`Datetime2` in `VarLenContext::encode`
   (`src/tds/codec/type_info.rs`), writing a spurious length/scale byte that
   DATE's TYPE_INFO doesn't have. This corrupts whatever bulk-insert column
   follows a DATE column, producing SQL Server errors 4816/4804. One
   match-arm split fixes both issues; #346 upstream has a reference patch to
-  port.
-- [ ] **#258** + **#262** — `QueryIdx` is `pub` in `src/row.rs` but never
+  port. Done: `08d873c` (fixed directly rather than porting #346's diff;
+  verified live, reproduces error 4816 without the fix).
+- [x] **#258** + **#262** — `QueryIdx` is `pub` in `src/row.rs` but never
   re-exported from `src/lib.rs`, so external code can't write generic
   wrapper functions over `try_get`. One-line fix
   (`pub use row::{Column, ColumnType, QueryIdx, Row};`); maintainer agreed
-  back in 2022. Closes both (duplicate) issues.
-- [ ] **#397** + **#403** — `TypeInfo` and `BaseMetaDataColumn` are `pub`
+  back in 2022. Closes both (duplicate) issues. Done: `94320dd`.
+- [x] **#397** + **#403** — `TypeInfo` and `BaseMetaDataColumn` are `pub`
   internally but not re-exported, so `Client::column_metadata()` (added
   earlier this session) returns a `MetaDataColumn` whose own `base` field
   type external code can't name. One-line export fix completes work already
   landed this session. #403's underlying flag-bit bug is already fixed; only
-  the export gap remains.
-- [ ] **#336** — `Config::trust_cert_ca`/`ConfigBuilder::trust_cert_ca` take
+  the export gap remains. Done: `d66dfb2`.
+- [x] **#336** — `Config::trust_cert_ca`/`ConfigBuilder::trust_cert_ca` take
   `impl ToString` instead of `impl Into<PathBuf>`, so non-UTF8 paths can't be
   represented. Two-site signature change; `Into<PathBuf>` is implemented for
   `&str`/`String`/`PathBuf` so no realistic caller breaks. Author already
-  supplied the diff.
-- [ ] **#263** — `FromSql` impls are missing null-widening arms (e.g.
+  supplied the diff. Done: `9784a12`.
+- [x] **#263** — `FromSql` impls are missing null-widening arms (e.g.
   `ColumnData::I16(None)` has no arm in `i32`'s `FromSql` impl, producing
   "cannot interpret I16(None) as an i32 value" for a NULL `smallint` read as
   a wider type). Mechanical fix: add the missing `ColumnData::<Type>(None) =>
   (None, None)` arms across `u8`/`i16`/`i32`/`i64`/`f32`/`f64`. Same bug class
-  already fixed for bigdecimal (#271).
-- [ ] **#226** — PLP (partially-length-prefixed) decoder reads one byte at a
+  already fixed for bigdecimal (#271). Done: `86eeebe` (made the full matrix
+  symmetric across all six numeric widths, not just the reported pair).
+- [x] **#226** — PLP (partially-length-prefixed) decoder reads one byte at a
   time via `data.push(src.read_u8().await?)` in a loop
   (`src/tds/codec/column_data/plp.rs`) instead of a bulk read. Reporter
   measured a 3x slowdown for varchar-heavy workloads; corroborated
   independently by #294's large-blob benchmark thread. Small-medium fix
-  (scratch buffer + bulk read), patch sketch already in the issue.
-- [ ] **#281** — Routine connection-lifecycle logs (TLS handshake success,
+  (scratch buffer + bulk read), patch sketch already in the issue. Done:
+  `2a2dae6`.
+- [x] **#281** — Routine connection-lifecycle logs (TLS handshake success,
   database/collation/version/packet-size change) are at `Level::INFO`
   instead of `DEBUG`, flooding logs for anyone using a connection pool with
   short-lived connections. ~6 call sites in `connection.rs`/`token.rs`,
-  trivial level change, two independent reporters agree.
-- [ ] **#382** — Column-name lookup (`impl QueryIdx for &str` in `row.rs`)
+  trivial level change, two independent reporters agree. Done: `7d542d7`.
+- [x] **#382** — Column-name lookup (`impl QueryIdx for &str` in `row.rs`)
   does an exact match with no raw-identifier handling, so a column named
   `type` can't be looked up via the `r#type` identifier that `FromRow`-style
   derive macros generate via `stringify!`. Trivial: strip a leading `r#`
-  before matching.
-- [ ] **#383** — `Row` has no public constructor (`pub(crate)` fields only),
+  before matching. Done: `3148e0a`.
+- [x] **#383** — `Row` has no public constructor (`pub(crate)` fields only),
   so test code can't build `Row` values for functions accepting `&[Row]`.
   Small: add `pub fn new(columns: Vec<Column>, data: TokenRow<'static>) ->
-  Self`. Bundle with #402.
+  Self`. Bundle with #402. Done: `3148e0a` (bundled with #211/#382 since all
+  three are small `Row`-only fixes; #402's `PartialEq` addition was left for
+  its own commit rather than bundled here, since it also touches `Column`
+  and `TokenRow`).
 
 ## Build with modifications — needs scoping or verification first
 
@@ -250,3 +256,14 @@ in pairs. **#226** (PLP perf) is the best next substantive item if a
 non-security pick is wanted. Everything under "Build with modifications"
 is legitimate but benefits from the scoping/verification step noted above
 before writing code.
+
+**Status: the entire "Build now" list above is done** (11 commits,
+`3148e0a`..`7d542d7`). Each fix has a regression test verified live against
+a running SQL Server (via `docker/test-server.sh`, over `rustls`), confirmed
+to reproduce the original bug/error without the fix and pass with it, and
+was verified compiling and clippy-clean under multiple feature-flag
+combinations (default, `--features=all`, and `--no-default-features
+--features=tds73` where relevant) plus the pinned MSRV toolchain (1.96)
+before being committed. Next up, if wanted: the "Build with modifications"
+list, starting with #402 (`PartialEq` for `Row`/`TokenRow`/`Column`, pairs
+naturally with the already-done #383) or #404 (`Debug` for `dyn ToSql`).
