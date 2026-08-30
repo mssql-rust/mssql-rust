@@ -11,23 +11,25 @@ toolchain the code in this workspace may assume.
 
 - Let `1.N.0` be the latest stable Rust release published by the Rust project.
 - The MSRV MUST be `1.(N-2).0`.
-- Code, tests, benchmarks, fuzz targets, and examples MUST compile with the
-  MSRV toolchain. A language or standard-library feature stabilized after the
-  MSRV MUST NOT be used.
+- Code, tests, and examples MUST compile with the MSRV toolchain. A language
+  or standard-library feature stabilized after the MSRV MUST NOT be used.
 - Only the minor version is pinned. Patch releases of the MSRV minor version
   (`1.(N-2).x`) are all acceptable; the recorded value uses `.0`.
 - Pre-release channels (beta, nightly) are never the MSRV and MUST NOT be
-  required by any workspace target, including the fuzz targets — see
-  [rust-fuzz.md](../rust-fuzz.md), which keeps the nightly-only fuzz crate outside
-  the workspace precisely so this rule holds.
+  required by any workspace target. (This workspace has no nightly-only
+  target — e.g. no fuzz crate — that would need carving out of this rule; if
+  one is ever added, it must not raise the MSRV for everything else.)
 
 ## Where the MSRV is recorded
 
-| Location                             | Form                                                   |
-| ------------------------------------ | ------------------------------------------------------ |
-| `Cargo.toml` (`[workspace.package]`) | `rust-version = "1.(N-2)"`                             |
-| each `crates/*/Cargo.toml`           | `rust-version.workspace = true`                        |
-| `.github/workflows/ci.yml`           | an `msrv` job pinning `dtolnay/rust-toolchain@1.(N-2)` |
+This crate's Cargo workspace is `mssql/` itself (the root `Cargo.toml`, whose
+`[workspace] members = ["runtimes-macro"]`), not the outer git monorepo.
+
+| Location                          | Form                                                   |
+| ---------------------------------- | ------------------------------------------------------ |
+| `Cargo.toml` (`[workspace.package]`) | `rust-version = "1.(N-2)"`                            |
+| `runtimes-macro/Cargo.toml`        | `rust-version.workspace = true`                        |
+| `.github/workflows/test.yml`       | an `msrv` job pinning `dtolnay/rust-toolchain@1.(N-2)` |
 
 `rust-version` is the single source of truth inside the workspace: `cargo`
 refuses to build a crate with a toolchain older than it, and downstream
@@ -47,7 +49,8 @@ When a new stable Rust release `1.N` appears, the MSRV becomes `1.(N-2)`
 
 Raising the MSRV is therefore routine and expected, not a breaking change to
 be avoided. Lowering it below N-2 (to support an older consumer) is a design
-decision for `plan.md`, not a convenience.
+decision to record explicitly (e.g. as its own entry in `tasks.md`, with the
+reason), not a convenience to slip in unannounced.
 
 ## CI enforcement
 

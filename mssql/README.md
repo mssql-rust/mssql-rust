@@ -46,7 +46,8 @@ API, [`IN` lists](examples/in_list.rs), [bulk insert with options](examples/bulk
 [Windows/NTLM authentication](examples/windows_auth.rs),
 [CA certificate bundles](examples/ca_certificate_bundle.rs),
 [webpki-roots](examples/webpki_roots.rs), [redirects](examples/redirects.rs),
-and [Azure AD authentication](examples/aad-auth.rs) — and the crate's
+[Azure AD authentication](examples/aad-auth.rs), and [serializing rows to
+JSON with serde](examples/serde_json.rs) — and the crate's
 [rustdoc](https://docs.rs/mssql) for the full API reference.
 
 ## Fork of Tiberius
@@ -108,6 +109,7 @@ an intentional bump — please open an issue.
 | Flag                     | Description                                                                                                                      | Default    |
 |--------------------------|----------------------------------------------------------------------------------------------------------------------------------|------------|
 | `tds73`                  | Support for new date and time types in TDS version 7.3. Disable if using version 7.2.                                            | `enabled`  |
+| `winauth`                | Windows-native integrated authentication. Windows targets only.                                                                  | `enabled`  |
 | `native-tls`             | Use operating system's TLS libraries for traffic encryption.                                                                     | `enabled`  |
 | `rustls`                 | Use the builtin TLS implementation from rustls instead of linking to the operating system implementation for traffic encryption. | `disabled` |
 | `vendored-openssl`       | Statically link against OpenSSL instead of dynamically linking to the operating system implementation for traffic encryption.    | `disabled` |
@@ -121,6 +123,8 @@ an intentional bump — please open an issue.
 | `sql-browser-smol`       | SQL Browser implementation for the `TcpStream` of smol.                                                                          | `disabled` |
 | `integrated-auth-gssapi` | Support for using Integrated Auth via a real Kerberos ticket cache (GSSAPI), Unix only.                                          | `disabled` |
 | `sspi-rs`                | Pure-Rust NTLM/Windows authentication with explicit credentials, without a Kerberos ticket cache, Unix only.                     | `disabled` |
+| `serde`                  | `Serialize`/`Deserialize` for query result types (`Row`, `Column`, `ColumnData`, `TokenRow`, `Numeric`, time/xml types).          | `disabled` |
+| `docs`                   | Internal: enables nightly `doc_cfg` annotations for docs.rs builds. Not meant to be enabled by consumers of the crate.           | `disabled` |
 
 ### Supported protocols
 

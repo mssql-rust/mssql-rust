@@ -54,6 +54,7 @@
     "native-tls": "TLS via native-tls/async-native-tls (default).",
     "rustls": "TLS via rustls instead of native-tls.",
     "vendored-openssl": "Statically-linked OpenSSL TLS backend.",
-    "rustls-webpki-roots": "Validate the server certificate against Mozilla's bundled root CA list instead of the OS trust store (implies rustls)."
+    "rustls-webpki-roots": "Validate the server certificate against Mozilla's bundled root CA list instead of the OS trust store (implies rustls).",
+    "serde": "Serialize/Deserialize for query result types (Row, Column, ColumnType, ColumnData, TokenRow, Numeric, time/xml types), for shipping results over the network as JSON."
   }
 }

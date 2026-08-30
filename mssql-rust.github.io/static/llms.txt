@@ -30,6 +30,7 @@ license as Tiberius.
 - [strict_encryption.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/strict_encryption.rs), [ca_certificate_bundle.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/ca_certificate_bundle.rs), and [webpki_roots.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/webpki_roots.rs): TLS configuration variants.
 - [redirects.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/redirects.rs): following server-initiated redirects.
 - [in_list.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/in_list.rs): parameterized `IN (...)` queries.
+- [serde_json.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/serde_json.rs): serializing query results to JSON (`serde` feature).
 
 ## Optional
 
