@@ -43,6 +43,11 @@
 				'SqlBulkCopyOptions, column selection, ORDER hints, and CA-certificate bundles for locked-down environments.'
 		},
 		{
+			heading: 'JSON-ready results',
+			description:
+				'Row, Column, ColumnData, TokenRow, Numeric, and the time/xml types derive Serialize/Deserialize behind an opt-in serde feature, so query results round-trip through serde_json.'
+		},
+		{
 			heading: 'A clear MSRV policy',
 			description:
 				'Minimum supported Rust version tracks current stable minus two minor releases, enforced in CI.'
