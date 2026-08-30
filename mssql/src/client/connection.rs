@@ -98,13 +98,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
             feature = "vendored-openssl"
         ))]
         let transport = if config.encryption == EncryptionLevel::Strict {
-            event!(Level::INFO, "Performing a TLS handshake");
+            event!(Level::DEBUG, "Performing a TLS handshake");
 
             let mut stream =
                 create_tls_stream(&config, TlsPreloginWrapper::new(tcp_stream)).await?;
             stream.get_mut().handshake_complete();
 
-            event!(Level::INFO, "TLS handshake successful");
+            event!(Level::DEBUG, "TLS handshake successful");
 
             Framed::new(MaybeTlsStream::Tls(Box::new(stream)), PacketCodec)
         } else {
@@ -662,7 +662,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
                 Ok(self)
             }
             EncryptionLevel::Off | EncryptionLevel::On | EncryptionLevel::Required => {
-                event!(Level::INFO, "Performing a TLS handshake");
+                event!(Level::DEBUG, "Performing a TLS handshake");
 
                 let Self {
                     transport, context, ..
@@ -675,7 +675,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
                 };
 
                 stream.get_mut().handshake_complete();
-                event!(Level::INFO, "TLS handshake successful");
+                event!(Level::DEBUG, "TLS handshake successful");
 
                 let transport = Framed::new(MaybeTlsStream::Tls(Box::new(stream)), PacketCodec);
 
