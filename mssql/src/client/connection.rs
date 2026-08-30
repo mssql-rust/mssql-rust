@@ -1,0 +1,810 @@
+#[cfg(any(
+    feature = "rustls",
+    feature = "native-tls",
+    feature = "vendored-openssl"
+))]
+use crate::client::{tls::TlsPreloginWrapper, tls_stream::create_tls_stream};
+use crate::{
+    client::{tls::MaybeTlsStream, AuthMethod, Config},
+    tds::{
+        codec::{
+            self, Encode, LoginMessage, Packet, PacketCodec, PacketHeader, PacketStatus,
+            PreloginMessage, TokenDone,
+        },
+        stream::TokenStream,
+        Context, HEADER_BYTES,
+    },
+    EncryptionLevel, SqlReadBytes,
+};
+use asynchronous_codec::Framed;
+use bytes::BytesMut;
+#[cfg(any(windows, feature = "integrated-auth-gssapi", feature = "sspi-rs"))]
+use codec::TokenSspi;
+use futures_util::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use futures_util::ready;
+use futures_util::sink::SinkExt;
+use futures_util::stream::{Stream, TryStream, TryStreamExt};
+#[cfg(all(unix, feature = "integrated-auth-gssapi"))]
+use libgssapi::{
+    context::{ClientCtx, CtxFlags},
+    credential::{Cred, CredUsage},
+    name::Name,
+    oid::{OidSet, GSS_MECH_KRB5, GSS_NT_KRB5_PRINCIPAL},
+};
+use pretty_hex::*;
+#[cfg(all(unix, feature = "integrated-auth-gssapi"))]
+use std::ops::Deref;
+use std::{cmp, fmt::Debug, io, pin::Pin, task};
+use task::Poll;
+use tracing::{event, Level};
+#[cfg(all(windows, feature = "winauth"))]
+use winauth::{windows::NtlmSspiBuilder, NextBytes};
+use zeroize::{Zeroize, Zeroizing};
+
+#[cfg(all(unix, feature = "sspi-rs"))]
+use sspi::{
+    AuthIdentity, BufferType, ClientRequestFlags, CredentialUse, DataRepresentation, Ntlm,
+    SecurityBuffer, Sspi, SspiImpl, Username,
+};
+
+/// A `Connection` is an abstraction between the [`Client`](crate::Client) and
+/// the server. It can be used as a `Stream` to fetch [`Packet`]s from and to
+/// `send` packets splitting them to the negotiated limit automatically.
+///
+/// `Connection` is not meant to use directly, but as an abstraction layer for
+/// the numerous `Stream`s for easy packet handling.
+pub(crate) struct Connection<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    transport: Framed<MaybeTlsStream<S>, PacketCodec>,
+    flushed: bool,
+    context: Context,
+    buf: BytesMut,
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin + Send> Debug for Connection<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Connection")
+            .field("transport", &"Framed<..>")
+            .field("flushed", &self.flushed)
+            .field("context", &self.context)
+            .field("buf", &self.buf.as_ref().hex_dump())
+            .finish()
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
+    /// Creates a new connection
+    pub(crate) async fn connect(config: Config, tcp_stream: S) -> crate::Result<Connection<S>> {
+        let context = {
+            let mut context = Context::new();
+            context.set_spn(config.get_host(), config.get_port());
+            context.set_send_string_parameters_as_unicode(config.send_string_parameters_as_unicode);
+            context
+        };
+
+        // TDS 8.0 "strict" encryption performs the entire TLS handshake
+        // before PRELOGIN is sent at all (see `EncryptionLevel::Strict`),
+        // unlike every other level, which sends PRELOGIN in cleartext
+        // first and only starts TLS afterward (in `tls_handshake`, once
+        // the server's PRELOGIN response confirms it too wants
+        // encryption). So this is the one case where the transport must
+        // already be wrapped in TLS before the connection struct below is
+        // even built.
+        #[cfg(any(
+            feature = "rustls",
+            feature = "native-tls",
+            feature = "vendored-openssl"
+        ))]
+        let transport = if config.encryption == EncryptionLevel::Strict {
+            event!(Level::DEBUG, "Performing a TLS handshake");
+
+            let mut stream =
+                create_tls_stream(&config, TlsPreloginWrapper::new(tcp_stream)).await?;
+            stream.get_mut().handshake_complete();
+
+            event!(Level::DEBUG, "TLS handshake successful");
+
+            Framed::new(MaybeTlsStream::Tls(Box::new(stream)), PacketCodec)
+        } else {
+            Framed::new(MaybeTlsStream::Raw(tcp_stream), PacketCodec)
+        };
+
+        #[cfg(not(any(
+            feature = "rustls",
+            feature = "native-tls",
+            feature = "vendored-openssl"
+        )))]
+        let transport = {
+            if config.encryption == EncryptionLevel::Strict {
+                return Err(crate::Error::Tls(
+                    "EncryptionLevel::Strict requires a TLS feature (rustls, native-tls, or vendored-openssl) to be enabled".into(),
+                ));
+            }
+
+            Framed::new(MaybeTlsStream::Raw(tcp_stream), PacketCodec)
+        };
+
+        let mut connection = Self {
+            transport,
+            context,
+            flushed: false,
+            buf: BytesMut::new(),
+        };
+
+        let fed_auth_required = matches!(config.auth, AuthMethod::AADToken(_));
+
+        let prelogin = connection
+            .prelogin(config.encryption, fed_auth_required)
+            .await?;
+
+        let encryption = prelogin.negotiated_encryption(config.encryption)?;
+
+        let connection = connection.tls_handshake(&config, encryption).await?;
+
+        let mut connection = connection
+            .login(
+                config.auth,
+                encryption,
+                config.database,
+                config.host,
+                config.application_name,
+                config.client_name,
+                config.readonly,
+                config.packet_size,
+                prelogin,
+            )
+            .await?;
+
+        connection.flush_done().await?;
+
+        Ok(connection)
+    }
+
+    /// Flush the incoming token stream until receiving `DONE` token.
+    async fn flush_done(&mut self) -> crate::Result<TokenDone> {
+        TokenStream::new(self).flush_done().await
+    }
+
+    #[cfg(any(windows, feature = "integrated-auth-gssapi", feature = "sspi-rs"))]
+    /// Flush the incoming token stream until receiving `SSPI` token.
+    async fn flush_sspi(&mut self) -> crate::Result<TokenSspi> {
+        TokenStream::new(self).flush_sspi().await
+    }
+
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    fn post_login_encryption(mut self, encryption: EncryptionLevel) -> Self {
+        if let EncryptionLevel::Off = encryption {
+            event!(
+                Level::WARN,
+                "Turning TLS off after a login. All traffic from here on is not encrypted.",
+            );
+
+            let Self { transport, .. } = self;
+            let tcp = transport.into_inner().into_inner();
+            self.transport = Framed::new(MaybeTlsStream::Raw(tcp), PacketCodec);
+        }
+
+        self
+    }
+
+    #[cfg(not(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    )))]
+    fn post_login_encryption(self, _: EncryptionLevel) -> Self {
+        self
+    }
+
+    /// Send an item to the wire. Header should define the item type and item should implement
+    /// [`Encode`], defining the byte structure for the wire.
+    ///
+    /// The `send` will split the packet into multiple packets if bigger than
+    /// the negotiated packet size, and handle flushing to the wire in an optimal way.
+    pub async fn send<E>(&mut self, mut header: PacketHeader, item: E) -> crate::Result<()>
+    where
+        E: Sized + Encode<BytesMut>,
+    {
+        self.flushed = false;
+        let packet_size = (self.context.packet_size() as usize) - HEADER_BYTES;
+
+        let mut payload = BytesMut::new();
+        item.encode(&mut payload)?;
+
+        while !payload.is_empty() {
+            let writable = cmp::min(payload.len(), packet_size);
+            let split_payload = payload.split_to(writable);
+
+            if payload.is_empty() {
+                header.set_status(PacketStatus::EndOfMessage);
+            } else {
+                header.set_status(PacketStatus::NormalMessage);
+            }
+
+            event!(
+                Level::TRACE,
+                "Sending a packet ({} bytes)",
+                split_payload.len() + HEADER_BYTES,
+            );
+
+            self.write_to_wire(header, split_payload).await?;
+        }
+
+        self.flush_sink().await?;
+
+        Ok(())
+    }
+
+    /// Like [`send`], but for a payload that carries a plaintext credential
+    /// (the LOGIN7 packet for `AuthMethod::SqlServer`): each on-wire frame
+    /// and the remaining source payload are zeroized immediately after being
+    /// written, rather than left sitting in a buffer for the codec to send
+    /// on its own schedule.
+    ///
+    /// [`send`]: #method.send
+    async fn send_sensitive_login(
+        &mut self,
+        mut header: PacketHeader,
+        mut payload: Zeroizing<Vec<u8>>,
+    ) -> crate::Result<()> {
+        self.flushed = false;
+        let packet_size = (self.context.packet_size() as usize) - HEADER_BYTES;
+        let mut offset = 0;
+
+        while offset < payload.len() {
+            let end = cmp::min(payload.len(), offset + packet_size);
+
+            if end == payload.len() {
+                header.set_status(PacketStatus::EndOfMessage);
+            } else {
+                header.set_status(PacketStatus::NormalMessage);
+            }
+
+            let mut frame = Zeroizing::new(Vec::with_capacity(HEADER_BYTES + end - offset));
+            header.encode(&mut *frame)?;
+            frame.extend_from_slice(&payload[offset..end]);
+
+            let size = (frame.len() as u16).to_be_bytes();
+            frame[2] = size[0];
+            frame[3] = size[1];
+
+            event!(Level::TRACE, "Sending a packet ({} bytes)", frame.len(),);
+
+            (*self.transport).write_all(frame.as_slice()).await?;
+            frame.zeroize();
+            payload[offset..end].zeroize();
+            offset = end;
+        }
+
+        (&mut *self.transport).flush().await?;
+
+        Ok(())
+    }
+
+    /// Sends a packet of data to the database.
+    ///
+    /// # Warning
+    ///
+    /// Please be sure the packet size doesn't exceed the largest allowed size
+    /// dictaded by the server.
+    pub(crate) async fn write_to_wire(
+        &mut self,
+        header: PacketHeader,
+        data: BytesMut,
+    ) -> crate::Result<()> {
+        self.flushed = false;
+
+        let packet = Packet::new(header, data);
+        self.transport.send(packet).await?;
+
+        Ok(())
+    }
+
+    /// Sends all pending packages to the wire.
+    pub(crate) async fn flush_sink(&mut self) -> crate::Result<()> {
+        self.transport.flush().await
+    }
+
+    /// Cleans the packet stream from previous use. It is important to use the
+    /// whole stream before using the connection again. Flushing the stream
+    /// makes sure we don't have any old data causing undefined behaviour after
+    /// previous queries.
+    ///
+    /// Calling this will slow down the queries if stream is still dirty if all
+    /// results are not handled.
+    pub async fn flush_stream(&mut self) -> crate::Result<()> {
+        self.buf.truncate(0);
+
+        if self.flushed {
+            return Ok(());
+        }
+
+        while let Some(packet) = self.try_next().await? {
+            event!(
+                Level::WARN,
+                "Flushing unhandled packet from the wire. Please consume your streams!",
+            );
+
+            let is_last = packet.is_last();
+
+            if is_last {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// True if the underlying stream has no more data and is consumed
+    /// completely.
+    pub fn is_eof(&self) -> bool {
+        self.flushed && self.buf.is_empty()
+    }
+
+    /// A message sent by the client to set up context for login. The server
+    /// responds to a client PRELOGIN message with a message of packet header
+    /// type 0x04 and with the packet data containing a PRELOGIN structure.
+    ///
+    /// This message stream is also used to wrap the TLS handshake payload if
+    /// encryption is needed. In this scenario, where PRELOGIN message is
+    /// transporting the TLS handshake payload, the packet data is simply the
+    /// raw bytes of the TLS handshake payload.
+    async fn prelogin(
+        &mut self,
+        encryption: EncryptionLevel,
+        fed_auth_required: bool,
+    ) -> crate::Result<PreloginMessage> {
+        let mut msg = PreloginMessage::new();
+        msg.encryption = encryption;
+        msg.fed_auth_required = fed_auth_required;
+
+        let id = self.context.next_packet_id();
+        self.send(PacketHeader::pre_login(id), msg).await?;
+
+        let response: PreloginMessage = codec::collect_from(self).await?;
+        // threadid (should be empty when sent from server to client)
+        debug_assert_eq!(response.thread_id, 0);
+        Ok(response)
+    }
+
+    /// Defines the login record rules with SQL Server. Authentication with
+    /// connection options.
+    #[allow(clippy::too_many_arguments)]
+    async fn login(
+        mut self,
+        auth: AuthMethod,
+        encryption: EncryptionLevel,
+        db: Option<String>,
+        server_name: Option<String>,
+        application_name: Option<String>,
+        client_name: Option<String>,
+        readonly: bool,
+        packet_size: Option<u32>,
+        prelogin: PreloginMessage,
+    ) -> crate::Result<Self> {
+        let mut login_message = LoginMessage::new();
+
+        if let Some(db) = db {
+            login_message.db_name(db);
+        }
+
+        if let Some(server_name) = server_name {
+            login_message.server_name(server_name);
+        }
+
+        if let Some(app_name) = application_name {
+            login_message.app_name(app_name);
+        }
+
+        if let Some(client_name) = client_name {
+            login_message.hostname(client_name);
+        }
+
+        login_message.readonly(readonly);
+
+        if let Some(size) = packet_size {
+            login_message.packet_size(size);
+        }
+
+        match auth {
+            #[cfg(all(windows, feature = "winauth"))]
+            AuthMethod::Integrated => {
+                let mut client = NtlmSspiBuilder::new()
+                    .target_spn(self.context.spn())
+                    .build()?;
+
+                login_message.integrated_security(client.next_bytes(None)?);
+
+                let id = self.context.next_packet_id();
+                self.send(PacketHeader::login(id), login_message).await?;
+
+                self = self.post_login_encryption(encryption);
+
+                let sspi_bytes = self.flush_sspi().await?;
+
+                match client.next_bytes(Some(sspi_bytes.as_ref()))? {
+                    Some(sspi_response) => {
+                        event!(Level::TRACE, sspi_response_len = sspi_response.len());
+
+                        let id = self.context.next_packet_id();
+                        let header = PacketHeader::sspi(id);
+
+                        let token = TokenSspi::new(sspi_response);
+                        self.send(header, token).await?;
+                    }
+                    None => unreachable!(),
+                }
+            }
+            #[cfg(all(unix, feature = "integrated-auth-gssapi"))]
+            AuthMethod::Integrated => {
+                let mut s = OidSet::new()?;
+                s.add(&GSS_MECH_KRB5)?;
+
+                let client_cred = Cred::acquire(None, None, CredUsage::Initiate, Some(&s))?;
+
+                let mut ctx = ClientCtx::new(
+                    Some(client_cred),
+                    Name::new(self.context.spn().as_bytes(), Some(&GSS_NT_KRB5_PRINCIPAL))?,
+                    CtxFlags::GSS_C_MUTUAL_FLAG | CtxFlags::GSS_C_SEQUENCE_FLAG,
+                    None,
+                );
+
+                let init_token = ctx.step(None, None)?;
+
+                login_message.integrated_security(Some(Vec::from(init_token.unwrap().deref())));
+
+                let id = self.context.next_packet_id();
+                self.send(PacketHeader::login(id), login_message).await?;
+
+                self = self.post_login_encryption(encryption);
+
+                let auth_bytes = self.flush_sspi().await?;
+
+                let next_token = match ctx.step(Some(auth_bytes.as_ref()), None)? {
+                    Some(response) => {
+                        event!(Level::TRACE, response_len = response.len());
+                        TokenSspi::new(Vec::from(response.deref()))
+                    }
+                    None => {
+                        event!(Level::TRACE, response_len = 0);
+                        TokenSspi::new(Vec::new())
+                    }
+                };
+
+                let id = self.context.next_packet_id();
+                let header = PacketHeader::sspi(id);
+
+                self.send(header, next_token).await?;
+            }
+            // Pure-Rust NTLM via the `sspi` crate: an alternative to
+            // `integrated-auth-gssapi` for Unix that doesn't need a real
+            // Kerberos ticket cache, at the cost of only supporting
+            // explicit Windows/NTLM credentials (`AuthMethod::Windows`),
+            // not the current-user `AuthMethod::Integrated` GSSAPI provides.
+            #[cfg(all(unix, feature = "sspi-rs"))]
+            AuthMethod::Windows(auth) => {
+                let mut ntlm = Ntlm::new();
+
+                let username = Username::new(&auth.user, auth.domain.as_deref())
+                    .map_err(|e| crate::Error::SspiRs(e.to_string()))?;
+
+                // `sspi::secret::Secret<String>` zeroizes its own contents
+                // on drop, same as `auth.password` (a `Zeroizing<String>`)
+                // does its own - both copies stay protected.
+                let identity = AuthIdentity {
+                    username,
+                    password: auth.password.to_string().into(),
+                };
+
+                let mut creds = ntlm
+                    .acquire_credentials_handle()
+                    .with_credential_use(CredentialUse::Outbound)
+                    .with_auth_data(&identity)
+                    .execute(&mut ntlm)?;
+
+                let spn = self.context.spn().to_string();
+
+                let mut input = vec![SecurityBuffer::new(Vec::new(), BufferType::Token)];
+                let mut output = vec![SecurityBuffer::new(Vec::new(), BufferType::Token)];
+
+                let mut builder = ntlm
+                    .initialize_security_context()
+                    .with_credentials_handle(&mut creds.credentials_handle)
+                    .with_context_requirements(
+                        ClientRequestFlags::CONFIDENTIALITY | ClientRequestFlags::ALLOCATE_MEMORY,
+                    )
+                    .with_target_data_representation(DataRepresentation::Native)
+                    .with_target_name(&spn)
+                    .with_input(&mut input)
+                    .with_output(&mut output);
+
+                ntlm.initialize_security_context_impl(&mut builder)?
+                    .resolve_to_result()?;
+
+                login_message.integrated_security(Some(output[0].buffer.clone()));
+
+                let id = self.context.next_packet_id();
+                self.send(PacketHeader::login(id), login_message).await?;
+
+                self = self.post_login_encryption(encryption);
+
+                let sspi_bytes = self.flush_sspi().await?;
+
+                let mut input = vec![SecurityBuffer::new(
+                    sspi_bytes.as_ref().to_vec(),
+                    BufferType::Token,
+                )];
+                let mut output = vec![SecurityBuffer::new(Vec::new(), BufferType::Token)];
+
+                let mut builder = ntlm
+                    .initialize_security_context()
+                    .with_credentials_handle(&mut creds.credentials_handle)
+                    .with_context_requirements(
+                        ClientRequestFlags::CONFIDENTIALITY | ClientRequestFlags::ALLOCATE_MEMORY,
+                    )
+                    .with_target_data_representation(DataRepresentation::Native)
+                    .with_target_name(&spn)
+                    .with_input(&mut input)
+                    .with_output(&mut output);
+
+                ntlm.initialize_security_context_impl(&mut builder)?
+                    .resolve_to_result()?;
+
+                event!(Level::TRACE, authenticate_len = output[0].buffer.len());
+
+                let id = self.context.next_packet_id();
+                let header = PacketHeader::sspi(id);
+
+                self.send(header, TokenSspi::new(output[0].buffer.clone()))
+                    .await?;
+            }
+            #[cfg(all(windows, feature = "winauth"))]
+            AuthMethod::Windows(auth) => {
+                let spn = self.context.spn().to_string();
+                let builder = winauth::NtlmV2ClientBuilder::new().target_spn(spn);
+                // Keep the password alive as long as `client` borrows it
+                // (winauth's `build` wants `impl Into<Cow<str>>`, which
+                // `Zeroizing<String>` doesn't implement directly); it
+                // zeroizes on drop, after `client`'s own drop ends the
+                // borrow (locals drop in reverse declaration order).
+                let password = auth.password;
+                let mut client = builder.build(auth.domain, auth.user, password.as_str());
+
+                login_message.integrated_security(client.next_bytes(None)?);
+
+                let id = self.context.next_packet_id();
+                self.send(PacketHeader::login(id), login_message).await?;
+
+                self = self.post_login_encryption(encryption);
+
+                let sspi_bytes = self.flush_sspi().await?;
+
+                match client.next_bytes(Some(sspi_bytes.as_ref()))? {
+                    Some(sspi_response) => {
+                        event!(Level::TRACE, sspi_response_len = sspi_response.len());
+
+                        let id = self.context.next_packet_id();
+                        let header = PacketHeader::sspi(id);
+
+                        let token = TokenSspi::new(sspi_response);
+                        self.send(header, token).await?;
+                    }
+                    None => unreachable!(),
+                }
+            }
+            AuthMethod::None => {
+                let id = self.context.next_packet_id();
+                self.send(PacketHeader::login(id), login_message).await?;
+                self = self.post_login_encryption(encryption);
+            }
+            AuthMethod::SqlServer(auth) => {
+                let (user, mut password) = auth.into_credentials();
+
+                login_message.user_name(user);
+                login_message.password(password.as_str());
+                let payload = login_message.encode_to_vec()?;
+                password.zeroize();
+
+                let id = self.context.next_packet_id();
+                self.send_sensitive_login(PacketHeader::login(id), payload)
+                    .await?;
+                self = self.post_login_encryption(encryption);
+            }
+            AuthMethod::AADToken(token) => {
+                login_message.aad_token(token, prelogin.fed_auth_required, prelogin.nonce);
+                let id = self.context.next_packet_id();
+                self.send(PacketHeader::login(id), login_message).await?;
+                self = self.post_login_encryption(encryption);
+            }
+        }
+
+        Ok(self)
+    }
+
+    /// Implements the TLS handshake with the SQL Server.
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    async fn tls_handshake(
+        self,
+        config: &Config,
+        encryption: EncryptionLevel,
+    ) -> crate::Result<Self> {
+        match encryption {
+            EncryptionLevel::NotSupported => {
+                event!(
+                    Level::WARN,
+                    "TLS encryption is not enabled. All traffic including the login credentials are not encrypted."
+                );
+
+                Ok(self)
+            }
+            // The TLS handshake for Strict mode already happened in
+            // `Connection::connect`, before PRELOGIN was even sent - the
+            // transport is already `MaybeTlsStream::Tls` here, so calling
+            // `transport.into_inner()` and matching on `Raw` below (like
+            // every other encryption level does) would hit the
+            // `unreachable!()` arm.
+            EncryptionLevel::Strict => {
+                event!(
+                    Level::TRACE,
+                    "Already inside a TLS session from the Strict-mode pre-PRELOGIN handshake; nothing more to do."
+                );
+
+                Ok(self)
+            }
+            EncryptionLevel::Off | EncryptionLevel::On | EncryptionLevel::Required => {
+                event!(Level::DEBUG, "Performing a TLS handshake");
+
+                let Self {
+                    transport, context, ..
+                } = self;
+                let mut stream = match transport.into_inner() {
+                    MaybeTlsStream::Raw(tcp) => {
+                        create_tls_stream(config, TlsPreloginWrapper::new(tcp)).await?
+                    }
+                    _ => unreachable!(),
+                };
+
+                stream.get_mut().handshake_complete();
+                event!(Level::DEBUG, "TLS handshake successful");
+
+                let transport = Framed::new(MaybeTlsStream::Tls(Box::new(stream)), PacketCodec);
+
+                Ok(Self {
+                    transport,
+                    context,
+                    flushed: false,
+                    buf: BytesMut::new(),
+                })
+            }
+        }
+    }
+
+    /// Implements the TLS handshake with the SQL Server.
+    #[cfg(not(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    )))]
+    async fn tls_handshake(self, _: &Config, encryption: EncryptionLevel) -> crate::Result<Self> {
+        match encryption {
+            // The caller explicitly asked for no encryption, or the server
+            // told us during PRELOGIN that it doesn't support any - either
+            // way, proceeding in cleartext here matches what was actually
+            // requested/negotiated, not a silent downgrade.
+            EncryptionLevel::Off | EncryptionLevel::NotSupported => {
+                event!(
+                    Level::WARN,
+                    "TLS encryption is not enabled. All traffic including the login credentials are not encrypted."
+                );
+
+                Ok(self)
+            }
+            // `On`/`Required` mean the caller asked for encryption and the
+            // server confirmed it supports it, but no TLS backend is
+            // compiled into this build to actually perform the handshake.
+            // Silently falling through to cleartext here (the old
+            // behavior) would leak the login credentials and all query
+            // traffic on the wire while the caller believes `encrypt=true`
+            // is in effect - fail loudly instead. `Strict` can't reach this
+            // function at all (see the hard error in `Connection::connect`
+            // when no TLS feature is compiled in), but is included for
+            // defense in depth.
+            EncryptionLevel::On | EncryptionLevel::Required | EncryptionLevel::Strict => {
+                Err(crate::Error::Tls(
+                    "TLS encryption was requested (or negotiated with the server), but no TLS feature (rustls, native-tls, or vendored-openssl) is enabled".into(),
+                ))
+            }
+        }
+    }
+
+    pub(crate) async fn close(mut self) -> crate::Result<()> {
+        self.transport.close().await
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin + Send> Stream for Connection<S> {
+    type Item = crate::Result<Packet>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        match ready!(this.transport.try_poll_next_unpin(cx)) {
+            Some(Ok(packet)) => {
+                this.flushed = packet.is_last();
+                Poll::Ready(Some(Ok(packet)))
+            }
+            Some(Err(e)) => Poll::Ready(Some(Err(e))),
+            None => Poll::Ready(None),
+        }
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin + Send> futures_util::io::AsyncRead for Connection<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        let mut this = self.get_mut();
+        let size = buf.len();
+
+        if this.buf.len() < size {
+            while let Some(item) = ready!(Pin::new(&mut this).try_poll_next(cx)) {
+                match item {
+                    Ok(packet) => {
+                        let (_, payload) = packet.into_parts();
+                        this.buf.extend(payload);
+
+                        if this.buf.len() >= size {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        return Poll::Ready(Err(io::Error::new(
+                            io::ErrorKind::BrokenPipe,
+                            e.to_string(),
+                        )))
+                    }
+                }
+            }
+
+            // Got EOF before having all the data.
+            if this.buf.len() < size {
+                return Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "No more packets in the wire",
+                )));
+            }
+        }
+
+        buf.copy_from_slice(this.buf.split_to(size).as_ref());
+        Poll::Ready(Ok(size))
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin + Send> SqlReadBytes for Connection<S> {
+    /// Hex dump of the current buffer.
+    fn debug_buffer(&self) {
+        dbg!(self.buf.as_ref().hex_dump());
+    }
+
+    /// The current execution context.
+    fn context(&self) -> &Context {
+        &self.context
+    }
+
+    /// A mutable reference to the current execution context.
+    fn context_mut(&mut self) -> &mut Context {
+        &mut self.context
+    }
+}

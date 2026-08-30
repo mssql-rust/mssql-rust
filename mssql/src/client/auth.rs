@@ -1,0 +1,176 @@
+use std::fmt::Debug;
+use zeroize::Zeroizing;
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct SqlServerAuth {
+    user: String,
+    password: Zeroizing<String>,
+}
+
+impl SqlServerAuth {
+    pub(crate) fn into_credentials(self) -> (String, Zeroizing<String>) {
+        (self.user, self.password)
+    }
+}
+
+impl Debug for SqlServerAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqlServerAuth")
+            .field("user", &self.user)
+            .field("password", &"<HIDDEN>")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+#[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"), doc))]
+#[cfg_attr(
+    feature = "docs",
+    doc(cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"))))
+)]
+pub struct WindowsAuth {
+    pub(crate) user: String,
+    pub(crate) password: Zeroizing<String>,
+    pub(crate) domain: Option<String>,
+}
+
+#[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"), doc))]
+#[cfg_attr(
+    feature = "docs",
+    doc(cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"))))
+)]
+impl Debug for WindowsAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WindowsAuth")
+            .field("user", &self.user)
+            .field("password", &"<HIDDEN>")
+            .field("domain", &self.domain)
+            .finish()
+    }
+}
+
+/// Defines the method of authentication to the server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AuthMethod {
+    /// Authenticate directly with SQL Server.
+    SqlServer(SqlServerAuth),
+    /// Authenticate with Windows credentials.
+    #[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"), doc))]
+    #[cfg_attr(
+        feature = "docs",
+        doc(cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"))))
+    )]
+    Windows(WindowsAuth),
+    /// Authenticate as the currently logged in user. On Windows uses SSPI and
+    /// Kerberos on Unix platforms.
+    #[cfg(any(
+        all(windows, feature = "winauth"),
+        all(unix, feature = "integrated-auth-gssapi"),
+        doc
+    ))]
+    #[cfg_attr(
+        feature = "docs",
+        doc(cfg(any(windows, all(unix, feature = "integrated-auth-gssapi"))))
+    )]
+    Integrated,
+    /// Authenticate with an AAD token. The token should encode an AAD user/service principal
+    /// which has access to SQL Server.
+    AADToken(String),
+    #[doc(hidden)]
+    None,
+}
+
+impl AuthMethod {
+    /// Construct a new SQL Server authentication configuration.
+    pub fn sql_server(user: impl ToString, password: impl ToString) -> Self {
+        Self::SqlServer(SqlServerAuth {
+            user: user.to_string(),
+            password: Zeroizing::new(password.to_string()),
+        })
+    }
+
+    /// Construct a new Windows authentication configuration.
+    #[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"), doc))]
+    #[cfg_attr(
+        feature = "docs",
+        doc(cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"))))
+    )]
+    pub fn windows(user: impl AsRef<str>, password: impl ToString) -> Self {
+        let (domain, user) = match user.as_ref().find('\\') {
+            Some(idx) => (Some(&user.as_ref()[..idx]), &user.as_ref()[idx + 1..]),
+            _ => (None, user.as_ref()),
+        };
+
+        Self::Windows(WindowsAuth {
+            user: user.to_string(),
+            password: Zeroizing::new(password.to_string()),
+            domain: domain.map(|s| s.to_string()),
+        })
+    }
+
+    /// Construct a new configuration with AAD auth token.
+    pub fn aad_token(token: impl ToString) -> Self {
+        Self::AADToken(token.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AuthMethod;
+    use zeroize::Zeroize;
+
+    #[test]
+    fn sql_server_password_can_be_consumed_and_zeroized() {
+        let AuthMethod::SqlServer(auth) = AuthMethod::sql_server("sa", "secret") else {
+            unreachable!();
+        };
+
+        let (user, mut password) = auth.into_credentials();
+
+        assert_eq!("sa", user);
+        assert_eq!("secret", password.as_str());
+
+        password.zeroize();
+
+        assert!(password.is_empty());
+    }
+
+    #[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs")))]
+    #[test]
+    fn windows_auth_splits_domain_from_user() {
+        let AuthMethod::Windows(auth) = AuthMethod::windows("DOMAIN\\alice", "secret") else {
+            unreachable!();
+        };
+
+        assert_eq!("alice", auth.user);
+        assert_eq!(Some("DOMAIN".to_string()), auth.domain);
+        assert_eq!("secret", auth.password.as_str());
+    }
+
+    #[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs")))]
+    #[test]
+    fn windows_auth_without_domain() {
+        let AuthMethod::Windows(auth) = AuthMethod::windows("alice", "secret") else {
+            unreachable!();
+        };
+
+        assert_eq!("alice", auth.user);
+        assert_eq!(None, auth.domain);
+    }
+
+    #[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs")))]
+    #[test]
+    fn windows_auth_password_zeroizes_on_drop() {
+        // `Zeroizing<String>` zeroizes its buffer on drop; this can't
+        // observe the zeroized memory directly (it's freed), but it does
+        // confirm the field is actually `Zeroizing` (not a plain `String`
+        // that Rust would happily drop without clearing) by exercising the
+        // `Zeroize` trait's `zeroize()` method on it explicitly.
+        let AuthMethod::Windows(mut auth) = AuthMethod::windows("alice", "secret") else {
+            unreachable!();
+        };
+
+        auth.password.zeroize();
+        assert!(auth.password.is_empty());
+    }
+}

@@ -1,0 +1,81 @@
+use super::split_pem_certs;
+use crate::{
+    client::{config::Config, TrustConfig},
+    error::{Error, IoErrorKind},
+};
+use futures_util::io::{AsyncRead, AsyncWrite};
+pub(crate) use opentls::async_io::{TlsConnector, TlsStream};
+use opentls::Certificate;
+use std::fs;
+use tracing::{event, Level};
+
+pub(crate) async fn create_tls_stream<S: AsyncRead + AsyncWrite + Unpin + Send>(
+    config: &Config,
+    stream: S,
+) -> crate::Result<TlsStream<S>> {
+    let mut builder = TlsConnector::new();
+
+    if config.encryption == crate::EncryptionLevel::Strict {
+        // Not fatal: SQL Server infers TDS 8.0 purely from the TLS
+        // handshake happening before any TDS bytes, independent of ALPN
+        // (see `EncryptionLevel::Strict`'s doc comment).
+        event!(
+            Level::WARN,
+            "vendored-openssl does not support requesting the TDS 8.0 ALPN protocol; proceeding without it. SQL Server will still recognize TDS 8.0 from the handshake ordering alone."
+        );
+    }
+
+    match &config.trust {
+        TrustConfig::CaCertificateLocation(path) => {
+            if let Ok(buf) = fs::read(path) {
+                let cert = match path.extension() {
+                        Some(ext)
+                        if ext.eq_ignore_ascii_case("pem")
+                            || ext.eq_ignore_ascii_case("crt") =>
+                            {
+                                Some(Certificate::from_pem(&buf)?)
+                            }
+                        Some(ext) if ext.eq_ignore_ascii_case("der") => {
+                            Some(Certificate::from_der(&buf)?)
+                        }
+                        Some(_) | None => return Err(Error::Io {
+                            kind: IoErrorKind::InvalidInput,
+                            message: "Provided CA certificate with unsupported file-extension! Supported types are pem, crt and der.".to_string()}),
+                    };
+                if let Some(c) = cert {
+                    builder = builder.add_root_certificate(c);
+                }
+            } else {
+                return Err(Error::Io {
+                    kind: IoErrorKind::InvalidData,
+                    message: "Could not read provided CA certificate!".to_string(),
+                });
+            }
+        }
+        TrustConfig::CaCertificateBundle(bundle) => {
+            for cert in split_pem_certs(bundle) {
+                builder = builder.add_root_certificate(Certificate::from_pem(cert)?);
+            }
+        }
+        TrustConfig::TrustAll => {
+            event!(
+                Level::WARN,
+                "Trusting the server certificate without validation."
+            );
+
+            builder = builder.danger_accept_invalid_certs(true);
+            builder = builder.danger_accept_invalid_hostnames(true);
+            builder = builder.use_sni(false);
+        }
+        TrustConfig::Default => {
+            event!(Level::INFO, "Using default trust configuration.");
+        }
+    }
+
+    let domain = config
+        .host_name_in_certificate
+        .as_deref()
+        .unwrap_or_else(|| config.get_host());
+
+    Ok(builder.connect(domain, stream).await?)
+}

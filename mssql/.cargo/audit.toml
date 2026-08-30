@@ -1,0 +1,46 @@
+# cargo-audit configuration.
+#
+# Every ignore below is a documented, accepted risk, not a suppression of
+# convenience. Re-check each one whenever `cargo audit` starts reporting it
+# again after a dependency bump, and remove the entry the moment a real fix
+# lands upstream.
+
+[advisories]
+ignore = [
+  # rkyv 0.7.46, pulled in only via rust_decimal's optional "rkyv" feature
+  # (rust_decimal's own default features are ["serde", "std"]). mssql does
+  # not request rust_decimal's "rkyv" feature and nothing else in the tree
+  # does either, so this crate is never compiled -- verified with
+  # `cargo build -v --features=all` showing only
+  # `--cfg feature="default" --cfg feature="serde" --cfg feature="std"`
+  # for rust_decimal. rust_decimal 1.42.1 is latest; there is no newer
+  # release that bumps its own rkyv requirement.
+  "RUSTSEC-2026-0235",
+
+  # async-std is a direct, optional runtime backend (the sql-browser-async-std
+  # and async-std features) alongside Tokio and smol -- supporting a choice of
+  # async runtime is a stated goal of this crate, not something to drop
+  # silently. async-std's discontinuation announcement doesn't affect the
+  # already-published, still-functional 1.13.x line. Revisit if/when a
+  # maintained fork emerges, or as part of a deliberate breaking-change
+  # decision to drop the runtime.
+  "RUSTSEC-2025-0052",
+
+  # rand 0.7.3, pulled in via winauth (Windows-only, cfg(windows), part of
+  # the default feature set). winauth 0.0.5 is its latest release and still
+  # pins rand 0.7; there has been no release addressing this. The advisory
+  # is about unsoundness when a custom logger interacts with rand::rng(),
+  # which winauth's internal NTLM/SSPI nonce generation does not do.
+  "RUSTSEC-2026-0097",
+
+  # rsa 0.10.0-rc.18 ("Marvin Attack" timing side-channel in PKCS#1 v1.5
+  # decrypt/sign), pulled in unconditionally by the `sspi` crate (via
+  # `picky`) for the sspi-rs feature (Unix, opt-in, off by default). `picky`
+  # is a mandatory dependency of `sspi` with no Cargo feature to disable it
+  # -- it backs sspi's Kerberos/PKU2U/certificate-based SSPs, none of which
+  # this crate uses: the sspi-rs feature only calls `sspi::Ntlm`, and NTLM
+  # is HMAC-MD5/MD4-based, never touching RSA. `cargo update -p rsa
+  # --dry-run` confirms 0.10.0-rc.18 is already the newest version picky
+  # accepts, matching the advisory's own "No fixed upgrade is available".
+  "RUSTSEC-2023-0071",
+]

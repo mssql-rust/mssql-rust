@@ -1,0 +1,263 @@
+name: Cargo tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+jobs:
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+      - name: Install dependencies
+        run: sudo apt install -y openssl libkrb5-dev
+      - name: Clippy
+        run: cargo clippy --features=all -- -D warnings
+
+  format:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+          components: rustfmt
+      - name: Rustfmt
+        run: cargo fmt --check
+
+  msrv:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: "1.96"
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+      - name: Install dependencies
+        run: sudo apt install -y openssl libkrb5-dev
+      # Verifies the rust-version declared in Cargo.toml (see
+      # spec/rust-msrv-n-minus-2/index.md): the code must compile on this pinned
+      # toolchain, not just claim to. A red msrv job means a change started
+      # requiring a newer compiler than the policy allows.
+      - name: Check MSRV
+        run: cargo check --all-targets --workspace
+
+  cargo-test-linux:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        database:
+          - 2017
+          - 2019
+          - 2022
+          - azure-sql-edge
+        features:
+          - "--features=all"
+          - "--no-default-features"
+          - "--no-default-features --features=chrono"
+          - "--no-default-features --features=time"
+          - "--no-default-features --features=rustls"
+          - "--no-default-features --features=rustls-webpki-roots"
+          - "--no-default-features --features=vendored-openssl"
+
+    env:
+      MSSQL_TEST_CONNECTION_STRING: "server=tcp:localhost,1433;user=SA;password=<YourStrong@Passw0rd>;TrustServerCertificate=true"
+      RUSTFLAGS: "-Dwarnings"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+
+      - name: Compute cache key
+        shell: bash
+        run: |
+          key="${{ matrix.features }}"
+          key="${key//,/+}"
+          echo "RUST_CACHE_KEY=$key" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          shared-key: ${{ env.RUST_CACHE_KEY }}
+
+      - name: Start SQL Server ${{matrix.database}}
+        run: DOCKER_BUILDKIT=1 docker compose -f docker-compose.yml up -d mssql-${{matrix.database}}
+
+      - name: Install dependencies
+        run: sudo apt install -y openssl libkrb5-dev
+
+      - name: Run tests
+        run: cargo test ${{matrix.features}}
+
+  cargo-test-windows:
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        database:
+          - 2019
+        features:
+          - "--features=all"
+          - "--no-default-features --features=rustls,winauth"
+          - "--no-default-features --features=vendored-openssl,winauth"
+
+    env:
+      MSSQL_TEST_INSTANCE: "MSSQLSERVER"
+      MSSQL_TEST_CONNECTION_STRING: "server=tcp:127.0.0.1,1433;IntegratedSecurity=true;TrustServerCertificate=true"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+
+      - name: Compute cache key
+        shell: bash
+        run: |
+          key="${{ matrix.features }}"
+          key="${key//,/+}"
+          echo "RUST_CACHE_KEY=$key" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          shared-key: ${{ env.RUST_CACHE_KEY }}
+
+      - name: Set required PowerShell modules
+        id: psmodulecache
+        uses: potatoqualitee/psmodulecache@ee5e9494714abf56f6efbfa51527b2aec5c761b8  # v6.2.1
+        with:
+          modules-to-cache: SqlServer
+
+      - name: Setup Chocolatey download cache
+        id: chococache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: C:\Users\runneradmin\AppData\Local\Temp\chocolatey\
+          key: chocolatey-install
+
+      - name: Install required PowerShell modules
+        shell: powershell
+        run: |
+            Set-PSRepository PSGallery -InstallationPolicy Trusted
+            Install-Module SqlServer
+
+      - name: Install SQL Server ${{matrix.database}}
+        shell: powershell
+        run: |
+          choco feature disable --name="'exitOnRebootDetected'"
+          $ErrorActionPreference = 'SilentlyContinue'
+          choco install sql-server-${{matrix.database}} --params="'/IgnorePendingReboot'"
+
+      - name: Setup SQL Server ${{matrix.database}}
+        shell: powershell
+        run: |
+          Import-Module 'sqlps'
+
+          [reflection.assembly]::LoadWithPartialName("Microsoft.SqlServer.Smo") | Out-Null
+          [reflection.assembly]::LoadWithPartialName("Microsoft.SqlServer.SqlWmiManagement") | Out-Null
+
+          $serverName = $env:COMPUTERNAME
+          $instanceName = "MSSQLSERVER"
+
+          $smo = 'Microsoft.SqlServer.Management.Smo.'
+          $wmi = new-object ($smo + 'Wmi.ManagedComputer')
+          $wmi
+
+          # Enable TCP/IP
+          echo "Enabling TCP/IP"
+          $Tcp = $wmi.GetSmoObject("ManagedComputer[@Name='$serverName']/ServerInstance[@Name='$instanceName']/ServerProtocol[@Name='Tcp']")
+          $Tcp.IsEnabled = $true
+          $Tcp.alter()
+          $Tcp
+
+          # Enable named pipes
+          echo "Enabling named pipes"
+          $Np = $wmi.GetSmoObject("ManagedComputer[@Name='$serverName']/ServerInstance[@Name='$instanceName']/ServerProtocol[@Name='Np']")
+          $Np.IsEnabled = $true
+          $Np.Alter()
+          $Np
+
+          # Set Alias
+          echo "Setting the alias"
+          New-Item HKLM:\SOFTWARE\Microsoft\MSSQLServer\Client -Name ConnectTo | Out-Null
+          Set-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\MSSQLServer\Client\ConnectTo -Name '(local)' -Value "DBMSSOCN,$serverName\$instanceName" | Out-Null
+
+          # Start services
+          echo "Starting services"
+          Set-Service SQLBrowser -StartupType Manual
+          Start-Service SQLBrowser
+          net stop MSSQLSERVER
+          net start MSSQLSERVER
+
+      - name: Run normal tests
+        shell: powershell
+        run: cargo test ${{matrix.features}}
+
+  cargo-test-macos:
+    runs-on: macos-26-intel
+
+    strategy:
+      fail-fast: false
+      matrix:
+        database:
+          - 2019
+        features:
+          - "--no-default-features --features=rustls,chrono,time,tds73,sql-browser-async-std,sql-browser-tokio,sql-browser-smol,integrated-auth-gssapi,rust_decimal,bigdecimal"
+          - "--no-default-features --features=vendored-openssl"
+
+    env:
+      MSSQL_TEST_CONNECTION_STRING: "server=tcp:localhost,1433;user=SA;password=<YourStrong@Passw0rd>;TrustServerCertificate=true"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+
+      - name: Compute cache key
+        shell: bash
+        run: |
+          key="${{ matrix.features }}"
+          key="${key//,/+}"
+          echo "RUST_CACHE_KEY=$key" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          shared-key: ${{ env.RUST_CACHE_KEY }}
+
+      - uses: docker/setup-docker-action@b2189fbf2a6592b51fee7cdd93ee2bfaeba733db  # v5.1.0
+
+      - name: Install docker compose plugin
+        run: brew install docker-compose
+
+      - name: Start SQL Server ${{matrix.database}}
+        run: DOCKER_BUILDKIT=1 docker compose -f docker-compose.yml up -d mssql-${{matrix.database}}
+
+      - name: Run tests
+        run: cargo test ${{matrix.features}}
