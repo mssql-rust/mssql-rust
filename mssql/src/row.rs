@@ -252,26 +252,65 @@ pub struct Row {
     pub(crate) result_index: usize,
 }
 
+/// A type that can be used to index into a [`Row`], resolving to a column's
+/// position. Implemented for `usize` (a zero-based column index) and `&str`
+/// (a column name); implement it for your own type to write a generic
+/// wrapper around [`Row::get`]/[`Row::try_get`].
 pub trait QueryIdx
 where
     Self: Display,
 {
+    /// Resolves `self` to a column's zero-based position in `row`, or `None`
+    /// if no such column exists.
     fn idx(&self, row: &Row) -> Option<usize>;
 }
 
 impl QueryIdx for usize {
-    fn idx(&self, _row: &Row) -> Option<usize> {
-        Some(*self)
+    fn idx(&self, row: &Row) -> Option<usize> {
+        if *self < row.len() {
+            Some(*self)
+        } else {
+            None
+        }
     }
 }
 
 impl QueryIdx for &str {
     fn idx(&self, row: &Row) -> Option<usize> {
-        row.columns.iter().position(|c| c.name() == *self)
+        // A `FromRow`-style derive macro built on `stringify!(field)` produces
+        // `r#type` for a field named after a Rust keyword; strip that prefix
+        // so it matches a column literally named `type` (which is not itself
+        // a valid raw-identifier-prefixed SQL name, so this can't shadow a
+        // real column).
+        let name = self.strip_prefix("r#").unwrap_or(self);
+        row.columns.iter().position(|c| c.name() == name)
     }
 }
 
 impl Row {
+    /// Construct a `Row` from its columns and data, for example to build
+    /// fixture values in a test without a live connection.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use mssql::{Column, ColumnData, ColumnType, Row, TokenRow};
+    /// let columns = vec![Column::new("id".into(), ColumnType::Int4)];
+    ///
+    /// let mut data = TokenRow::new();
+    /// data.push(ColumnData::I32(Some(1)));
+    ///
+    /// let row = Row::new(columns, data);
+    /// assert_eq!(Some(1i32), row.get("id"));
+    /// ```
+    pub fn new(columns: Vec<Column>, data: TokenRow<'static>) -> Self {
+        Self {
+            columns: Arc::new(columns),
+            data,
+            result_index: 0,
+        }
+    }
+
     /// Columns defining the row data. Columns listed here are in the same order
     /// as the resulting data.
     ///
@@ -405,11 +444,13 @@ impl Row {
         R: FromSql<'a>,
         I: QueryIdx,
     {
-        let idx = idx.idx(self).ok_or_else(|| {
+        let column_idx = idx.idx(self).ok_or_else(|| {
             Error::Conversion(format!("Could not find column with index {}", idx).into())
         })?;
 
-        let data = self.data.get(idx).unwrap();
+        let data = self.data.get(column_idx).ok_or_else(|| {
+            Error::Conversion(format!("Could not find column with index {}", idx).into())
+        })?;
 
         R::from_sql(data)
     }
