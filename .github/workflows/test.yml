@@ -282,19 +282,46 @@ jobs:
       - name: Start SQL Server ${{matrix.database}}
         # The Lima/Docker VM on this runner intermittently fails an image
         # pull with "failed to validate image signature" (a content-trust
-        # resolver hiccup, not a real signature problem — retrying the
-        # same pull succeeds). Seen twice so far with no code change in
-        # between; retry a few times before giving up for real.
+        # resolver hiccup, not a real signature problem — retrying usually
+        # succeeds). This surfaces *after* `docker compose up -d` already
+        # reported success — the failed layer pull happens lazily, so the
+        # container comes up but SQL Server itself never starts, and the
+        # tests immediately after got a connection reset rather than a
+        # docker-level error. Retrying the `up` command alone (the first
+        # attempt at this fix) wasn't enough for exactly that reason —
+        # confirmed live: "Start SQL Server" passed but every test then
+        # failed with `Io { kind: UnexpectedEof }`.
+        #
+        # So wait for the server to actually report ready, the same way
+        # docker/test-server.sh does for local runs (log-polled, not
+        # `grep -q`, to dodge that script's own documented SIGPIPE/
+        # pipefail trap); retry the whole up/down cycle if it never does.
         run: |
           for attempt in 1 2 3; do
-            if DOCKER_BUILDKIT=1 docker compose -f docker-compose.yml up -d mssql-${{matrix.database}}; then
+            DOCKER_BUILDKIT=1 docker compose -f docker-compose.yml up -d mssql-${{matrix.database}} || true
+
+            ready=0
+            for _ in $(seq 1 60); do
+              logs="$(docker compose -f docker-compose.yml logs mssql-${{matrix.database}} 2>&1 || true)"
+              case "$logs" in
+                *"SQL Server is now ready for client connections"*)
+                  ready=1
+                  break
+                  ;;
+              esac
+              sleep 2
+            done
+
+            if [ "$ready" = 1 ]; then
               exit 0
             fi
-            echo "docker compose up failed (attempt $attempt/3); cleaning up and retrying..."
+
+            echo "SQL Server not ready (attempt $attempt/3); cleaning up and retrying..."
             docker compose -f docker-compose.yml down -v || true
             sleep 10
           done
-          echo "docker compose up failed after 3 attempts"
+          echo "SQL Server never became ready after 3 attempts; last logs:"
+          docker compose -f docker-compose.yml logs mssql-${{matrix.database}} | tail -30
           exit 1
 
       - name: Run tests
