@@ -33,5 +33,5 @@ re-deriving their content by reading the whole tree each time:
   site; `github.com/mssql-rust/mssql-rust.github.io` (and, if cloned,
   `~/git/mssql-rust/mssql-rust.github.io`, a *sibling* of this checkout)
   is a read-only export derived from it via `git subtree` — never edit the
-  export directly. Publish a change with `bin/publish-pages.sh`. See
+  export directly. Publish a change with `make github-pages`. See
   [`spec/monorepo-github-pages/index.md`](spec/monorepo-github-pages/index.md).

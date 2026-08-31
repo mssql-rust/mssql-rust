@@ -9,7 +9,7 @@ deploy anything by itself: `github.com/mssql-rust/mssql-rust.github.io` is a
 separate, read-only export repo (GitHub Pages needs a repo literally named
 `<org>.github.io`), and *its* push to `main` is what runs
 [`.github/workflows/deploy.yml`](../mssql-rust.github.io/.github/workflows/deploy.yml).
-Getting a change live means running `bin/publish-pages.sh` (from the
+Getting a change live means running `make github-pages` (from the
 monorepo root) to derive that export via `git subtree push` — see
 [`spec/monorepo-github-pages/index.md`](../spec/monorepo-github-pages/index.md).
 Never edit the export directly; treat it the same way as any other
