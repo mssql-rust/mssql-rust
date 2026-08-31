@@ -76,8 +76,8 @@ session or another) a faster on-ramp than reading everything above:
 
 - [`mssql-skill/`](mssql-skill/) — using the crate: concepts, feature flags,
   which example to reach for.
-- [`mssql-maintainer-skill/`](mssql-maintainer-skill/) — maintaining the
-  fork: PR/issue triage, verification commands, release steps.
+- [`mssql-rust-maintainer-skill/`](mssql-rust-maintainer-skill/) — maintaining
+  the fork: PR/issue triage, verification commands, release steps.
 
 Load the one that matches the task; this file and the `agents/` guides are
 still the source of truth if a skill and this file ever disagree.

@@ -11,7 +11,7 @@ re-deriving their content by reading the whole tree each time:
 
 - `/mssql-skill` when writing or reviewing code that *uses* the crate
   (connecting, choosing a TLS backend or auth method, picking feature flags).
-- `/mssql-maintainer-skill` when triaging an upstream Tiberius PR/issue,
+- `/mssql-rust-maintainer-skill` when triaging an upstream Tiberius PR/issue,
   verifying a change, or preparing a release.
 
 ## Local conventions worth knowing before you start

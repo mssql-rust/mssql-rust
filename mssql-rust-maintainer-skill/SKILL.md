@@ -1,5 +1,5 @@
 ---
-name: mssql-maintainer-skill
+name: mssql-rust-maintainer-skill
 description: Technical maintenance skill for this fork of Tiberius — triaging an upstream Tiberius PR or issue, verifying a change before claiming it works, and preparing a release. Use when the task is maintaining, fixing, or reviewing this fork itself, as opposed to writing application code against the `mssql` crate (that's `mssql-skill`).
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: mssql-skill
-description: Explains how to use the `mssql` crate to talk to Microsoft SQL Server from Rust — connecting, choosing a TLS backend or authentication method, TDS wire-protocol basics as they show up in the API, picking feature flags, and where to find a worked example in this repo. Use when someone is writing Rust code against `mssql`, as opposed to maintaining the fork itself (that's `mssql-maintainer-skill`).
+description: Explains how to use the `mssql` crate to talk to Microsoft SQL Server from Rust — connecting, choosing a TLS backend or authentication method, TDS wire-protocol basics as they show up in the API, picking feature flags, and where to find a worked example in this repo. Use when someone is writing Rust code against `mssql`, as opposed to maintaining the fork itself (that's `mssql-rust-maintainer-skill`).
 ---
 
 # Using the mssql crate
@@ -9,7 +9,7 @@ This skill is for **people writing Rust code against `mssql`**: connecting to
 SQL Server, choosing a TLS backend or authentication method, picking feature
 flags, running a query or a bulk insert. It is not the maintainer's guide —
 for triaging upstream Tiberius PRs/issues, releasing, or auditing this fork's
-policy compliance, `mssql-maintainer-skill` covers that instead.
+policy compliance, `mssql-rust-maintainer-skill` covers that instead.
 
 `mssql` is a native, asynchronous, runtime-independent TDS (Tabular Data
 Stream) client for Microsoft SQL Server. It is a maintenance-focused fork of

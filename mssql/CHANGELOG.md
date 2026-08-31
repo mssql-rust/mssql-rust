@@ -14,6 +14,8 @@ forward.
 
 ## Unreleased
 
+## Version 1.0.0
+
 ### Added
 
 - `Config::builder()` / `ConfigBuilder`, a chainable alternative to
