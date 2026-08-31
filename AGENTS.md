@@ -84,10 +84,13 @@ still the source of truth if a skill and this file ever disagree.
 
 ## What not to do without asking
 
-- Don't push to any of the `origin` remotes (GitHub/Codeberg/GitLab, all
-  `mssql-rust/mssql-rust`) — they currently hold the pre-monorepo,
-  crate-only history, and the first push here needs a deliberate decision
-  about how that reconciles.
+- Don't force-push to any of the `origin` remotes (GitHub/Codeberg/GitLab,
+  all `mssql-rust/mssql-rust`) or to the `pages` remote
+  (`mssql-rust/mssql-rust.github.io`) — a plain push is routine (feature
+  branches, tags), but a force-push can silently roll back history or, for
+  `pages`, the live site; if a plain push is rejected as non-fast-forward,
+  that's the safety mechanism working, not something to override without
+  understanding why.
 - Don't bump a dependency's version, or the crate's own version, as a side
   effect of an unrelated change.
 - Don't relicense, remove the Tiberius attribution, or change the MSRV

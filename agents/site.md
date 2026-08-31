@@ -1,10 +1,19 @@
 # Editing `mssql-rust.github.io/`
 
 A SvelteKit static site (adapter-static), deployed to GitHub Pages at
-https://mssql-rust.github.io/ by
-[`.github/workflows/deploy.yml`](../mssql-rust.github.io/.github/workflows/deploy.yml)
-on every push to `main`. It is not published anywhere else, and has no
+https://mssql-rust.github.io/. It is not published anywhere else, and has no
 relationship to crates.io publishing — see [`release.md`](release.md).
+
+This directory is the source of truth, but editing it here does **not**
+deploy anything by itself: `github.com/mssql-rust/mssql-rust.github.io` is a
+separate, read-only export repo (GitHub Pages needs a repo literally named
+`<org>.github.io`), and *its* push to `main` is what runs
+[`.github/workflows/deploy.yml`](../mssql-rust.github.io/.github/workflows/deploy.yml).
+Getting a change live means running `bin/publish-pages.sh` (from the
+monorepo root) to derive that export via `git subtree push` — see
+[`spec/monorepo-github-pages/index.md`](../spec/monorepo-github-pages/index.md).
+Never edit the export directly; treat it the same way as any other
+generated artifact.
 
 ## Toolchain
 
