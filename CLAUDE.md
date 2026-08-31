@@ -29,3 +29,9 @@ re-deriving their content by reading the whole tree each time:
   [`spec/llms-json-and-llms-txt/index.md`](spec/llms-json-and-llms-txt/index.md) —
   it documents a real mistake (a verbatim copy whose self-reference link
   pointed at the wrong domain) worth not repeating.
+- `mssql-rust.github.io/` here is the source of truth for the GitHub Pages
+  site; `github.com/mssql-rust/mssql-rust.github.io` (and, if cloned,
+  `~/git/mssql-rust/mssql-rust.github.io`, a *sibling* of this checkout)
+  is a read-only export derived from it via `git subtree` — never edit the
+  export directly. Publish a change with `bin/publish-pages.sh`. See
+  [`spec/monorepo-github-pages/index.md`](spec/monorepo-github-pages/index.md).
