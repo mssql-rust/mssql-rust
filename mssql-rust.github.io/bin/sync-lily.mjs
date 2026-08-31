@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Vendor the Lily Design System pieces this site uses.
 //
-// Lily's Svelte headless components and helpers are MIT licensed. The helpers
-// are not published to npm, and the local checkout runs ahead of the published
-// headless package, so the site vendors both from the sibling checkout and
-// records the source commit in src/lib/lily/VENDOR.md.
+// Lily's Svelte headless components and helpers are MIT licensed and also
+// published to npm, but the local checkout runs ahead of the published
+// packages, so the site vendors both from the sibling checkout and records
+// the source commit plus each package's npm link in src/lib/lily/VENDOR.md.
 //
 // Source: $LILY if set, else ~/git/lilydesignsystem/lily-design-system.
 // Run after Lily changes:  npm run sync:lily
@@ -53,8 +53,12 @@ const components = [
 // Helper packages: directory name -> component file.
 const helperComponents = [
 	['lily-design-system-svelte-theme-picker', 'ThemePicker.svelte'],
-	['lily-design-system-svelte-text-size-picker', 'TextSizePicker.svelte']
+	['lily-design-system-svelte-text-size-picker', 'TextSizePicker.svelte'],
+	['lily-design-system-svelte-share-picker', 'SharePicker.svelte']
 ];
+
+const HEADLESS_PACKAGE = 'lily-design-system-svelte-headless';
+const npmUrl = (pkg) => `https://www.npmjs.com/package/${pkg}`;
 
 const lilyDir = join(siteRoot, 'src', 'lib', 'lily');
 await rm(lilyDir, { recursive: true, force: true });
@@ -106,8 +110,10 @@ These files are copied verbatim from the Lily Design System (MIT licence) by
 
 - Source: <https://github.com/LilyDesignSystem>
 - Commit: \`${commit}\`
-- Components: ${components.join(', ')}
-- Helpers: ${helperComponents.map(([, file]) => file.replace('.svelte', '')).join(', ')}
+- Components: ${components.join(', ')}, from [\`${HEADLESS_PACKAGE}\`](${npmUrl(HEADLESS_PACKAGE)}) on npm
+- Helpers: ${helperComponents
+		.map(([pkg, file]) => `[${file.replace('.svelte', '')}](${npmUrl(pkg)})`)
+		.join(', ')}
 - Themes: \`static/themes/\` (${themeFiles.join(', ')})
 `
 );

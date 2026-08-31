@@ -1,9 +1,12 @@
 <script>
+	import { page } from '$app/state';
 	import SkipLink from '$lib/lily/components/SkipLink.svelte';
 	import Header from '$lib/lily/components/Header.svelte';
 	import Footer from '$lib/lily/components/Footer.svelte';
 	import ThemePicker from '$lib/lily/helpers/ThemePicker.svelte';
 	import TextSizePicker from '$lib/lily/helpers/TextSizePicker.svelte';
+	import SharePicker from '$lib/lily/helpers/SharePicker.svelte';
+	import { SHARE_TARGETS, promptMastodonShare } from '$lib/share.js';
 	import {
 		CODEBERG,
 		DOCS_RS,
@@ -18,6 +21,19 @@
 	import '../styles/site.css';
 
 	let { children } = $props();
+
+	const shareTitle = $derived(page.data.title ?? SITE_NAME);
+
+	// Mastodon has no single share-intent URL (see src/lib/share.js), so its
+	// link is intercepted here — SharePicker spreads `onclick` onto its root,
+	// and the click bubbles up from the `<a data-target-id="mastodon">` it
+	// renders for the target below.
+	function onShareClick(event) {
+		const link = event.target.closest?.('a[data-target-id="mastodon"]');
+		if (!link) return;
+		event.preventDefault();
+		promptMastodonShare(page.url.href, shareTitle);
+	}
 </script>
 
 <SkipLink href="#main" label="Skip to main content" />
@@ -46,6 +62,13 @@
 				themeLabels={THEME_LABELS}
 				storageKey="mssql-rust-theme"
 				detectFromSystem
+			/>
+			<SharePicker
+				label="Share"
+				targets={SHARE_TARGETS}
+				url={page.url.href}
+				title={shareTitle}
+				onclick={onShareClick}
 			/>
 		</div>
 	</div>
