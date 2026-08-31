@@ -13,10 +13,11 @@
 		DOCS_RS,
 		REPOSITORY,
 		SITE_NAME,
-		SITE_TAGLINE,
 		SITE_URL,
 		TIBERIUS
 	} from '$lib/site.js';
+
+	let { data } = $props();
 
 	const installCommand = 'cargo add mssql';
 	let copied = $state(false);
@@ -61,13 +62,13 @@
 </script>
 
 <svelte:head>
-	<title>{SITE_NAME} — {SITE_TAGLINE}</title>
+	<title>{data.title}</title>
 	<meta
 		name="description"
 		content="mssql is a native, async Rust client for Microsoft SQL Server (TDS), forked from Tiberius to prioritize ongoing maintenance and security updates."
 	/>
 	<link rel="canonical" href={`${SITE_URL}/`} />
-	<meta property="og:title" content={`${SITE_NAME} — ${SITE_TAGLINE}`} />
+	<meta property="og:title" content={data.title} />
 	<meta
 		property="og:description"
 		content="A native, async Rust client for Microsoft SQL Server (TDS), forked from Tiberius to prioritize ongoing maintenance and security updates."
