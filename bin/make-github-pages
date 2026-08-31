@@ -1,0 +1,27 @@
+#!/bin/sh
+# Push mssql-rust.github.io/ to the `github-pages` remote via git subtree,
+# per spec/monorepo-github-pages/index.md. `make github-pages` (see the
+# Makefile) delegates here rather than inlining the command, so it can be
+# run and read standalone like any other bin/ script.
+#
+# Requires a `github-pages` remote pointing at the deployed Pages repo (a
+# remote is local git config, not something this repository can commit) —
+# added on first use if a fresh clone doesn't have it yet.
+#
+# `git subtree push` is a plain (non-force) push under the hood, so it
+# refuses to overwrite the export with older content — run this from a
+# checkout whose mssql-rust.github.io/ is at least as current as what's
+# already published, or it fails with "non-fast-forward" rather than
+# silently rolling the live site back.
+#
+# Run from anywhere in the working tree: bin/make-github-pages
+
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+
+git remote get-url github-pages >/dev/null 2>&1 || \
+	git remote add github-pages git@github.com:mssql-rust/mssql-rust.github.io.git
+
+exec git subtree push --prefix=mssql-rust.github.io github-pages main
