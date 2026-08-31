@@ -1,9 +1,9 @@
 version: 2
 updates:
-  # Rust dependencies (Cargo.toml at the workspace root covers the
+  # Rust dependencies (Cargo.toml at the mssql/ workspace root covers the
   # runtimes-macro member too).
   - package-ecosystem: "cargo"
-    directory: "/"
+    directory: "/mssql"
     schedule:
       interval: "weekly"
     commit-message:
