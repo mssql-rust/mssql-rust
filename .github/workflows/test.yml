@@ -280,7 +280,22 @@ jobs:
         run: brew install docker-compose
 
       - name: Start SQL Server ${{matrix.database}}
-        run: DOCKER_BUILDKIT=1 docker compose -f docker-compose.yml up -d mssql-${{matrix.database}}
+        # The Lima/Docker VM on this runner intermittently fails an image
+        # pull with "failed to validate image signature" (a content-trust
+        # resolver hiccup, not a real signature problem — retrying the
+        # same pull succeeds). Seen twice so far with no code change in
+        # between; retry a few times before giving up for real.
+        run: |
+          for attempt in 1 2 3; do
+            if DOCKER_BUILDKIT=1 docker compose -f docker-compose.yml up -d mssql-${{matrix.database}}; then
+              exit 0
+            fi
+            echo "docker compose up failed (attempt $attempt/3); cleaning up and retrying..."
+            docker compose -f docker-compose.yml down -v || true
+            sleep 10
+          done
+          echo "docker compose up failed after 3 attempts"
+          exit 1
 
       - name: Run tests
         run: cargo test ${{matrix.features}}
