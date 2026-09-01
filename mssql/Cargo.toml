@@ -15,7 +15,7 @@ name = "mssql"
 readme = "README.md"
 repository = "https://github.com/mssql-rust/mssql-rust"
 rust-version.workspace = true
-version = "1.0.0"
+version = "1.0.1"
 
 [workspace]
 members = ["runtimes-macro"]
