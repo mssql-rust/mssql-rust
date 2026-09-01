@@ -332,7 +332,18 @@ impl TypeInfo {
                     VarLenType::Image | VarLenType::Text | VarLenType::NText => {
                         src.read_u32_le().await? as usize
                     }
-                    _ => todo!("not yet implemented for {:?}", ty),
+                    // SSVariant (sql_variant) and Udt (CLR user-defined type)
+                    // are real, on-the-wire column types a conforming server
+                    // can send in COLMETADATA — VarLenType::try_from above
+                    // accepts their byte values, so falling through here on
+                    // an unimplemented type must return an error rather than
+                    // panic; see Error::Protocol below and the same pattern
+                    // just above for an unrecognized type byte entirely.
+                    _ => {
+                        return Err(Error::Protocol(
+                            format!("unsupported column type: {:?}", ty).into(),
+                        ))
+                    }
                 };
 
                 let collation = match ty {
@@ -413,5 +424,27 @@ mod tests {
 
             assert_eq!(nti, ti)
         }
+    }
+
+    // SSVariant (0x62) and Udt (0xF0) are real VarLenType byte values a
+    // conforming server can send in COLMETADATA — VarLenType::try_from
+    // accepts them — but neither is implemented, so decode used to hit
+    // `todo!()` and panic on nothing malformed. See prisma/tiberius#424.
+    #[tokio::test]
+    async fn decode_rejects_ssvariant_instead_of_panicking() {
+        let mut buf = BytesMut::new();
+        buf.put_u8(VarLenType::SSVariant as u8);
+
+        let result = TypeInfo::decode(&mut buf.into_sql_read_bytes()).await;
+        assert!(matches!(result, Err(Error::Protocol(_))));
+    }
+
+    #[tokio::test]
+    async fn decode_rejects_udt_instead_of_panicking() {
+        let mut buf = BytesMut::new();
+        buf.put_u8(VarLenType::Udt as u8);
+
+        let result = TypeInfo::decode(&mut buf.into_sql_read_bytes()).await;
+        assert!(matches!(result, Err(Error::Protocol(_))));
     }
 }

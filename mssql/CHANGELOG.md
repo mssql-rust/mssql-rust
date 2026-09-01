@@ -14,6 +14,33 @@ forward.
 
 ## Unreleased
 
+### Security
+
+Three more sites in the same denial-of-service class as the "seven sites"
+fix for prisma/tiberius#424 (v1.0.0's Security section above), found by an
+internal security review's fuzzing harness rather than upstream:
+
+- `TypeInfo::decode` panicked with `todo!()` on a COLMETADATA column of
+  type `SSVariant` (`sql_variant`, 0x62) or `Udt` (a CLR user-defined
+  type, 0xF0) — both real, on-the-wire type bytes a conforming server can
+  send; `VarLenType::try_from` already accepted them, so nothing
+  malformed was needed to reach the panic.
+- `TokenEnvChange::decode` used a bare `assert!(len == 8)` — live in
+  release builds, unlike `debug_assert!` — on the transaction descriptor
+  length in a `BeginTransaction`/`EnlistDTCTransaction` ENVCHANGE token;
+  255 of the 256 possible byte values triggered it.
+- `column_data::int::decode` panicked with `unimplemented!()` on any
+  `Intn` length byte other than 0, 1, 2, 4, or 8.
+
+All three now return `Error::Protocol` instead. Fixing the first also
+closed off three further `todo!()`/`unimplemented!()` sites downstream
+(`BaseMetaDataColumn::null_value`'s and `column_data::var_len::decode`'s
+`Udt`/`SSVariant` arms, and `ColumnData::decode`'s catch-all for
+`VarLenSizedPrecision`) that depended on a `TypeInfo` carrying one of
+these type tags ever existing — traced the full call graph to confirm
+each is now genuinely unreachable, not just untested, and left them as
+`unreachable!()` rather than silently deleting the arms.
+
 ## Version 1.0.0
 
 ### Added
