@@ -14,6 +14,8 @@ forward.
 
 ## Unreleased
 
+## Version 1.0.1
+
 ### Security
 
 Three more sites in the same denial-of-service class as the "seven sites"
