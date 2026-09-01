@@ -14,6 +14,8 @@ forward.
 
 ## Unreleased
 
+## Version 1.0.2
+
 ### Fixed
 
 - `VarLenContext::encode` panicked with `todo!()` when asked to encode a
