@@ -117,7 +117,19 @@ impl Encode<BytesMut> for VarLenContext {
                 dst.put_u32_le(self.len() as u32);
             }
             VarLenType::Xml => (),
-            typ => todo!("encoding {:?} is not supported yet", typ),
+            // Encode-side counterpart of the decode-side fix for SSVariant
+            // and Udt (TypeInfo::decode, above): those are the only two
+            // VarLenType values not covered by an arm here either. Unlike
+            // the decode side, this isn't server-controlled — the caller
+            // (e.g. bulk_insert with a hand-built VarLenContext) supplies
+            // the type — so it's not the same DoS class, but a `todo!()`
+            // is still a client-triggerable panic where an `Err` reads no
+            // worse. Present upstream too.
+            typ => {
+                return Err(Error::Protocol(
+                    format!("encoding {:?} is not supported yet", typ).into(),
+                ))
+            }
         }
 
         if let Some(collation) = self.collation() {
@@ -445,6 +457,28 @@ mod tests {
         buf.put_u8(VarLenType::Udt as u8);
 
         let result = TypeInfo::decode(&mut buf.into_sql_read_bytes()).await;
+        assert!(matches!(result, Err(Error::Protocol(_))));
+    }
+
+    // Encode-side counterpart: not server-controlled (the caller supplies
+    // the type, e.g. via bulk_insert), so not the same DoS class as the two
+    // above, but still a client-triggerable `todo!()` worth not panicking
+    // on either. An observation from review, not a reported finding.
+    #[tokio::test]
+    async fn encode_rejects_ssvariant_instead_of_panicking() {
+        let cx = VarLenContext::new(VarLenType::SSVariant, 0, None);
+        let mut buf = BytesMut::new();
+
+        let result = TypeInfo::VarLenSized(cx).encode(&mut buf);
+        assert!(matches!(result, Err(Error::Protocol(_))));
+    }
+
+    #[tokio::test]
+    async fn encode_rejects_udt_instead_of_panicking() {
+        let cx = VarLenContext::new(VarLenType::Udt, 0, None);
+        let mut buf = BytesMut::new();
+
+        let result = TypeInfo::VarLenSized(cx).encode(&mut buf);
         assert!(matches!(result, Err(Error::Protocol(_))));
     }
 }

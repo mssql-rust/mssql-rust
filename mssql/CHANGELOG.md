@@ -14,6 +14,15 @@ forward.
 
 ## Unreleased
 
+### Fixed
+
+- `VarLenContext::encode` panicked with `todo!()` when asked to encode a
+  `VarLenType::SSVariant` or `VarLenType::Udt` column (e.g. via
+  `bulk_insert` with a hand-built `TypeInfo`) — the encode-side
+  counterpart of `TypeInfo::decode`'s `SSVariant`/`Udt` fix in 1.0.1.
+  Client-triggered, not server-controlled, so not the same DoS class;
+  present upstream too. Now returns `Error::Protocol`.
+
 ## Version 1.0.1
 
 ### Security
