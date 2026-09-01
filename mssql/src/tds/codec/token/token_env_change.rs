@@ -213,7 +213,18 @@ impl TokenEnvChange {
             }
             EnvChangeTy::BeginTransaction | EnvChangeTy::EnlistDTCTransaction => {
                 let len = buf.read_u8()?;
-                assert!(len == 8);
+
+                // A transaction descriptor is always 8 bytes per MS-TDS, but
+                // `len` is server-controlled wire data — 255 of 256 possible
+                // byte values would have hit this `assert!` and panicked
+                // (live in release builds, unlike `debug_assert!`), so a
+                // buggy or malicious server sending anything else is a
+                // denial of service. Return a protocol error instead.
+                if len != 8 {
+                    return Err(Error::Protocol(
+                        format!("invalid transaction descriptor length: {len}").into(),
+                    ));
+                }
 
                 let mut desc = [0; 8];
                 buf.read_exact(&mut desc)?;
@@ -258,5 +269,30 @@ impl TokenEnvChange {
         };
 
         Ok(token)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+    use bytes::{BufMut, BytesMut};
+
+    // The transaction descriptor length is server-controlled wire data
+    // (255 of 256 byte values are not 8), and this was a bare `assert!`
+    // rather than `debug_assert!`, so it panicked live in release builds
+    // too. See prisma/tiberius#424.
+    #[tokio::test]
+    async fn decode_rejects_wrong_transaction_descriptor_length_instead_of_panicking() {
+        let mut buf = BytesMut::new();
+        buf.put_u8(EnvChangeTy::BeginTransaction as u8);
+        buf.put_u8(3); // valid descriptor length is always 8
+
+        let mut framed = BytesMut::new();
+        framed.put_u16_le(buf.len() as u16);
+        framed.extend_from_slice(&buf);
+
+        let result = TokenEnvChange::decode(&mut framed.into_sql_read_bytes()).await;
+        assert!(matches!(result, Err(Error::Protocol(_))));
     }
 }

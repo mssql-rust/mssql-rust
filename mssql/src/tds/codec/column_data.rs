@@ -134,7 +134,9 @@ impl<'a> ColumnData<'a> {
                 VarLenType::Decimaln | VarLenType::Numericn => {
                     ColumnData::Numeric(Numeric::decode(src, *scale).await?)
                 }
-                _ => todo!(),
+                // Unreachable: TypeInfo::decode (type_info.rs) only ever
+                // constructs a VarLenSizedPrecision for Decimaln/Numericn.
+                _ => unreachable!("VarLenSizedPrecision is only constructed for Decimaln/Numericn"),
             },
             TypeInfo::Xml { schema, size } => xml::decode(src, *size, schema.clone()).await?,
         };

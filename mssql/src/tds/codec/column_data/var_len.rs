@@ -41,7 +41,12 @@ where
         Text => super::text::decode(src, collation).await?,
         NText => super::text::decode(src, None).await?,
         Image => super::image::decode(src).await?,
-        t => unimplemented!("{:?}", t),
+        // Unreachable: `ctx` came from a TypeInfo::VarLenSized, and
+        // TypeInfo::decode (type_info.rs) rejects the two VarLenType
+        // values not otherwise covered above (Udt, SSVariant) with
+        // Error::Protocol before ever constructing one. See the same
+        // note in token_col_metadata.rs's BaseMetaDataColumn::null_value.
+        t => unreachable!("{:?} is rejected in TypeInfo::decode", t),
     };
 
     Ok(res)
