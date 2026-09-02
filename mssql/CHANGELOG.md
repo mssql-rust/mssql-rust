@@ -14,6 +14,19 @@ forward.
 
 ## Unreleased
 
+### Fixed
+
+- Binding a `Numeric`/`Decimal` query parameter (e.g. via `bulk_insert`)
+  whose scale didn't match the target column's declared scale hit a
+  `todo!()` panic in `ColumnData::encode` instead of either converting or
+  erroring. Now rescaled losslessly when possible (e.g. a whole-number
+  value into a `DECIMAL(_, 2)` column just appends zero digits); when the
+  value actually has more decimal places than the column allows, this
+  returns `Error::BulkInput` instead of silently truncating or panicking.
+  Found by source review, not a report; client-triggered, not
+  server-controlled, so not the same DoS class as the decoder panics
+  above.
+
 ## Version 1.0.2
 
 ### Fixed

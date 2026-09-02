@@ -83,6 +83,31 @@ impl Numeric {
         }
     }
 
+    /// Rescale to `target_scale`, without losing precision.
+    ///
+    /// Widening the scale (more decimal places) is always exact — it's just
+    /// appending zero digits. Narrowing is only exact when every digit
+    /// being dropped is zero; otherwise this returns `None` rather than
+    /// silently truncating a value SQL Server would then read back wrong.
+    pub(crate) fn try_rescale(self, target_scale: u8) -> Option<Numeric> {
+        match target_scale.cmp(&self.scale) {
+            Ordering::Equal => Some(self),
+            Ordering::Greater => {
+                let factor = 10i128.checked_pow((target_scale - self.scale) as u32)?;
+                let value = self.value.checked_mul(factor)?;
+                Some(Numeric::new_with_scale(value, target_scale))
+            }
+            Ordering::Less => {
+                let divisor = 10i128.pow((self.scale - target_scale) as u32);
+                if self.value % divisor == 0 {
+                    Some(Numeric::new_with_scale(self.value / divisor, target_scale))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
     pub(crate) fn len(self) -> u8 {
         match self.precision() {
             1..=9 => 5,
@@ -421,6 +446,39 @@ mod tests {
     fn calculates_precision_correctly() {
         let n = Numeric::new_with_scale(57705, 2);
         assert_eq!(5, n.precision());
+    }
+
+    #[test]
+    fn try_rescale_widening_is_lossless() {
+        // 1.2 (scale 1) -> 1.200 (scale 3): appending zero digits.
+        let n = Numeric::new_with_scale(12, 1);
+        assert_eq!(n.try_rescale(3), Some(Numeric::new_with_scale(1200, 3)));
+    }
+
+    #[test]
+    fn try_rescale_narrowing_trailing_zeros_is_lossless() {
+        // 1.200 (scale 3) -> 1.2 (scale 1): dropped digits are all zero.
+        let n = Numeric::new_with_scale(1200, 3);
+        assert_eq!(n.try_rescale(1), Some(Numeric::new_with_scale(12, 1)));
+    }
+
+    #[test]
+    fn try_rescale_narrowing_nonzero_digit_fails() {
+        // 1.23 (scale 2) -> scale 1 would drop a nonzero digit.
+        let n = Numeric::new_with_scale(123, 2);
+        assert_eq!(n.try_rescale(1), None);
+    }
+
+    #[test]
+    fn try_rescale_same_scale_is_noop() {
+        let n = Numeric::new_with_scale(123, 2);
+        assert_eq!(n.try_rescale(2), Some(n));
+    }
+
+    #[test]
+    fn try_rescale_widening_overflow_fails_instead_of_panicking() {
+        let n = Numeric::new_with_scale(i128::MAX, 0);
+        assert_eq!(n.try_rescale(37), None);
     }
 
     #[test]

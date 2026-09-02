@@ -762,9 +762,21 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 if ty == &VarLenType::Numericn || ty == &VarLenType::Decimaln =>
             {
                 if let Some(num) = opt {
-                    if scale != &num.scale() {
-                        todo!("this still need some work, if client scale not aligned with server, we need to do conversion but will lose precision")
-                    }
+                    let num = if scale == &num.scale() {
+                        num
+                    } else {
+                        num.try_rescale(*scale).ok_or_else(|| {
+                            crate::Error::BulkInput(
+                                format!(
+                                    "cannot bind a numeric value of scale {} into a column \
+                                     of scale {} without losing precision",
+                                    num.scale(),
+                                    scale
+                                )
+                                .into(),
+                            )
+                        })?
+                    };
                     num.encode(&mut *dst)?;
                 } else {
                     dst.put_u8(0);
@@ -1295,6 +1307,40 @@ mod tests {
             ColumnData::Numeric(Some(Numeric::new_with_scale(23, 0))),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn numeric_widened_to_column_scale_round_trips() {
+        // Binding a scale-0 value (e.g. a whole-number `Decimal`) into a
+        // column declared with a wider scale used to hit a `todo!()` panic;
+        // now it's rescaled losslessly instead.
+        test_round_trip(
+            TypeInfo::VarLenSizedPrecision {
+                ty: VarLenType::Numericn,
+                size: 17,
+                precision: 18,
+                scale: 2,
+            },
+            ColumnData::Numeric(Some(Numeric::new_with_scale(23, 0))),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn numeric_narrowed_to_column_scale_loses_precision_returns_err_instead_of_panicking() {
+        let ti = TypeInfo::VarLenSizedPrecision {
+            ty: VarLenType::Numericn,
+            size: 17,
+            precision: 18,
+            scale: 0,
+        };
+        let d = ColumnData::Numeric(Some(Numeric::new_with_scale(123, 2))); // 1.23
+
+        let mut buf = BytesMut::new();
+        let mut buf_with_ti = BytesMutWithTypeInfo::new(&mut buf).with_type_info(&ti);
+        let result = d.encode(&mut buf_with_ti);
+
+        assert!(matches!(result, Err(crate::Error::BulkInput(_))));
     }
 
     #[tokio::test]
