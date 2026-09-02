@@ -15,28 +15,38 @@ context for this fork's positioning but not itself an action item.
 
 ## 🔒 Security — not yet fixed
 
-- [ ] **#305** — With no TLS feature compiled in, `encrypt=On`/`Required`
+- [x] **#305** — With no TLS feature compiled in, `encrypt=On`/`Required`
   silently falls back to **cleartext** instead of erroring. Only
   `EncryptionLevel::Strict` got the hard-error guard when TDS 8.0 support was
   added this session; `On`/`Required` still just log a `WARN` and proceed
   unencrypted. Login credentials and all query traffic go over the wire in
   the clear while the caller believes `encrypt=true` is in effect. Small fix
   (a few lines in `tls_handshake`'s no-TLS-feature fallback, mirroring the
-  `Strict` guard already in place).
-- [ ] **#316** — Reading a legitimate, in-spec `datetime` value before 1900
+  `Strict` guard already in place). Done: `5a070b0` (see Build now below).
+- [x] **#316** — Reading a legitimate, in-spec `datetime` value before 1900
   (e.g. `1899-12-30`) panics via an `i32→u64` cast overflow in
   `src/tds/time/time.rs` (`from_days(dt.days as u64, 1900)`). SQL Server's
   `datetime` type supports dates back to 1753; ordinary historical data
   (birthdates, founding dates) crashes the client. Same bug class as the
   #424/#425 decoder panics already fixed this session, just not covered by
-  that fix. Small, self-contained.
-- [ ] **#257** (crash half only) — Any column type the decoder doesn't yet
+  that fix. Small, self-contained. Done: `dafc1fe` (see Build now below).
+- [x] **#257** (crash half only) — Any column type the decoder doesn't yet
   implement (geography, geometry, hierarchyid, sql_variant, ...) hits
   `todo!()`/`unimplemented!()` in `column_data.rs`/`type_info.rs`/`var_len.rs`
   and panics the client on a normal, valid server response — not just
   malicious input. Same DoS class as #424/#425. Reject the "implement full
   geography support" half of this issue (large, out of scope); build only the
-  crash-to-`Err` fix.
+  crash-to-`Err` fix. Already resolved: all of these ride the TDS wire as
+  `VarLenType::Udt` (0xF0) or `SSVariant` (0x62) — no distinct wire type
+  exists per-type for geography/geometry/hierarchyid/sql_variant, they're
+  all CLR-UDT-or-sql_variant on the wire — and both `TypeInfo::decode` and
+  every downstream `todo!()`/`unimplemented!()` that depended on one
+  existing were already closed off by the #424 decoder-panic fix (`b4cb687`,
+  see Security section of `mssql/CHANGELOG.md`'s Version 1.0.1). Confirmed
+  by grepping the current source for geography/geometry/hierarchyid (no
+  matches — never implemented, so nothing left to crash on a
+  type-specific path) and re-reading `type_info.rs`/`var_len.rs`'s
+  `unreachable!()` arms and their regression tests. No separate fix needed.
 
 Already fixed this session, confirmed via fresh `cargo audit`/source
 inspection, no action needed: #424, #425 (7 decoder panic sites), #417 / #428
@@ -256,16 +266,28 @@ its findings recorded there too.
   already explained by the documented native-tls-on-macOS/SQL-Server-TLS
   incompatibility (the README already recommends rustls on macOS); no
   distinct code defect confirmed.
-- [ ] **#313** — A plain ADO-style connection string
-  (`Server=...;Database=...;User Id=...;Password=...`) reportedly fails to
-  parse. No reproduction attempted yet against the current
-  `connection-string = "0.2"` dependency; needs that before it's actionable.
 
 ## Not actionable / already resolved
 
 54 of the 104 issues fall here — either pure usage/support questions with no
 code gap, or already fixed (inherited from upstream or landed earlier this
 session). Grouped for reference, not tracked as open work:
+
+**Investigated, hypothesis disproven:** #313 — a plain ADO-style connection
+string (`Server=tcp:host,1433;Database=db;User Id=user;Password=pw`, the
+reporter's exact string, no `;` outside key/value separators) reportedly
+failed with "Key-value pairs must be separated by a `;`". Attempted the
+reproduction the original triage deferred on: `Config::from_ado_string`
+parses that exact string successfully against this fork's current
+`connection-string = "0.2"` dependency — host, port, database, and
+`AuthMethod::SqlServer` all come out correct. Added a regression test
+(`plain_ado_connection_string_parses` in `client/config.rs`) covering the
+exact reported string so a future dependency bump can't silently
+reintroduce whatever the reporter hit. Whatever broke their string most
+likely already got fixed upstream in the `connection-string` crate itself
+between when they reported it and this fork's pinned `0.2`; couldn't
+narrow further without their exact original string (this fork's fix, if
+any, predates this triage and isn't separately attributable).
 
 **Investigated, hypothesis disproven:** #333 — passwords containing `$`/`%`
 reportedly fail login even when a wire capture showed the "correct" password

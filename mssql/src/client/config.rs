@@ -844,6 +844,27 @@ mod tests {
         assert!(config.get_multi_subnet_failover());
     }
 
+    // Regression test for prisma/tiberius#313: reported "Key-value pairs
+    // must be separated by a `;`" parsing this exact connection string.
+    // Investigated, not reproducible against this fork's current
+    // `connection-string = "0.2"` dependency — see issues.md.
+    #[test]
+    fn plain_ado_connection_string_parses() {
+        let config = Config::from_ado_string(
+            "Server=tcp:myspecialserver.mycompany.com,1433;Database=DB_MYDB;\
+             User Id=myspecialuser;Password=goodpassword",
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.host,
+            Some("myspecialserver.mycompany.com".to_owned())
+        );
+        assert_eq!(config.port, Some(1433));
+        assert_eq!(config.database, Some("DB_MYDB".to_owned()));
+        assert!(matches!(config.auth, AuthMethod::SqlServer(_)));
+    }
+
     #[test]
     fn multi_subnet_failover_absent_from_ado_string_defaults_to_false() {
         let config =
