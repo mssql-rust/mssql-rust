@@ -137,11 +137,13 @@ the `ColumnFlag` bit-position bug underlying #403.
 
 ## Build with modifications — needs scoping or verification first
 
-All five landed. Two (**#275**, originally listed here) turned out to need
-real feature-design work once investigated and moved to Defer with the
-findings recorded there; **#333** (also originally here) turned out to be a
-disproven hypothesis rather than a fix and moved to "Not actionable" with
-its findings recorded there too.
+The original five all landed. Two (**#275**, originally listed here) turned
+out to need real feature-design work once investigated and moved to Defer
+with the findings recorded there; **#333** (also originally here) turned
+out to be a disproven hypothesis rather than a fix and moved to "Not
+actionable" with its findings recorded there too. **#300**/**#79** was
+added later, moved here from Defer once actually scoped out (see its own
+entry below).
 
 - [x] **#402** — Implement `PartialEq` (not `Eq`) for `Column`, `TokenRow`,
   `Row` for `assert_eq!`-style test comparisons. Skip `Eq`: `ColumnData`
@@ -175,6 +177,24 @@ its findings recorded there too.
   README never mentions it. Docs-only fix, near-zero cost, resolves two
   duplicate issues asking essentially "how do I do AG read-only routing."
   Done: `e709c84`.
+- [x] **#300** / **#79** — Dropping or timing out an in-flight query (e.g.
+  wrapping `simple_query` in `tokio::time::timeout`) used to leave the
+  connection unusable for however long the abandoned request would
+  otherwise have taken to finish server-side — no TDS Attention (cancel)
+  signal was ever sent. `Connection::flush_stream` (already called before
+  every query) now sends Attention whenever the previous response wasn't
+  fully read, then drains packet-blind (deliberately not token-parsing
+  from a possibly-misaligned start) until a response message's tail bytes
+  show a `DONE`/`DONEPROC`/`DONEINPROC` token with the `DONE_ATTN` status
+  bit set. Verified live against Azure SQL Edge which scenario actually
+  happens: cancelling a still-executing `WAITFOR DELAY` gets an immediate
+  (466µs) Attention-acknowledging response, ending the originally-abandoned
+  message itself; sending Attention after a request had *already* fully
+  completed (nothing left to cancel) still gets a distinct, separate
+  acknowledgement message a moment later — both cases are handled by the
+  same loop, and a regression test (`tests/attention.rs`) covers both,
+  confirmed to reproduce the original ~9s hang without the fix and pass
+  with it. Done: see commit.
 
 ## Defer — legitimate, but large or low-urgency
 
@@ -233,12 +253,6 @@ its findings recorded there too.
     capture from a known-working bulk-copy client (`bcp.exe`, .NET
     `SqlBulkCopy`) doing the same insert to compare against, or primary
     MS-TDS spec text more authoritative than this session had access to.
-- [ ] **#300** / **#79** — Dropping or timing out an in-flight query (e.g.
-  wrapping `simple_query` in `tokio::time::timeout`) leaves the connection
-  permanently unusable — no TDS Attention (cancel) packet is sent, no
-  attention-ack handling exists at all. Real, common footgun, but genuine
-  protocol work (new packet type, send-on-drop wiring, consuming the
-  server's ack before reuse), not a quick fix.
 - [ ] **#365** — Wants an owned (`'static`, non-borrowing) row stream like
   `tokio-postgres`'s `query_raw`/`sqlx`'s `fetch`, instead of one bound to
   `&mut Client`. Legitimate repository-pattern pain point, but would need a

@@ -8,8 +8,8 @@ use crate::{
     client::{tls::MaybeTlsStream, AuthMethod, Config},
     tds::{
         codec::{
-            self, Encode, LoginMessage, Packet, PacketCodec, PacketHeader, PacketStatus,
-            PreloginMessage, TokenDone,
+            self, Encode, FeatureLevel, LoginMessage, Packet, PacketCodec, PacketHeader,
+            PacketStatus, PreloginMessage, TokenDone,
         },
         stream::TokenStream,
         Context, HEADER_BYTES,
@@ -167,6 +167,19 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         TokenStream::new(self).flush_done().await
     }
 
+    /// Send an Attention (cancel) signal [MS-TDS 2.2.1.6]: an empty,
+    /// `EndOfMessage`-status packet telling the server to stop processing
+    /// whatever request is currently in flight on this connection. Used by
+    /// [`flush_stream`](Self::flush_stream) to resynchronize the wire
+    /// without waiting out however long the abandoned request would
+    /// otherwise still take.
+    async fn send_attention(&mut self) -> crate::Result<()> {
+        let id = self.context.next_packet_id();
+        self.write_to_wire(PacketHeader::attention(id), BytesMut::new())
+            .await?;
+        self.flush_sink().await
+    }
+
     #[cfg(any(windows, feature = "integrated-auth-gssapi", feature = "sspi-rs"))]
     /// Flush the incoming token stream until receiving `SSPI` token.
     async fn flush_sspi(&mut self) -> crate::Result<TokenSspi> {
@@ -316,8 +329,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
     /// makes sure we don't have any old data causing undefined behaviour after
     /// previous queries.
     ///
-    /// Calling this will slow down the queries if stream is still dirty if all
-    /// results are not handled.
+    /// If the previous request is still executing server-side (e.g. a
+    /// `tokio::time::timeout`-cancelled query - prisma/tiberius#300/#79),
+    /// this sends Attention [MS-TDS 2.2.1.6] first so the server stops and
+    /// answers now, rather than leaving this call to wait out however long
+    /// the original request would otherwise still have taken.
     pub async fn flush_stream(&mut self) -> crate::Result<()> {
         self.buf.truncate(0);
 
@@ -325,15 +341,44 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
             return Ok(());
         }
 
-        while let Some(packet) = self.try_next().await? {
-            event!(
-                Level::WARN,
-                "Flushing unhandled packet from the wire. Please consume your streams!",
-            );
+        self.send_attention().await?;
 
-            let is_last = packet.is_last();
+        // Drain full response messages - deliberately packet-blind
+        // (ignoring payload content while a message is in progress), since
+        // our own abandoned read may have left the very first one
+        // misaligned for token-level parsing - until one ends in the DONE
+        // token that acknowledges our Attention. If the original request
+        // had already fully completed before the server received it, that
+        // unrelated response drains first (its own DONE token won't carry
+        // the Attention bit) and the acknowledgement is a distinct, later
+        // message; MS-TDS guarantees exactly one such message per
+        // Attention sent, so this always terminates.
+        loop {
+            let mut done_tail: Vec<u8> = Vec::with_capacity(DONE_TOKEN_MAX_LEN);
+            let mut saw_packet = false;
 
-            if is_last {
+            while let Some(packet) = self.try_next().await? {
+                saw_packet = true;
+
+                event!(
+                    Level::WARN,
+                    "Flushing unhandled packet from the wire. Please consume your streams!",
+                );
+
+                let is_last = packet.is_last();
+
+                done_tail.extend_from_slice(&packet.payload);
+                if done_tail.len() > DONE_TOKEN_MAX_LEN {
+                    let excess = done_tail.len() - DONE_TOKEN_MAX_LEN;
+                    done_tail.drain(..excess);
+                }
+
+                if is_last {
+                    break;
+                }
+            }
+
+            if !saw_packet || ends_in_attention_ack(&done_tail, self.context.version()) {
                 break;
             }
         }
@@ -730,6 +775,38 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
     pub(crate) async fn close(mut self) -> crate::Result<()> {
         self.transport.close().await
     }
+}
+
+/// A `DONE`/`DONEPROC`/`DONEINPROC` token's fixed trailing layout [MS-TDS
+/// 2.2.7.5/2.2.7.6/2.2.7.7]: 1-byte type, 2-byte status, 2-byte curcmd,
+/// then a row count whose width depends on the negotiated TDS version -
+/// 8 bytes from 7.2 onward, 4 before that. `DONE_TOKEN_MAX_LEN` is the
+/// wider (7.2+) case.
+const DONE_TOKEN_MAX_LEN: usize = 1 + 2 + 2 + 8;
+
+/// The `DONE_ATTN` bit [MS-TDS 2.2.7.5] in a `DONE`-family token's status
+/// field - set when this token is the server's acknowledgement of a
+/// client-sent Attention signal, rather than a normal completion.
+const DONE_STATUS_ATTENTION: u16 = 1 << 5;
+
+/// True if `tail` - the last bytes of a fully-drained response message,
+/// however much of it was actually captured (see [`DONE_TOKEN_MAX_LEN`]) -
+/// ends in a `DONE`-family token with the `DONE_ATTN` bit set. Every TDS
+/// response message ends in exactly one such token, so this only needs to
+/// look at the tail, regardless of anything before it - deliberately
+/// robust against the message's own start being misaligned, which
+/// packet-blind draining doesn't rule out.
+fn ends_in_attention_ack(tail: &[u8], version: FeatureLevel) -> bool {
+    let done_len = 1 + 2 + 2 + version.done_row_count_bytes() as usize;
+
+    let Some(done) = tail.len().checked_sub(done_len).map(|start| &tail[start..]) else {
+        return false;
+    };
+
+    let is_done_family_token = matches!(done[0], 0xFD..=0xFF);
+    let status = u16::from_le_bytes([done[1], done[2]]);
+
+    is_done_family_token && status & DONE_STATUS_ATTENTION != 0
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send> Stream for Connection<S> {
