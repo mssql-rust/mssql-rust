@@ -16,6 +16,19 @@ forward.
 
 ### Fixed
 
+- Cancelling (dropping) an in-flight query - e.g. wrapping `simple_query`
+  or `query` in `tokio::time::timeout` - used to leave the connection
+  unusable for however long the abandoned request would otherwise have
+  taken to finish server-side, since nothing ever told the server to stop
+  ([prisma/tiberius#300](https://github.com/prisma/tiberius/issues/300) /
+  [#79](https://github.com/prisma/tiberius/issues/79)). `flush_stream`
+  (already called before every query) now sends a TDS Attention (cancel)
+  signal whenever the previous response wasn't fully read, and waits for
+  the server's acknowledgement before considering the connection clean
+  again - correctly handling the case where the original request had
+  already fully completed by the time Attention arrived (a distinct,
+  later acknowledgement message, verified live) as well as the case
+  where it was genuinely still executing (an immediate one).
 - Binding a `Numeric`/`Decimal` query parameter (e.g. via `bulk_insert`)
   whose scale didn't match the target column's declared scale hit a
   `todo!()` panic in `ColumnData::encode` instead of either converting or

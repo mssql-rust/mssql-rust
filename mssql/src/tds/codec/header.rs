@@ -125,6 +125,19 @@ impl PacketHeader {
         }
     }
 
+    /// Header for an Attention (cancel) packet [MS-TDS 2.2.1.6]: a single,
+    /// empty, `EndOfMessage`-status packet telling the server to stop
+    /// processing whatever request is currently in flight on this
+    /// connection and finish with a `DONE` token carrying the
+    /// `DoneStatus::Attention` bit.
+    pub fn attention(id: u8) -> Self {
+        Self {
+            ty: PacketType::AttentionSignal,
+            status: PacketStatus::EndOfMessage,
+            ..Self::new(0, id)
+        }
+    }
+
     pub fn set_status(&mut self, status: PacketStatus) {
         self.status = status;
     }
