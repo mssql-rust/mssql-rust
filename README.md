@@ -37,6 +37,8 @@ Everything else supports those two:
 
 - [`AGENTS.md`](AGENTS.md) — operational guidance for anyone, human or AI
   agent, working in this repository; start there before contributing.
+- [`AI_STATEMENT.md`](AI_STATEMENT.md) — what AI tools do here, and how
+  their work is disclosed and kept accountable to a human.
 - [`mssql-skill/`](mssql-skill/), [`mssql-rust-maintainer-skill/`](mssql-rust-maintainer-skill/) —
   packaged [Claude Code](https://claude.com/claude-code) skills for using or
   maintaining the crate.
