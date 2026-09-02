@@ -22,12 +22,12 @@ use crate::{
         stream::{QueryStream, TokenStream},
         Collation,
     },
-    BulkLoadRequest, ColumnFlag, ColumnOrderHint, MetaDataColumn, SortOrder, SqlBulkCopyOption,
-    SqlBulkCopyOptions, SqlReadBytes, ToSql,
+    BulkLoadRequest, ColumnFlag, ColumnOrderHint, MetaDataColumn, ProcParam, SortOrder,
+    SqlBulkCopyOption, SqlBulkCopyOptions, SqlReadBytes, ToSql,
 };
 use codec::{
-    BatchRequest, ColumnData, PacketHeader, RpcParam, RpcProcId, TokenRpcRequest, TypeInfo,
-    VarLenContext, VarLenType,
+    BatchRequest, ColumnData, PacketHeader, RpcParam, RpcProcId, RpcStatus, TokenRpcRequest,
+    TypeInfo, VarLenContext, VarLenType,
 };
 use enumflags2::BitFlags;
 use futures_util::io::{AsyncRead, AsyncWrite};
@@ -240,6 +240,119 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
 
         let id = self.connection.context_mut().next_packet_id();
         self.connection.send(PacketHeader::batch(id), req).await?;
+
+        let ts = TokenStream::new(&mut self.connection);
+
+        let mut result = QueryStream::new(ts.try_unfold());
+        result.forward_to_metadata().await?;
+
+        Ok(result)
+    }
+
+    /// Call a stored procedure by name, with `OUTPUT` parameters and the
+    /// procedure's own `RETURN` value available afterward via
+    /// [`QueryStream::into_output_params`]. Unlike [`execute`](Self::execute)/
+    /// [`query`](Self::query), which always go through `sp_executesql`, this
+    /// calls the procedure directly - the natural way to get real `OUTPUT`
+    /// semantics, since `sp_executesql`'s own parameters can't be bound
+    /// `OUTPUT` themselves.
+    ///
+    /// Any result sets the procedure produces (e.g. a `SELECT` before its
+    /// `RETURN`) still come through the returned [`QueryStream`] exactly as
+    /// with `query` - read those first if you need both.
+    ///
+    /// An `OUTPUT` parameter's placeholder value (see
+    /// [`ProcParam::output`]) must be a concrete, non-`NULL` value of the
+    /// right type, not e.g. `&None::<i32>` - unlike `execute`/`query`,
+    /// there's no separate type-declaration string here for the server to
+    /// learn the type from otherwise, and SQL Server rejects an untyped
+    /// `NULL` bound as `OUTPUT` outright. Checked client-side with a clear
+    /// error before anything is sent.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use mssql::{Config, ProcParam};
+    /// # use tokio_util::compat::TokioAsyncWriteCompatExt;
+    /// # use std::env;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let c_str = env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or(
+    /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
+    /// # );
+    /// # let config = Config::from_ado_string(&c_str)?;
+    /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
+    /// # tcp.set_nodelay(true)?;
+    /// # let mut client = mssql::Client::connect(config, tcp.compat_write()).await?;
+    /// client.simple_query(
+    ///     "CREATE OR ALTER PROCEDURE ##double_it (@n INT, @doubled INT OUTPUT) AS
+    ///      BEGIN SET @doubled = @n * 2; RETURN 1; END"
+    /// ).await?;
+    ///
+    /// let stream = client.call_procedure(
+    ///     "##double_it",
+    ///     &[
+    ///         ProcParam::input("@n", &21i32),
+    ///         // The 0 is just a placeholder establishing the type - the
+    ///         // procedure overwrites it, we never see this value again.
+    ///         ProcParam::output("@doubled", &0i32),
+    ///     ],
+    /// ).await?;
+    ///
+    /// let outputs = stream.into_output_params().await?;
+    /// assert_eq!(Some(42i32), outputs.get("@doubled"));
+    /// assert_eq!(Some(1), outputs.return_status());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn call_procedure<'a, 'b>(
+        &'a mut self,
+        name: impl Into<Cow<'b, str>>,
+        params: &'b [ProcParam<'b>],
+    ) -> crate::Result<QueryStream<'a>>
+    where
+        'a: 'b,
+    {
+        if let Some(p) = params.iter().find(|p| p.output && p.value.is_null()) {
+            return Err(crate::Error::Conversion(
+                format!(
+                    "OUTPUT parameter {} has no type: pass a concrete, non-NULL placeholder \
+                     value (e.g. &0i32) instead of a NULL one - SQL Server rejects an untyped \
+                     NULL bound as OUTPUT",
+                    p.name
+                )
+                .into(),
+            ));
+        }
+
+        self.connection.flush_stream().await?;
+
+        let rpc_params = params
+            .iter()
+            .map(|p| {
+                let mut flags = BitFlags::empty();
+
+                if p.output {
+                    flags |= RpcStatus::ByRefValue;
+                }
+
+                RpcParam {
+                    name: p.name.clone(),
+                    flags,
+                    value: p.value.clone(),
+                    type_info: None,
+                }
+            })
+            .collect();
+
+        let req = TokenRpcRequest::new(
+            name,
+            rpc_params,
+            self.connection.context().transaction_descriptor(),
+        );
+
+        let id = self.connection.context_mut().next_packet_id();
+        self.connection.send(PacketHeader::rpc(id), req).await?;
 
         let ts = TokenStream::new(&mut self.connection);
 

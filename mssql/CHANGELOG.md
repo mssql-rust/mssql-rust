@@ -14,6 +14,25 @@ forward.
 
 ## Unreleased
 
+### Added
+
+- `Client::call_procedure`, `ProcParam`, `QueryStream::into_output_params`
+  and `OutputParams` - call a stored procedure by name with `OUTPUT`
+  parameters and read back its `RETURN` value, closing three gaps that
+  together made this impossible before ([prisma/tiberius#275](https://github.com/prisma/tiberius/issues/275)):
+  the RPC-by-name wire path (`RpcProcIdValue::Name`'s `Encode` impl) was a
+  literal `todo!()`; nothing in the public API could set the `ByRefValue`
+  ("this is `OUTPUT`") flag on a parameter; and the already-decoded
+  `RETURNVALUE`/`RETURNSTATUS` tokens were silently discarded by
+  `QueryStream`'s token dispatch. An `OUTPUT` parameter's placeholder value
+  must be a concrete, non-`NULL` value of the right type (e.g. `&0i32`, not
+  `&None::<i32>`) - confirmed live that SQL Server rejects an untyped
+  `NULL` bound as `OUTPUT` outright, since (unlike `execute`/`query`'s
+  `sp_executesql` wrapper) there's no separate type-declaration string for
+  it to learn the type from otherwise; checked client-side with a clear
+  error before anything is sent, rather than round-tripping to SQL
+  Server's own far less obvious one.
+
 ### Fixed
 
 - Cancelling (dropping) an in-flight query - e.g. wrapping `simple_query`
