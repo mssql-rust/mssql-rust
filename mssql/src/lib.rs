@@ -327,6 +327,7 @@ mod macros;
 
 mod client;
 mod from_sql;
+mod proc_param;
 mod query;
 mod sql_read_bytes;
 mod to_sql;
@@ -343,6 +344,7 @@ pub use bulk_options::{ColumnOrderHint, SortOrder, SqlBulkCopyOption, SqlBulkCop
 pub use client::{AuthMethod, Client, Config, ConfigBuilder};
 pub(crate) use error::Error;
 pub use from_sql::{FromSql, FromSqlOwned};
+pub use proc_param::ProcParam;
 pub use query::Query;
 pub use result::*;
 pub use row::{Column, ColumnType, QueryIdx, Row};
@@ -353,7 +355,7 @@ pub use tds::{
         TokenRow, TypeInfo, TypeLength,
     },
     numeric,
-    stream::QueryStream,
+    stream::{OutputParams, QueryStream},
     time, xml, EncryptionLevel,
 };
 pub use to_sql::{IntoSql, ToSql};

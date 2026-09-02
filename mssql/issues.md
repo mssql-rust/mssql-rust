@@ -137,13 +137,14 @@ the `ColumnFlag` bit-position bug underlying #403.
 
 ## Build with modifications — needs scoping or verification first
 
-The original five all landed. Two (**#275**, originally listed here) turned
-out to need real feature-design work once investigated and moved to Defer
-with the findings recorded there; **#333** (also originally here) turned
-out to be a disproven hypothesis rather than a fix and moved to "Not
-actionable" with its findings recorded there too. **#300**/**#79** was
-added later, moved here from Defer once actually scoped out (see its own
-entry below).
+The original five all landed. One (**#275**, originally listed here) turned
+out to need real feature-design work once investigated, moved to Defer with
+the findings recorded there, and later came back and landed too, once that
+design time actually happened (see its own entry below); **#333** (also
+originally here) turned out to be a disproven hypothesis rather than a fix
+and moved to "Not actionable" with its findings recorded there too.
+**#300**/**#79** was added later, moved here from Defer once actually
+scoped out (see its own entry below).
 
 - [x] **#402** — Implement `PartialEq` (not `Eq`) for `Column`, `TokenRow`,
   `Row` for `assert_eq!`-style test comparisons. Skip `Eq`: `ColumnData`
@@ -195,36 +196,34 @@ entry below).
   same loop, and a regression test (`tests/attention.rs`) covers both,
   confirmed to reproduce the original ~9s hang without the fix and pass
   with it. Done: see commit.
+- [x] **#275** — Stored-procedure `OUTPUT` parameters were decoded
+  (`TokenReturnValue`) but silently discarded by `QueryStream`'s token
+  dispatch, and separately, nothing in the public API could ever cause the
+  server to *send* one — `Client::execute`/`query` always go through
+  `sp_executesql`, whose own parameters can't be bound `OUTPUT`, and the
+  RPC-by-name path a real `OUTPUT` call needs (`RpcProcIdValue::Name`'s
+  `Encode` impl) was a literal `todo!()`. Scoped out and built as three
+  pieces landing together, per the original assessment below: the
+  RPC-by-name wire encoding (a plain US_VARCHAR name, no `0xFFFF` marker,
+  unlike the numeric-`RpcProcId` form); `Client::call_procedure` +
+  `ProcParam::input`/`output` (sets `RpcStatus::ByRefValue` for `OUTPUT`);
+  and `QueryStream::into_output_params`/`OutputParams` to read the
+  `RETURNVALUE`/`RETURNSTATUS` tokens back, capturing them wherever the
+  stream would otherwise have discarded them (including inside
+  `forward_to_metadata`, not just `poll_next`). One real finding from live
+  testing: an `OUTPUT` parameter's placeholder value must be concrete and
+  non-`NULL` (e.g. `&0i32`, not `&None::<i32>`) — SQL Server rejects an
+  untyped `NULL` bound as `OUTPUT` (confirmed live: error 8015), since
+  unlike `sp_executesql` there's no separate type-declaration string for
+  it to learn the type from otherwise; now checked client-side with a
+  clear error before anything is sent. 5 new live regression tests
+  (`tests/call_procedure.rs`) plus a live-verified doctest cover single
+  and multiple `OUTPUT` params, a result set read before the `OUTPUT`
+  values, the `NULL`-placeholder rejection, and `into_output_params` on a
+  plain (non-RPC) query. Done: see commit.
 
 ## Defer — legitimate, but large or low-urgency
 
-- [ ] **#275** — Stored-procedure OUTPUT parameters are decoded
-  (`TokenReturnValue` in `token_return_value.rs`) but discarded —
-  `QueryStream::poll_next` has a `_ => continue` arm that silently drops
-  `ReceivedToken::ReturnValue` along with everything else it doesn't handle.
-  Originally assessed as "medium effort: thread `TokenReturnValue`s through
-  to a documented API" - investigation found the real scope is larger:
-  - Surfacing the already-decoded tokens (e.g. a `QueryStream::
-    into_output_params()` consuming method, mirroring `into_results()`) is
-    the small part and still worth doing on its own.
-  - But nothing in the current public API can ever cause the server to
-    *send* one. `Client::execute`/`query` and `Query::execute`/`query` all
-    hardcode `RpcProcId::ExecuteSQL` (`sp_executesql`), and `RpcStatus::
-    ByRefValue` (the per-parameter "this is OUTPUT" flag) is defined but
-    never set anywhere - so binding a parameter as OUTPUT isn't possible at
-    all today, regardless of the surfacing gap.
-  - The natural way to call a stored procedure with real OUTPUT semantics
-    is the native RPC-by-name mechanism (not the `sp_executesql` wrapper),
-    but `RpcProcIdValue::Name`'s `Encode` impl is a literal `todo!()` -
-    though it's currently unreachable dead code, not a live bug: every
-    existing caller passes a numeric `RpcProcId`, none constructs `Name`.
-  - A genuinely useful version of this feature needs all three pieces
-    built together (a new `Client` method to call a procedure by name,
-    `ByRefValue`-aware parameter binding, and the surfacing API) - shipping
-    only the surfacing half would add a documented method nothing could
-    ever populate, which is worse than not shipping it. This is a small
-    feature project, not a targeted fix; revisit with dedicated design time
-    rather than folded into a triage pass.
 - [ ] **#352** — Bulk-inserting a `String` into an `NTEXT` column fails;
   doc comments claim ntext is supported but `column_data.rs`'s bulk-insert
   encode match has no arm for `VarLenType::NText`. Investigated live against
@@ -360,9 +359,13 @@ reproduce the original bug/error without the fix and pass with it, and was
 verified compiling and clippy-clean under multiple feature-flag combinations
 (default, `--features=all`, and `--no-default-features --features=tds73`
 where relevant) plus the pinned MSRV toolchain (1.96) before being
-committed. Two items didn't end up as fixes: #275 turned out to need real
+committed. One item didn't end up as a fix: #333's leading hypothesis was
+disproven by the regression tests written to check it, recorded with its
+findings under "Not actionable" rather than left as a stale entry in the
+tier it started in. #275 initially went the same route (needing real
 feature-design work once the RPC-by-name/OUTPUT-parameter-binding gaps were
-found, and #333's leading hypothesis was disproven by the regression tests
-written to check it — both are recorded with their findings under Defer /
-Not actionable respectively, rather than left as stale entries in the tier
-they started in. What's left to build, if wanted: the "Defer" list.
+found) but came back and landed later, once that design time happened —
+recorded in place under "Build with modifications", not left in Defer.
+#300/#79 similarly moved from Defer to "Build with modifications" once
+scoped out and built. What's left to build, if wanted: the rest of the
+"Defer" list.

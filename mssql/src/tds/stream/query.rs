@@ -1,5 +1,6 @@
+use crate::tds::codec::TokenReturnValue;
 use crate::tds::stream::ReceivedToken;
-use crate::{row::ColumnType, Column, Row};
+use crate::{row::ColumnType, Column, Error, FromSql, Row};
 use futures_util::{
     ready,
     stream::{BoxStream, Peekable, Stream, StreamExt, TryStreamExt},
@@ -89,6 +90,15 @@ pub struct QueryStream<'a> {
     token_stream: Peekable<BoxStream<'a, crate::Result<ReceivedToken>>>,
     columns: Option<Arc<Vec<Column>>>,
     result_set_index: Option<usize>,
+    /// `RETURNVALUE` tokens (stored-procedure OUTPUT parameters) seen so
+    /// far - noted as they're read (including ones skipped over by
+    /// [`forward_to_metadata`](Self::forward_to_metadata), which otherwise
+    /// discards everything that isn't `NewResultset`), surfaced via
+    /// [`into_output_params`](Self::into_output_params).
+    return_values: Vec<TokenReturnValue>,
+    /// A `RETURNSTATUS` token (a stored procedure's own `RETURN` value, if
+    /// it used one), noted the same way.
+    return_status: Option<i32>,
 }
 
 impl<'a> Debug for QueryStream<'a> {
@@ -108,6 +118,19 @@ impl<'a> QueryStream<'a> {
             token_stream: token_stream.peekable(),
             columns: None,
             result_set_index: None,
+            return_values: Vec::new(),
+            return_status: None,
+        }
+    }
+
+    /// Note a token that [`forward_to_metadata`](Self::forward_to_metadata)
+    /// or [`poll_next`](Stream::poll_next) is about to discard, if it's one
+    /// [`into_output_params`](Self::into_output_params) surfaces later.
+    fn note_return_token(&mut self, token: ReceivedToken) {
+        match token {
+            ReceivedToken::ReturnValue(rv) => self.return_values.push(rv),
+            ReceivedToken::ReturnStatus(status) => self.return_status = Some(status as i32),
+            _ => (),
         }
     }
 
@@ -124,13 +147,29 @@ impl<'a> QueryStream<'a> {
             match item {
                 Some(ReceivedToken::NewResultset(_)) => break,
                 Some(_) => {
-                    self.token_stream.try_next().await?;
+                    if let Some(token) = self.token_stream.try_next().await? {
+                        self.note_return_token(token);
+                    }
                 }
                 None => break,
             }
         }
 
         Ok(())
+    }
+
+    /// Consumes the rest of the stream (discarding any result-set rows
+    /// still in it - read those first with the `Stream`/[`into_results`](Self::into_results)
+    /// APIs if you need both) and returns the stored-procedure OUTPUT
+    /// parameters and `RETURN` value collected along the way. See
+    /// [`Client::call_procedure`](crate::Client::call_procedure).
+    pub async fn into_output_params(mut self) -> crate::Result<OutputParams> {
+        while self.try_next().await?.is_some() {}
+
+        Ok(OutputParams {
+            values: self.return_values,
+            status: self.return_status,
+        })
     }
 
     /// The list of columns either for the current result set, or for the next
@@ -390,8 +429,60 @@ impl<'a> Stream for QueryStream<'a> {
 
                     Poll::Ready(Some(Ok(QueryItem::Row(row))))
                 }
-                _ => continue,
+                other => {
+                    this.note_return_token(other);
+                    continue;
+                }
             };
         }
+    }
+}
+
+/// The stored-procedure OUTPUT parameters and `RETURN` value collected from
+/// a [`QueryStream`] via [`into_output_params`](QueryStream::into_output_params).
+/// See [`Client::call_procedure`](crate::Client::call_procedure).
+#[derive(Debug)]
+pub struct OutputParams {
+    values: Vec<TokenReturnValue>,
+    status: Option<i32>,
+}
+
+impl OutputParams {
+    /// The stored procedure's own `RETURN` value, if it used one - `None`
+    /// if the procedure has no `RETURN` statement (or wasn't actually
+    /// called via [`Client::call_procedure`](crate::Client::call_procedure),
+    /// e.g. this came from a plain query).
+    pub fn return_status(&self) -> Option<i32> {
+        self.status
+    }
+
+    /// The value of the named OUTPUT parameter, converted via [`FromSql`].
+    /// The name may be given with or without its leading `@`, matching
+    /// whichever way it was declared with in
+    /// [`ProcParam::output`](crate::ProcParam::output).
+    ///
+    /// # Panics
+    ///
+    /// - No OUTPUT parameter with this name was bound.
+    /// - The requested type conversion (SQL -> Rust) is not possible.
+    ///
+    /// Use [`try_get`](Self::try_get) for a non-panicking version.
+    #[track_caller]
+    pub fn get<'a, T: FromSql<'a>>(&'a self, name: &str) -> Option<T> {
+        self.try_get(name).unwrap()
+    }
+
+    /// Retrieve the value of the named OUTPUT parameter, converted via
+    /// [`FromSql`]. See [`get`](Self::get).
+    pub fn try_get<'a, T: FromSql<'a>>(&'a self, name: &str) -> crate::Result<Option<T>> {
+        let name = name.trim_start_matches('@');
+
+        let found = self
+            .values
+            .iter()
+            .find(|rv| rv.param_name.trim_start_matches('@') == name)
+            .ok_or_else(|| Error::Conversion(format!("no such output parameter: {name}").into()))?;
+
+        T::from_sql(&found.value)
     }
 }

@@ -109,10 +109,18 @@ impl<'a> Encode<BytesMut> for TokenRpcRequest<'a> {
                 let val = (0xffff_u32) | ((*id as u16) as u32) << 16;
                 dst.put_u32_le(val);
             }
-            RpcProcIdValue::Name(ref _name) => {
-                //let (left_bytes, _) = try!(write_varchar::<u16>(&mut cursor, name, 0));
-                //assert_eq!(left_bytes, 0);
-                todo!()
+            // 2.2.6.5 RPCReqBatch: a named procedure call's `ProcName` is a
+            // plain US_VARCHAR - a u16 character count (not byte count)
+            // followed by the UTF-16LE name, unlike `Id`'s `0xFFFF`-marked
+            // NameLenProcID form above. Real, on-the-wire target (prisma/
+            // tiberius#328 flagged the RPC-by-name path this covers), not
+            // just a completion for its own sake.
+            RpcProcIdValue::Name(ref name) => {
+                dst.put_u16_le(name.encode_utf16().count() as u16);
+
+                for codepoint in name.encode_utf16() {
+                    dst.put_u16_le(codepoint);
+                }
             }
         }
 

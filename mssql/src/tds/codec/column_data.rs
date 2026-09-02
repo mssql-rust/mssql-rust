@@ -123,6 +123,38 @@ impl<'a> ColumnData<'a> {
         }
     }
 
+    /// True if this value is SQL `NULL`. Used to reject an untyped-NULL
+    /// `OUTPUT` parameter client-side (`Client::call_procedure`) with a
+    /// clear error, rather than let it round-trip to SQL Server's own
+    /// (much less obvious) "is an untyped NULL but is marked as an output
+    /// parameter" protocol error.
+    pub(crate) fn is_null(&self) -> bool {
+        match self {
+            ColumnData::U8(v) => v.is_none(),
+            ColumnData::I16(v) => v.is_none(),
+            ColumnData::I32(v) => v.is_none(),
+            ColumnData::I64(v) => v.is_none(),
+            ColumnData::F32(v) => v.is_none(),
+            ColumnData::F64(v) => v.is_none(),
+            ColumnData::Bit(v) => v.is_none(),
+            ColumnData::String(v) => v.is_none(),
+            ColumnData::Guid(v) => v.is_none(),
+            ColumnData::Binary(v) => v.is_none(),
+            ColumnData::Numeric(v) => v.is_none(),
+            ColumnData::Xml(v) => v.is_none(),
+            ColumnData::DateTime(v) => v.is_none(),
+            ColumnData::SmallDateTime(v) => v.is_none(),
+            #[cfg(feature = "tds73")]
+            ColumnData::Time(v) => v.is_none(),
+            #[cfg(feature = "tds73")]
+            ColumnData::Date(v) => v.is_none(),
+            #[cfg(feature = "tds73")]
+            ColumnData::DateTime2(v) => v.is_none(),
+            #[cfg(feature = "tds73")]
+            ColumnData::DateTimeOffset(v) => v.is_none(),
+        }
+    }
+
     pub(crate) async fn decode<R>(src: &mut R, ctx: &TypeInfo) -> crate::Result<ColumnData<'a>>
     where
         R: SqlReadBytes + Unpin,
