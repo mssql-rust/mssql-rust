@@ -287,7 +287,8 @@ reintroduce whatever the reporter hit. Whatever broke their string most
 likely already got fixed upstream in the `connection-string` crate itself
 between when they reported it and this fork's pinned `0.2`; couldn't
 narrow further without their exact original string (this fork's fix, if
-any, predates this triage and isn't separately attributable).
+any, predates this triage and isn't separately attributable). Done:
+`ff27a89`.
 
 **Investigated, hypothesis disproven:** #333 — passwords containing `$`/`%`
 reportedly fail login even when a wire capture showed the "correct" password
