@@ -10,6 +10,7 @@ topic between them; link to wherever it actually lives.
 | AI guidance files (`llms.json`/`llms.txt`) | Both `mssql/` and `mssql-rust.github.io/` publish their own copies | [`llms-json-and-llms-txt/index.md`](llms-json-and-llms-txt/index.md) |
 | Dependabot | The `mssql` crate's GitHub repo | [`../mssql/spec/dependabot/index.md`](../mssql/spec/dependabot/index.md) |
 | Rust MSRV policy (current stable − 2) | The `mssql` crate's own Cargo workspace | [`../mssql/spec/rust-msrv-n-minus-2/index.md`](../mssql/spec/rust-msrv-n-minus-2/index.md) |
+| AI release authorization | The `mssql` crate's release process | [`../mssql/spec/ai-release-authorization/index.md`](../mssql/spec/ai-release-authorization/index.md) |
 
 ## Why a topic lives where it does
 

@@ -1,14 +1,21 @@
 # Preparing a release
 
-**There is no automated publish process in this repository as of this
-writing.** A search of `mssql/.github/workflows/` turns up `test.yml`
-(build/test/lint/MSRV) and `pr-code-security.yml` (Gitleaks/CodeQL) only —
-no `publish.yml`, no `release.yml`, no `cargo-release` config file anywhere
-in the tree. Releasing to crates.io today means a maintainer running
-`cargo publish` by hand, from a clean checkout, after the steps below — not
-something a CI job does automatically on a tag push. If that has changed
-since this was written, trust the actual workflow files over this
-document, and update this checklist to match.
+**An AI agent may decide a specific release is ready and publish it** — not
+just prepare one for a human to sign off on. See
+[`../../mssql/spec/ai-release-authorization/index.md`](../../mssql/spec/ai-release-authorization/index.md)
+for the rule and the readiness gate that decision is conditioned on; this
+checklist is the mechanics that authorization doesn't shortcut.
+
+Publishing to crates.io runs via `.github/workflows/publish.yml`
+(`workflow_dispatch`-only — never on a tag push or GitHub Release — using
+crates.io trusted publishing via OIDC, no `CARGO_REGISTRY_TOKEN` secret to
+manage). A maintainer or agent with repo access dispatches it by hand (`gh
+workflow run publish.yml`, or the Actions tab) after confirming `Unreleased`
+is ready and the full verification matrix is green for the commit being
+released; running `cargo publish` directly from a clean checkout, per the
+steps below, is the other supported path and needs its own credentials. If
+the actual workflow files disagree with this description, trust them over
+this document, and update this checklist to match.
 
 The steps below are inferred from what the repository's own files actually
 track — `CHANGELOG.md`'s structure and `Cargo.toml`'s `version` field — not
@@ -17,8 +24,8 @@ from a documented release runbook, because none exists yet.
 ## What the repo's own files establish
 
 - `mssql/Cargo.toml`'s `[package] version` is the single source of truth for
-  the published version (currently `0.12.3` as of this writing — check the
-  live file, don't trust this number).
+  the published version — check the live file, don't trust a number written
+  down here; it goes stale the moment a release lands.
 - `mssql/CHANGELOG.md` accumulates entries under an `## Unreleased` heading
   (with `### Added` / `### Changed` / `### Fixed` / `### Security`
   subsections) as they land, per
@@ -39,7 +46,11 @@ from a documented release runbook, because none exists yet.
    every entry should describe a real, landed, verified change (see
    [`verification-commands.md`](verification-commands.md) and
    [`pr-triage-checklist.md`](pr-triage-checklist.md)), not an
-   in-progress or speculative one.
+   in-progress or speculative one. An AI agent may make this call itself —
+   see [`../../mssql/spec/ai-release-authorization/index.md`](../../mssql/spec/ai-release-authorization/index.md) —
+   but only on verification it ran itself, this session; an earlier
+   session's or a human's say-so isn't a substitute for re-running the
+   matrix against the exact commit being released.
 2. **Run the full verification matrix** from
    [`verification-commands.md`](verification-commands.md) against the exact
    commit you intend to release: build, `cargo test --lib`, `cargo fmt
@@ -60,11 +71,12 @@ from a documented release runbook, because none exists yet.
    repository; the crate's history (`## Version 0.12.3`, etc.) suggests a
    plain version string, but confirm against the actual git tags already
    pushed (`git tag --list`) before inventing a new format.
-7. **Publish**: `cargo publish` from a clean checkout of the tagged commit,
-   after a `cargo publish --dry-run` to catch packaging issues first. No
-   crates.io API token management, 2FA, or trusted-publishing setup is
-   documented here — set that up (or confirm it's already set up) before
-   relying on this step working non-interactively.
+7. **Publish**: dispatch `.github/workflows/publish.yml` (`gh workflow run
+   publish.yml`, or the Actions tab) for the tagged commit — it runs its own
+   `cargo publish --dry-run` safety net before publishing for real via
+   crates.io trusted publishing (OIDC, no token to manage). Alternatively,
+   `cargo publish` from a clean checkout of the tagged commit, after your
+   own `cargo publish --dry-run` first, if publishing locally instead.
 8. **Push the tag and the version-bump commit**, per this repo's standing
    "ask first before pushing" convention if one is in effect for your
    environment.
@@ -73,9 +85,6 @@ from a documented release runbook, because none exists yet.
 
 - Whether releases have historically been tagged at all, and if so, in what
   format — check `git tag --list` rather than assuming.
-- Whether crates.io publishing credentials/trusted publishing are configured
-  for this repository — nothing in `.github/workflows/` references
-  `cargo publish` or a crates.io token secret.
 - Whether GitHub Releases (as opposed to just crates.io + a CHANGELOG
   section) are part of the intended process — no workflow or template for
   one exists in this tree today.

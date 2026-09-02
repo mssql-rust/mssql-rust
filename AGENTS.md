@@ -69,6 +69,14 @@ here" are both fine; silence about which one happened is not. See
 [`agents/rust.md`](agents/rust.md) for the actual commands
 (`cargo test`/`clippy`/`docker/test-server.sh`).
 
+## Release authorization
+
+An AI agent may decide a specific release of the `mssql` crate is ready and
+publish it — not only prepare one for a human to publish. See
+[`mssql/spec/ai-release-authorization/index.md`](mssql/spec/ai-release-authorization/index.md)
+for the actual rule and the readiness gate it's conditioned on, and
+[`agents/release.md`](agents/release.md) for the mechanics.
+
 ## AI-agent skills
 
 Two skill folders at the monorepo root give a task-scoped agent (this

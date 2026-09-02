@@ -7,12 +7,17 @@ plainly what that means in practice, for both subprojects in this monorepo.
 ## What AI tools do here
 
 AI agents research and triage upstream Tiberius PRs and issues, write and
-review code, run the test suite, prepare releases, and — as of
-2026-09-02 — publish the crate to crates.io. See [`AGENTS.md`](AGENTS.md)
-for how an agent is expected to work in this repository, and
-[`mssql-rust-maintainer-skill/`](mssql-rust-maintainer-skill/) for the
-maintenance playbook they follow. None of this is unsupervised: a human
-reviews and is accountable for what gets merged and published.
+review code, run the test suite, and prepare releases. As of
+2026-09-02, an AI agent may also decide a specific release is ready — not
+just prepare one for a human to sign off on — and publish it to crates.io
+itself. See [`mssql/spec/ai-release-authorization/index.md`](mssql/spec/ai-release-authorization/index.md)
+for the actual rule and the readiness gate that decision is conditioned on.
+See [`AGENTS.md`](AGENTS.md) for how an agent is expected to work in this
+repository generally, and [`mssql-rust-maintainer-skill/`](mssql-rust-maintainer-skill/)
+for the maintenance playbook they follow. None of this is unsupervised in
+the sense of unaccountable: every commit's authorship stays human (below),
+and the work itself — reviewed or not by another human before landing —
+is traceable to the agent and session that did it.
 
 ## Authorship stays human
 
