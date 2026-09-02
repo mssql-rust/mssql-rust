@@ -121,6 +121,16 @@ cargo +<msrv-version> check --all-targets --workspace
 - CI runs clippy, rustfmt, the MSRV check, and the full test matrix (Linux,
   Windows, macOS) against several SQL Server versions on every PR.
 
+## Using AI tools
+
+Using an AI coding tool to help with a contribution is fine — this project
+uses them heavily itself. Disclose it: say so in the commit/PR description,
+and if the tool made the commit, let it add its own `Co-Authored-By:`
+trailer — that's a disclosure convention, not a claim of authorship. The
+git `author`/`committer` identity must still be a human — yours —
+regardless of how much of the change a tool helped write. See
+[`AI_STATEMENT.md`](../AI_STATEMENT.md) for the fuller statement.
+
 ## Reporting bugs
 
 Please include: the `mssql` version, the feature flags in use, the SQL
