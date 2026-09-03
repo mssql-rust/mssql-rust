@@ -26,6 +26,13 @@ before treating it as final.
   `Client::bulk_insert` / `bulk_insert_columns` / `bulk_insert_with_options`
   load rows efficiently (see [`references/examples.md`](examples.md)).
   `Client::column_metadata` inspects a table's columns ahead of time.
+  `Client::call_procedure` calls a stored procedure by name, supporting
+  `OUTPUT` parameters (built with `ProcParam::input`/`ProcParam::output`)
+  and the procedure's `RETURN` value — call `QueryStream::into_output_params`
+  on the result to get an `OutputParams`. An `OUTPUT` parameter's placeholder
+  must be a concrete, non-`NULL` value of the right type (e.g. `&0i32`, not
+  `&None::<i32>`) — see
+  [`examples/call_procedure.rs`](../../mssql/examples/call_procedure.rs).
 - **`Query`** — an alternative to the `Client` convenience methods for when
   parameters come from a dynamic collection or need to be bound by value:
   `Query::new("SELECT @P1")`, then `.bind(value)` or `.bind_iter(values)`,

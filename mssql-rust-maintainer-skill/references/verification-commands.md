@@ -2,7 +2,7 @@
 
 The actual commands this project uses, taken from
 [`CONTRIBUTING.md`](../../mssql/CONTRIBUTING.md) and
-[`.github/workflows/test.yml`](../../mssql/.github/workflows/test.yml). Run
+[`.github/workflows/test.yml`](../../.github/workflows/test.yml). Run
 these — or point at the CI job that already runs them — before writing
 "fixes #NNN" or checking off a `tasks.md`/`issues.md` entry. All commands
 below are run from `mssql/` (the crate root, which is also its own Cargo
@@ -97,7 +97,7 @@ If the `serde` feature is involved, its tests are gated behind
   lands upstream.
 - Dependabot is enabled at the repo level for both security updates and
   scheduled version-update PRs (weekly, per
-  [`.github/dependabot.yml`](../../mssql/.github/dependabot.yml)) — see
+  [`.github/dependabot.yml`](../../.github/dependabot.yml)) — see
   [`spec/dependabot/index.md`](../../mssql/spec/dependabot/index.md) for the
   policy statement.
 - `.github/workflows/pr-code-security.yml` runs Gitleaks (secret detection)

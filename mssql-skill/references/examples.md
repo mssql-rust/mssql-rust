@@ -67,6 +67,17 @@ own doc comment).
   .NET's `SqlBulkCopy`. Reach for this once the plain `bulk_insert` example
   isn't expressive enough.
 
+## Stored procedures
+
+- **[`call_procedure.rs`](../../mssql/examples/call_procedure.rs)** —
+  calling a stored procedure by name with `Client::call_procedure`,
+  binding an `OUTPUT` parameter with `ProcParam::output`, and reading it
+  (plus the procedure's `RETURN` value) back via
+  `QueryStream::into_output_params`. Reach for this instead of
+  `Client::execute`/`query` whenever a procedure needs a real `OUTPUT`
+  parameter — those always go through `sp_executesql`, whose own
+  parameters can't be bound `OUTPUT`.
+
 ## Query parameters
 
 - **[`in_list.rs`](../../mssql/examples/in_list.rs)** — building a SQL
