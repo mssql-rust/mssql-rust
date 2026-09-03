@@ -42,6 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 See the [`examples/`](examples) directory for more, including [async-std](examples/async-std.rs)
 and [smol](examples/smol.rs), the [`ConfigBuilder`](examples/config_builder.rs)
 API, [`IN` lists](examples/in_list.rs), [bulk insert with options](examples/bulk_insert_with_options.rs),
+[calling a stored procedure with `OUTPUT` parameters](examples/call_procedure.rs),
 [TDS 8.0 Strict encryption](examples/strict_encryption.rs),
 [Windows/NTLM authentication](examples/windows_auth.rs),
 [CA certificate bundles](examples/ca_certificate_bundle.rs),
@@ -255,6 +256,19 @@ that already arrive sorted, mirroring .NET's `SqlBulkCopy` — see
 [`examples/bulk.rs`](examples/bulk.rs) and
 [`examples/bulk_insert_with_options.rs`](examples/bulk_insert_with_options.rs).
 `Client::column_metadata` inspects a table's columns ahead of time.
+
+## Stored procedures
+
+`Client::call_procedure` calls a stored procedure by name, supporting
+`OUTPUT` parameters and reading back the procedure's `RETURN` value.
+Build the parameter list with `ProcParam::input`/`ProcParam::output`, then
+once the returned `QueryStream` has been read (or if there's no result set
+to read), call `QueryStream::into_output_params` to get an `OutputParams`
+with the `OUTPUT` values and `return_status()`. An `OUTPUT` parameter's
+placeholder value must be a concrete, non-`NULL` value of the right type
+(e.g. `&0i32`, not `&None::<i32>`) — SQL Server rejects an untyped `NULL`
+bound as `OUTPUT`, and `call_procedure` checks for this client-side before
+sending anything. See [`examples/call_procedure.rs`](examples/call_procedure.rs).
 
 ## Redirects
 
