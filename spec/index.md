@@ -11,6 +11,8 @@ topic between them; link to wherever it actually lives.
 | Dependabot | The `mssql` crate's GitHub repo | [`../mssql/spec/dependabot/index.md`](../mssql/spec/dependabot/index.md) |
 | Rust MSRV policy (current stable − 2) | The `mssql` crate's own Cargo workspace | [`../mssql/spec/rust-msrv-n-minus-2/index.md`](../mssql/spec/rust-msrv-n-minus-2/index.md) |
 | AI release authorization | The `mssql` crate's release process | [`../mssql/spec/ai-release-authorization/index.md`](../mssql/spec/ai-release-authorization/index.md) |
+| Monorepo → GitHub Pages export | `mssql-rust.github.io/` publishing | [`monorepo-github-pages/index.md`](monorepo-github-pages/index.md) |
+| Node current version | `mssql-rust.github.io/` toolchain | [`node-current-version/index.md`](node-current-version/index.md) |
 
 ## Why a topic lives where it does
 

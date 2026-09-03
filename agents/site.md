@@ -17,11 +17,13 @@ generated artifact.
 
 ## Toolchain
 
-Node version is pinned in `.tool-versions` (currently `22.23.2`). If the
-ambient shell's `node -v` looks older, use `mise exec -- npm ...` rather
-than assuming the pin is wrong. `npm ci` (not `npm install`) in CI and when
-you want exactly the locked versions; use plain `npm install` only when
-deliberately changing a dependency.
+Node version is pinned in `.tool-versions` — see
+[`spec/node-current-version/index.md`](../spec/node-current-version/index.md)
+for the current value and where else it's recorded (`package.json`,
+`deploy.yml`, `.npmrc`). If the ambient shell's `node -v` looks older, use
+`mise exec -- npm ...` rather than assuming the pin is wrong. `npm ci` (not
+`npm install`) in CI and when you want exactly the locked versions; use
+plain `npm install` only when deliberately changing a dependency.
 
 ## Lily Design System vendoring
 
