@@ -44,6 +44,11 @@
 				'SqlBulkCopyOptions, column selection, ORDER hints, and CA-certificate bundles for locked-down environments.'
 		},
 		{
+			heading: 'Stored procedures with OUTPUT parameters',
+			description:
+				'call_procedure calls a procedure by name, binds OUTPUT parameters with ProcParam, and reads back OUTPUT values and the RETURN status through into_output_params.'
+		},
+		{
 			heading: 'JSON-ready results',
 			description:
 				'Row, Column, ColumnData, TokenRow, Numeric, and the time/xml types derive Serialize/Deserialize behind an opt-in serde feature, so query results round-trip through serde_json.'

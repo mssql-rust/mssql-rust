@@ -1,6 +1,6 @@
 {
   "name": "mssql",
-  "version": "0.12.3",
+  "version": "1.0.2",
   "description": "An asynchronous, runtime-independent, pure-Rust Tabular Data Stream (TDS) client for Microsoft SQL Server. A fork of Tiberius, focused on ongoing maintenance and security updates via small, targeted changes.",
   "fork_of": "Tiberius (https://github.com/prisma/tiberius)",
   "license": "MIT/Apache-2.0",
@@ -10,7 +10,7 @@
   "import_as": "mssql",
   "runtimes": ["tokio", "async-std", "smol"],
   "exports": {
-    "Client": "The async TDS connection. `Client::connect(config, stream)`, then `.query()`, `.execute()`, `.bulk_insert()`.",
+    "Client": "The async TDS connection. `Client::connect(config, stream)`, then `.query()`, `.execute()`, `.bulk_insert()`, `.call_procedure()`.",
     "Config": "Connection configuration: host, port, authentication, encryption; also parses ADO.NET and JDBC connection strings.",
     "ConfigBuilder": "Fluent builder alternative to Config's setter methods.",
     "AuthMethod": "SQL Server auth, or Windows/trusted (integrated) auth via `winauth`, `integrated-auth-gssapi`, or `sspi-rs`.",
@@ -25,7 +25,9 @@
     "IntoSql": "Trait: convert a value into its wire parameter representation.",
     "error": "`pub mod error`; `error::Error` is the crate's single error type, covering I/O, TDS protocol, and server errors.",
     "ExecuteResult": "Row-count(s) affected, returned by `Query::execute` / `Client::execute`.",
-    "QueryStream": "The streaming result of a query; `.into_row()`, `.into_first_result()`, etc. consume it.",
+    "QueryStream": "The streaming result of a query; `.into_row()`, `.into_first_result()`, `.into_output_params()`, etc. consume it.",
+    "ProcParam": "One parameter to `Client::call_procedure`: `ProcParam::input(name, value)` or `ProcParam::output(name, value)` (the latter needs a concrete, non-NULL placeholder value to establish its SQL type).",
+    "OutputParams": "OUTPUT parameters and RETURN status from a stored-procedure call, read via `QueryStream::into_output_params`; `.get::<T>(name)` and `.return_status()`.",
     "SqlBulkCopyOption": "One option controlling `Client::bulk_insert` (e.g. keep identity, table lock).",
     "SqlBulkCopyOptions": "A set of SqlBulkCopyOption values.",
     "ColumnOrderHint": "Bulk-insert column ordering hint.",
