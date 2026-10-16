@@ -14,6 +14,15 @@ forward.
 
 ## Unreleased
 
+### Changed
+
+- Dependencies updated: `thiserror` 2, `asynchronous-codec` 0.7, `pretty-hex`
+  0.4, `uuid` 1.28, `zeroize` 1.9.1; the optional `libgssapi` 0.11 and `sspi`
+  0.23 (the `integrated-auth-gssapi` and `sspi-rs` features); and the internal
+  `runtimes-macro` proc-macro moved to `syn` 3 / `darling` 0.24. The
+  `async-std`-based dev-only runtime in the test harness moved to `smol`. No
+  public API change.
+
 ### Added
 
 - `Client::call_procedure`, `ProcParam`, `QueryStream::into_output_params`

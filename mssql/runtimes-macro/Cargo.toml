@@ -2,7 +2,7 @@
 name = "runtimes-macro"
 version = "0.1.0"
 authors = ["Eric Sheppard <eric@eigenmo.de>"]
-edition = "2018"
+edition = "2021"
 rust-version.workspace = true
 
 [lib]
@@ -10,6 +10,6 @@ proc-macro = true
 
 [dependencies]
 quote = "1"
-syn = "1"
-darling = "0.14"
+syn = "3"
+darling = "0.24"
 proc-macro2 = "1"
