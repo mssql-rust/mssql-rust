@@ -1,6 +1,6 @@
 {
   "name": "mssql",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "An asynchronous, runtime-independent, pure-Rust Tabular Data Stream (TDS) client for Microsoft SQL Server. A fork of Tiberius, focused on ongoing maintenance and security updates via small, targeted changes.",
   "fork_of": "Tiberius (https://github.com/prisma/tiberius)",
   "license": "MIT/Apache-2.0",

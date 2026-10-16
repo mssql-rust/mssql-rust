@@ -14,6 +14,8 @@ forward.
 
 ## Unreleased
 
+## Version 1.1.0
+
 ### Changed
 
 - Dependencies updated: `thiserror` 2, `asynchronous-codec` 0.7, `pretty-hex`
