@@ -14,13 +14,17 @@
     "node": "=26"
   },
   "devDependencies": {
-    "@sveltejs/adapter-static": "^3.0.10",
-    "@sveltejs/kit": "^2.70.2",
+    "@sveltejs/adapter-static": "^4.0.0-next.0",
+    "@sveltejs/kit": "^3.0.0-next.0",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "svelte": "^5.56.9",
     "vite": "^8.2.1"
   },
   "overrides": {
     "cookie": "^0.7.2"
+  },
+  "imports": {
+    "#lib": "./src/lib/index.js",
+    "#lib/*": "./src/lib/*"
   }
 }

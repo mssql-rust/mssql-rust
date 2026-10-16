@@ -1,12 +1,12 @@
 <script>
 	import { page } from '$app/state';
-	import SkipLink from '$lib/lily/components/SkipLink.svelte';
-	import Header from '$lib/lily/components/Header.svelte';
-	import Footer from '$lib/lily/components/Footer.svelte';
-	import ThemePicker from '$lib/lily/helpers/ThemePicker.svelte';
-	import TextSizePicker from '$lib/lily/helpers/TextSizePicker.svelte';
-	import SharePicker from '$lib/lily/helpers/SharePicker.svelte';
-	import { SHARE_TARGETS, promptMastodonShare } from '$lib/share.js';
+	import SkipLink from '#lib/lily/components/SkipLink.svelte';
+	import Header from '#lib/lily/components/Header.svelte';
+	import Footer from '#lib/lily/components/Footer.svelte';
+	import ThemePicker from '#lib/lily/helpers/ThemePicker.svelte';
+	import TextSizePicker from '#lib/lily/helpers/TextSizePicker.svelte';
+	import SharePicker from '#lib/lily/helpers/SharePicker.svelte';
+	import { SHARE_TARGETS, promptMastodonShare } from '#lib/share.js';
 	import {
 		CODEBERG,
 		DOCS_RS,
@@ -17,7 +17,7 @@
 		THEMES,
 		THEME_LABELS,
 		TIBERIUS
-	} from '$lib/site.js';
+	} from '#lib/site.js';
 	import '../styles/site.css';
 
 	let { children } = $props();

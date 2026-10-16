@@ -1,13 +1,13 @@
 <script>
-	import ArticleLayout from '$lib/lily/components/ArticleLayout.svelte';
-	import Hero from '$lib/lily/components/Hero.svelte';
-	import ButtonGroup from '$lib/lily/components/ButtonGroup.svelte';
-	import ActionLink from '$lib/lily/components/ActionLink.svelte';
-	import Card from '$lib/lily/components/Card.svelte';
-	import FeatureCard from '$lib/lily/components/FeatureCard.svelte';
-	import Badge from '$lib/lily/components/Badge.svelte';
-	import InformationCallout from '$lib/lily/components/InformationCallout.svelte';
-	import ClipboardCopyButton from '$lib/lily/components/ClipboardCopyButton.svelte';
+	import ArticleLayout from '#lib/lily/components/ArticleLayout.svelte';
+	import Hero from '#lib/lily/components/Hero.svelte';
+	import ButtonGroup from '#lib/lily/components/ButtonGroup.svelte';
+	import ActionLink from '#lib/lily/components/ActionLink.svelte';
+	import Card from '#lib/lily/components/Card.svelte';
+	import FeatureCard from '#lib/lily/components/FeatureCard.svelte';
+	import Badge from '#lib/lily/components/Badge.svelte';
+	import InformationCallout from '#lib/lily/components/InformationCallout.svelte';
+	import ClipboardCopyButton from '#lib/lily/components/ClipboardCopyButton.svelte';
 	import {
 		CRATES_IO,
 		DOCS_RS,
@@ -15,7 +15,7 @@
 		SITE_NAME,
 		SITE_URL,
 		TIBERIUS
-	} from '$lib/site.js';
+	} from '#lib/site.js';
 
 	let { data } = $props();
 

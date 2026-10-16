@@ -1,4 +1,4 @@
-import { SITE_NAME, SITE_TAGLINE } from '$lib/site.js';
+import { SITE_NAME, SITE_TAGLINE } from '#lib/site.js';
 
 // `data.title` is the page.data.title convention: every route that wants a
 // share-able title (SharePicker in +layout.svelte reads `page.data.title`)
