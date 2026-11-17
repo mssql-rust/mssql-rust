@@ -610,3 +610,79 @@ where
 
     Ok(())
 }
+
+// A row whose encoding fails partway (here the second column, a smallmoney
+// out of range) must not leave its first column's bytes in the bulk-load
+// buffer: they used to be flushed with the next row and desync the stream.
+// Ported from upstream Tiberius 991702f.
+#[test_on_runtimes]
+async fn bulk_insert_failed_row_is_rolled_back<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("##{}", random_table().await);
+
+    conn.simple_query(format!(
+        "CREATE TABLE {} (id INT NOT NULL, m SMALLMONEY NULL)",
+        table
+    ))
+    .await?;
+
+    let mut req = conn.bulk_insert(&table).await?;
+
+    let mut bad = TokenRow::new();
+    bad.push(ColumnData::I32(Some(1)));
+    bad.push(ColumnData::F64(Some(1e12)));
+    assert!(req.send(bad).await.is_err());
+
+    let mut good = TokenRow::new();
+    good.push(ColumnData::I32(Some(2)));
+    good.push(ColumnData::F64(Some(1.5)));
+    req.send(good).await?;
+
+    let result = req.finalize().await?;
+    assert_eq!(result.rows_affected(), &[1]);
+
+    let row = conn
+        .query(format!("SELECT id, CAST(m AS FLOAT) FROM {}", table), &[])
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+    assert_eq!(Some(2), row.get::<i32, _>(0));
+    assert_eq!(Some(1.5), row.get::<f64, _>(1));
+
+    Ok(())
+}
+
+// An ORDER hint naming a column with `]` in it must be bracket-escaped like
+// every other identifier in the generated INSERT BULK statement.
+#[test_on_runtimes]
+async fn bulk_insert_order_hint_escapes_closing_bracket<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("##{}", random_table().await);
+
+    conn.simple_query(format!("CREATE TABLE {} ([a]]b] INT NOT NULL)", table))
+        .await?;
+
+    let order_hints = [("a]b", SortOrder::Ascending)];
+    let mut req = conn
+        .bulk_insert_with_options(
+            &table,
+            &["*"],
+            SqlBulkCopyOption::TableLock.into(),
+            &order_hints,
+        )
+        .await?;
+
+    for val in [1, 2] {
+        let mut row = TokenRow::new();
+        row.push(ColumnData::I32(Some(val)));
+        req.send(row).await?;
+    }
+    assert_eq!(req.finalize().await?.rows_affected(), &[2]);
+
+    Ok(())
+}

@@ -604,7 +604,23 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
 
         // now start bulk upload
         self.connection.flush_stream().await?;
-        let col_data = columns.iter().map(|c| format!("{}", c)).join(", ");
+        // `MetaDataColumn`'s Display returns `fmt::Error` for a column type
+        // INSERT BULK can't declare; `format!` would turn that into a panic.
+        let mut col_data = String::new();
+        for (i, column) in columns.iter().enumerate() {
+            if i > 0 {
+                col_data.push_str(", ");
+            }
+            std::fmt::Write::write_fmt(&mut col_data, format_args!("{column}")).map_err(|_| {
+                crate::Error::BulkInput(
+                    format!(
+                        "column {} has a type bulk insert cannot declare: {:?}",
+                        column.col_name, column.base.ty
+                    )
+                    .into(),
+                )
+            })?;
+        }
         let mut query = format!("INSERT BULK {} ({})", table, col_data);
 
         // Note: `KeepIdentity` never contributes a hint here - it's handled
@@ -636,7 +652,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
                         SortOrder::Descending => "DESC",
                     };
 
-                    format!("[{col}] {dir}")
+                    // Escape `]` the same way column names are escaped
+                    // elsewhere, so an ORDER hint can't break out of the
+                    // bracket-quoted identifier.
+                    format!("[{}] {dir}", col.replace(']', "]]"))
                 })
                 .join(", ");
 
