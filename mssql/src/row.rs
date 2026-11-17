@@ -289,8 +289,17 @@ impl QueryIdx for &str {
         // so it matches a column literally named `type` (which is not itself
         // a valid raw-identifier-prefixed SQL name, so this can't shadow a
         // real column).
-        let name = self.strip_prefix("r#").unwrap_or(self);
-        row.columns.iter().position(|c| c.name() == name)
+        //
+        // An exact match wins first, so a column whose name really starts
+        // with `r#` (legal when bracket-quoted) stays addressable (upstream
+        // Tiberius bf25ac6).
+        row.columns
+            .iter()
+            .position(|c| c.name() == *self)
+            .or_else(|| {
+                let name = self.strip_prefix("r#")?;
+                row.columns.iter().position(|c| c.name() == name)
+            })
     }
 }
 
@@ -484,6 +493,28 @@ impl From<Row> for TokenRow<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_column_name_wins_over_raw_identifier_stripping() {
+        let mut data = TokenRow::new();
+        data.push(ColumnData::I32(Some(1)));
+        data.push(ColumnData::I32(Some(2)));
+        let row = Row::new(
+            vec![
+                Column::new("type".into(), ColumnType::Int4),
+                Column::new("r#type".into(), ColumnType::Int4),
+            ],
+            data,
+        );
+        assert_eq!(Some(2i32), row.get("r#type"));
+        assert_eq!(Some(1i32), row.get("type"));
+
+        // With no literal `r#type` column, `r#type` still finds `type`.
+        let mut data = TokenRow::new();
+        data.push(ColumnData::I32(Some(1)));
+        let row = Row::new(vec![Column::new("type".into(), ColumnType::Int4)], data);
+        assert_eq!(Some(1i32), row.get("r#type"));
+    }
 
     // Regression test for #402: `Row` (and `Column`/`TokenRow`, which it's
     // built from) had no `PartialEq`, so test code couldn't

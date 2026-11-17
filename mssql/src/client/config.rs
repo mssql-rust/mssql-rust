@@ -800,7 +800,9 @@ pub(crate) trait ConfigString {
     fn readonly(&self) -> bool {
         self.dict()
             .get("applicationintent")
-            .filter(|val| *val == "ReadOnly")
+            // ADO.NET treats the value case-insensitively (upstream Tiberius
+            // 97bbbfd); `applicationintent=readonly` used to be ignored.
+            .filter(|val| val.trim().eq_ignore_ascii_case("ReadOnly"))
             .is_some()
     }
 

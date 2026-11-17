@@ -81,6 +81,11 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 - `char`/`varchar`/`text` data in legacy CP437 and CP850 collations (e.g.
   `SQL_Latin1_General_CP437_BIN`, `SQL_1xCompat_CP850_CI_AS`) can now be read
   and bulk-inserted. Before, both failed with "unsupported encoding".
+- `ApplicationIntent=readonly` (any letter case, as ADO.NET accepts) now
+  requests read-only intent. Before, only the exact spelling `ReadOnly` did.
+- A `smallint` column can be read as `i32` (lossless widening).
+- `row.get("r#name")` now prefers a column literally named `r#name` before
+  falling back to `name`.
 - `FOR BROWSE` queries (and other browse-mode results) no longer fail with
   "invalid token type a4": COLINFO and TABNAME tokens are skipped.
 - ERROR, INFO and LOGINACK tokens are parsed within their declared length,
