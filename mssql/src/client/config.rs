@@ -1,4 +1,5 @@
 mod ado_net;
+mod ado_parser;
 mod jdbc;
 
 use std::collections::HashMap;

@@ -2,21 +2,32 @@ use super::{ConfigString, ServerDefinition};
 use std::str::FromStr;
 
 pub(crate) struct AdoNetConfig {
-    dict: connection_string::AdoNetString,
+    dict: super::ado_parser::AdoNetString,
 }
 
 impl FromStr for AdoNetConfig {
     type Err = crate::error::Error;
 
     fn from_str(s: &str) -> crate::Result<Self> {
-        let dict = s.parse()?;
+        let dict = super::ado_parser::parse(s).map_err(|reason| {
+            crate::Error::Conversion(
+                format!(
+                    "Connection string: {reason}. hint: if a value such as a password \
+                     contains `;` or starts with a quote or `{{`, wrap it in single quotes \
+                     (e.g. `password='p@ss;word'`), double quotes, or braces, doubling an \
+                     enclosing quote to embed it; do not URL-encode it. For non-ASCII \
+                     values, build the Config programmatically instead."
+                )
+                .into(),
+            )
+        })?;
         Ok(Self { dict })
     }
 }
 
 impl ConfigString for AdoNetConfig {
     fn dict(&self) -> &std::collections::HashMap<String, String> {
-        &self.dict
+        self.dict.pairs()
     }
 
     fn server(&self) -> crate::Result<ServerDefinition> {
@@ -54,9 +65,9 @@ impl ConfigString for AdoNetConfig {
         }
 
         match self
-            .dict
+            .dict()
             .get("server")
-            .or_else(|| self.dict.get("data source"))
+            .or_else(|| self.dict().get("data source"))
         {
             Some(value) if value.starts_with("tcp:") => {
                 parse_server(value[4..].split(',').collect())
@@ -631,5 +642,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    // Upstream Tiberius #313: the `connection-string` crate's ADO tokenizer
+    // rejected any unquoted value containing `=` (e.g. base64 padding) with
+    // "Key-value pairs must be separated by a `;`", kept `''` doubling
+    // un-unescaped, trimmed spaces inside quotes, and silently folded junk
+    // after a closing `}` into the value. This fork's earlier "doesn't
+    // reproduce" note only tried the reporter's literal string.
+    #[test]
+    fn issue_313_values_with_equals_and_quotes_parse_like_ado_net() -> crate::Result<()> {
+        for (s, expected) in [
+            ("password=Zm9vYmFy==", "Zm9vYmFy=="),
+            ("password=a=b", "a=b"),
+            ("password='it''s'", "it's"),
+            ("password=\"say \"\"hi\"\"\"", "say \"hi\""),
+            ("password=' a '", " a "),
+        ] {
+            let ado: AdoNetConfig = format!("user=sa;{s}").parse()?;
+            match ado.authentication()? {
+                AuthMethod::SqlServer(auth) => {
+                    let (_, password) = auth.into_credentials();
+                    assert_eq!(expected, password.as_str(), "{s}");
+                }
+                other => panic!("{s}: unexpected auth {other:?}"),
+            }
+        }
+
+        assert!("user=sa;password={a}b}".parse::<AdoNetConfig>().is_err());
+        Ok(())
     }
 }
