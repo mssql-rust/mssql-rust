@@ -327,37 +327,32 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 if vlc.r#type() == VarLenType::Money =>
             {
                 match opt {
-                    Some(val) => {
-                        // Both widths are a scaled-by-10000 fixed-point
-                        // integer; `money` (8 bytes) splits it into the
-                        // upper and lower 32 bits of an i64.
-                        let scaled = (val * 1e4).round() as i64;
-
-                        match vlc.len() {
-                            4 => {
-                                let scaled = i32::try_from(scaled).map_err(|_| {
-                                    crate::Error::BulkInput(
-                                        format!("value {} out of range for smallmoney", val).into(),
-                                    )
-                                })?;
-
-                                dst.put_u8(4);
-                                dst.put_i32_le(scaled);
-                            }
-                            8 => {
-                                dst.put_u8(8);
-                                dst.put_i32_le((scaled >> 32) as i32);
-                                dst.put_u32_le(scaled as u32);
-                            }
-                            len => {
-                                return Err(crate::Error::BulkInput(
-                                    format!("money: invalid column length {}", len).into(),
-                                ))
-                            }
-                        }
-                    }
+                    Some(val) => money::encode_f64(&mut **dst, vlc.len(), val, true)?,
                     None => dst.put_u8(0),
                 }
+            }
+            (ColumnData::Numeric(opt), Some(TypeInfo::VarLenSized(vlc)))
+                if vlc.r#type() == VarLenType::Money =>
+            {
+                match opt {
+                    Some(num) => money::encode_numeric(&mut **dst, vlc.len(), num, true)?,
+                    None => dst.put_u8(0),
+                }
+            }
+            // NOT NULL money/smallmoney columns arrive as FixedLen: raw bytes,
+            // no length prefix. These used to hit the "invalid data type"
+            // catch-all, so they couldn't be bulk-inserted at all.
+            (ColumnData::F64(Some(val)), Some(TypeInfo::FixedLen(ty)))
+                if matches!(ty, FixedLenType::Money | FixedLenType::Money4) =>
+            {
+                let len = if *ty == FixedLenType::Money { 8 } else { 4 };
+                money::encode_f64(&mut **dst, len, val, false)?;
+            }
+            (ColumnData::Numeric(Some(num)), Some(TypeInfo::FixedLen(ty)))
+                if matches!(ty, FixedLenType::Money | FixedLenType::Money4) =>
+            {
+                let len = if *ty == FixedLenType::Money { 8 } else { 4 };
+                money::encode_numeric(&mut **dst, len, num, false)?;
             }
             (ColumnData::Guid(opt), Some(TypeInfo::VarLenSized(vlc)))
                 if vlc.r#type() == VarLenType::Guid =>

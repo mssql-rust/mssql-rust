@@ -263,7 +263,7 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   `97bbbfd`. Semver: `BaseMetaDataColumn` has pub fields, so carry the
   table name without a struct-literal break, or note it. Verify live. Then
   restore the TEXT column in `bulk_text_keeps_a_non_default_column_collation`.
-- [ ] **Money hardening**: NaN/inf/out-of-range money saturates silently;
+- [x] **Money hardening** (done on the backlog branch): NaN/inf/out-of-range money saturates silently;
   no Numeric→Money arm; NOT NULL money columns (`FixedLen`) can't be
   bulk-inserted (`302cfe4`, `e0a65d8`, `1d91e18`, `8510d35`).
 - [ ] **Token-body desync**: ERROR/INFO/LOGINACK parsed straight off the

@@ -60,6 +60,10 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
   default is no longer stored corrupted.
 - Bulk insert: a row that failed to encode partway no longer desyncs the
   stream, and `]` in an ORDER-hint column name is now escaped.
+- Bulk insert of money/smallmoney: a NaN, infinite or out-of-range `f64`
+  is an error instead of being silently saturated (NaN was stored as 0).
+  `Numeric` values are encoded exactly. NOT NULL money columns can now be
+  bulk-inserted at all.
 - Bulk insert into `text`/`ntext`/`image` columns works. Before, it failed
   with error 4804, and so did any bulk insert into a table that merely had
   such a column.

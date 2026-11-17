@@ -874,3 +874,95 @@ where
 
     Ok(())
 }
+
+// NOT NULL money/smallmoney columns (FixedLen on the wire) couldn't be
+// bulk-inserted at all; Numeric values had no money encoding; and NaN or
+// out-of-range f64 values were silently saturated. Ported from upstream
+// Tiberius (302cfe4, e0a65d8, 1d91e18, 8510d35).
+#[test_on_runtimes]
+async fn bulk_insert_money_not_null_numeric_and_rejects_nan<S>(
+    mut conn: mssql::Client<S>,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    use mssql::numeric::Numeric;
+
+    let table = format!("##{}", random_table().await);
+
+    conn.simple_query(format!(
+        "CREATE TABLE {} (id INT NOT NULL, m MONEY NOT NULL, sm SMALLMONEY NOT NULL, mn MONEY NULL)",
+        table
+    ))
+    .await?;
+
+    let mut req = conn.bulk_insert(&table).await?;
+
+    let mut nan = TokenRow::new();
+    nan.push(ColumnData::I32(Some(0)));
+    nan.push(ColumnData::F64(Some(f64::NAN)));
+    nan.push(ColumnData::F64(Some(0.0)));
+    nan.push(ColumnData::F64(None));
+    assert!(req.send(nan).await.is_err());
+
+    let mut row = TokenRow::new();
+    row.push(ColumnData::I32(Some(1)));
+    row.push(ColumnData::F64(Some(-12.3456)));
+    row.push(ColumnData::F64(Some(214748.3647)));
+    // Money's maximum, exact only through the Numeric path.
+    row.push(ColumnData::Numeric(Some(Numeric::new_with_scale(
+        9_223_372_036_854_775_807,
+        4,
+    ))));
+    req.send(row).await?;
+
+    let mut row = TokenRow::new();
+    row.push(ColumnData::I32(Some(2)));
+    row.push(ColumnData::Numeric(Some(Numeric::new_with_scale(
+        123_456_789,
+        5,
+    ))));
+    row.push(ColumnData::Numeric(Some(Numeric::new_with_scale(-1, 0))));
+    row.push(ColumnData::F64(None));
+    req.send(row).await?;
+
+    assert_eq!(req.finalize().await?.total(), 2);
+
+    let rows = conn
+        .query(
+            format!(
+                "SELECT CAST(m AS VARCHAR(40)), CAST(sm AS VARCHAR(40)), CAST(mn AS VARCHAR(40)) \
+                 FROM {} ORDER BY id",
+                table
+            ),
+            &[],
+        )
+        .await?
+        .into_first_result()
+        .await?;
+
+    assert_eq!(Some("-12.35"), rows[0].get::<&str, _>(0)); // VARCHAR shows 2 places
+    assert_eq!(Some("214748.36"), rows[0].get::<&str, _>(1));
+    assert_eq!(Some("922337203685477.58"), rows[0].get::<&str, _>(2));
+    assert_eq!(Some("1234.57"), rows[1].get::<&str, _>(0));
+    assert_eq!(Some("-1.00"), rows[1].get::<&str, _>(1));
+    assert_eq!(None, rows[1].get::<&str, _>(2));
+
+    let exact = conn
+        .query(
+            format!(
+                "SELECT CAST(mn AS DECIMAL(19,4)), CAST(m AS DECIMAL(19,4)) FROM {} ORDER BY id",
+                table
+            ),
+            &[],
+        )
+        .await?
+        .into_first_result()
+        .await?;
+    let max: Numeric = exact[0].get(0).unwrap();
+    assert_eq!(max.value(), 9_223_372_036_854_775_807);
+    let rounded: Numeric = exact[1].get(1).unwrap();
+    assert_eq!(rounded.value(), 12_345_679); // 1234.56789 -> 1234.5679
+
+    Ok(())
+}
