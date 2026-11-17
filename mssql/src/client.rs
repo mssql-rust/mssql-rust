@@ -22,12 +22,12 @@ use crate::{
         stream::{QueryStream, TokenStream},
         Collation,
     },
-    BulkLoadRequest, ColumnFlag, ColumnOrderHint, MetaDataColumn, ProcParam, SortOrder,
-    SqlBulkCopyOption, SqlBulkCopyOptions, SqlReadBytes, ToSql,
+    BulkLoadRequest, ColumnFlag, ColumnOrderHint, IsolationLevel, MetaDataColumn, ProcParam,
+    SortOrder, SqlBulkCopyOption, SqlBulkCopyOptions, SqlReadBytes, ToSql,
 };
 use codec::{
     BatchRequest, ColumnData, PacketHeader, RpcParam, RpcProcId, RpcStatus, TokenRpcRequest,
-    TypeInfo, VarLenContext, VarLenType,
+    TransactionManagerRequest, TypeInfo, VarLenContext, VarLenType,
 };
 use enumflags2::BitFlags;
 use futures_util::io::{AsyncRead, AsyncWrite};
@@ -723,6 +723,111 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     /// Closes this database connection explicitly.
     pub async fn close(self) -> crate::Result<()> {
         self.connection.close().await
+    }
+
+    /// Begins a transaction with a TDS Transaction Manager request
+    /// (`TM_BEGIN_XACT`, MS-TDS 2.2.6.9) instead of a `BEGIN TRAN` batch.
+    /// The server's transaction descriptor (from its ENVCHANGE reply) is
+    /// attached to every following request until
+    /// [`commit_transaction`](Self::commit_transaction) or
+    /// [`rollback_transaction`](Self::rollback_transaction). Uses the
+    /// session's isolation level; see
+    /// [`begin_transaction_with_isolation`](Self::begin_transaction_with_isolation).
+    ///
+    /// ```
+    /// # use mssql::{Config, IsolationLevel};
+    /// # use tokio_util::compat::TokioAsyncWriteCompatExt;
+    /// # use std::env;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let c_str = env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or(
+    /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
+    /// # );
+    /// # let config = Config::from_ado_string(&c_str)?;
+    /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
+    /// # let mut client = mssql::Client::connect(config, tcp.compat_write()).await?;
+    /// client.begin_transaction_with_isolation(IsolationLevel::Serializable).await?;
+    /// client.execute("SELECT 1", &[]).await?;
+    /// client.commit_transaction().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Ported from upstream Tiberius (tiberius-rs/tiberius 8338bb8).
+    pub async fn begin_transaction(&mut self) -> crate::Result<()> {
+        self.begin_transaction_with_isolation(IsolationLevel::Unspecified)
+            .await
+    }
+
+    /// [`begin_transaction`](Self::begin_transaction) with an explicit
+    /// isolation level.
+    pub async fn begin_transaction_with_isolation(
+        &mut self,
+        isolation_level: IsolationLevel,
+    ) -> crate::Result<()> {
+        let desc = self.connection.context().transaction_descriptor();
+        self.send_transaction_manager_request(TransactionManagerRequest::begin(
+            desc,
+            isolation_level,
+            "".into(),
+        ))
+        .await
+    }
+
+    /// Commits the active transaction (`TM_COMMIT_XACT`).
+    pub async fn commit_transaction(&mut self) -> crate::Result<()> {
+        let desc = self.connection.context().transaction_descriptor();
+        self.send_transaction_manager_request(TransactionManagerRequest::commit(desc, "".into()))
+            .await
+    }
+
+    /// Rolls back the active transaction (`TM_ROLLBACK_XACT`).
+    pub async fn rollback_transaction(&mut self) -> crate::Result<()> {
+        let desc = self.connection.context().transaction_descriptor();
+        self.send_transaction_manager_request(TransactionManagerRequest::rollback(desc, "".into()))
+            .await
+    }
+
+    /// Rolls back to a savepoint created with
+    /// [`save_transaction`](Self::save_transaction), keeping the outer
+    /// transaction open (`TM_ROLLBACK_XACT` with a name).
+    pub async fn rollback_to_savepoint<'n>(
+        &mut self,
+        name: impl Into<Cow<'n, str>>,
+    ) -> crate::Result<()> {
+        let desc = self.connection.context().transaction_descriptor();
+        self.send_transaction_manager_request(TransactionManagerRequest::rollback(
+            desc,
+            name.into(),
+        ))
+        .await
+    }
+
+    /// Creates a named savepoint in the active transaction (`TM_SAVE_XACT`).
+    pub async fn save_transaction<'n>(
+        &mut self,
+        name: impl Into<Cow<'n, str>>,
+    ) -> crate::Result<()> {
+        let desc = self.connection.context().transaction_descriptor();
+        self.send_transaction_manager_request(TransactionManagerRequest::save(desc, name.into()))
+            .await
+    }
+
+    async fn send_transaction_manager_request(
+        &mut self,
+        req: TransactionManagerRequest<'_>,
+    ) -> crate::Result<()> {
+        self.connection.flush_stream().await?;
+
+        let id = self.connection.context_mut().next_packet_id();
+        self.connection
+            .send(PacketHeader::transaction_manager(id), req)
+            .await?;
+
+        // DONE, plus an ENVCHANGE that the token stream applies to the
+        // context's transaction descriptor.
+        TokenStream::new(&mut self.connection).flush_done().await?;
+        Ok(())
     }
 
     pub(crate) fn rpc_params<'a>(query: impl Into<Cow<'a, str>>) -> Vec<RpcParam<'a>> {

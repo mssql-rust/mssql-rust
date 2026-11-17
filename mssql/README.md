@@ -277,6 +277,15 @@ types, and `Uuid`). Other NULLs (e.g. `&None::<&str>`) are sent untyped,
 which SQL Server rejects as `OUTPUT`; `call_procedure` checks for this
 client-side before sending anything. See [`examples/call_procedure.rs`](examples/call_procedure.rs).
 
+## Transactions
+
+Plain T-SQL (`BEGIN TRAN` / `COMMIT` via `simple_query`) works, and so do
+protocol-level Transaction Manager requests:
+`Client::begin_transaction` (or `begin_transaction_with_isolation(IsolationLevel::..)`),
+`commit_transaction`, `rollback_transaction`, `save_transaction(name)` and
+`rollback_to_savepoint(name)`. Either way, the server's transaction
+descriptor is attached to every request until the transaction ends.
+
 ## Redirects
 
 With certain Azure firewall settings, a login might return `Error::Routing { host, port }`. This means the user must create a new `TcpStream` to the given address, and connect again — there should never be more than one redirect. See [`examples/redirects.rs`](examples/redirects.rs) for a complete, runnable example.

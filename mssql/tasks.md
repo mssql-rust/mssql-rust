@@ -347,7 +347,9 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   - Typed NULL scalar parameters (`73e79d4`). **Done** on
     `upstream/tiberius-0.13-decisions`, verified live.
   - Client-certificate (mTLS) auth (`4a212e7`).
-  - Transaction Manager requests (`8338bb8`).
+  - Transaction Manager requests (`8338bb8`). **Done** on
+    `upstream/tiberius-0.13-decisions`, with a name-length fix upstream
+    lacks (sent in bytes) and `rollback_to_savepoint`.
   - Table-valued parameters (`73e79d4`): only without the ungated macro and
     without `format!("DECLARE @P AS {db_type}")` interpolation. Same
     objection as #328.

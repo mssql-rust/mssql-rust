@@ -105,6 +105,10 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Added
 
+- Transaction Manager requests: `Client::begin_transaction`,
+  `begin_transaction_with_isolation(IsolationLevel)`, `commit_transaction`,
+  `rollback_transaction`, `save_transaction(name)` and (fork addition)
+  `rollback_to_savepoint(name)`, plus the `IsolationLevel` enum.
 - NULL parameters of `bool`, the integer and float types and `Uuid` are
   sent typed rather than as the untyped NULLTYPE, so `call_procedure`
   accepts them as `OUTPUT` placeholders (`&None::<i32>`).

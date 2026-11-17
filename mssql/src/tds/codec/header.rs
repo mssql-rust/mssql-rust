@@ -68,6 +68,15 @@ impl PacketHeader {
         }
     }
 
+    /// Header for a Transaction Manager request (packet type 0x0E).
+    pub fn transaction_manager(id: u8) -> Self {
+        Self {
+            ty: PacketType::TransactionManagerReq,
+            status: PacketStatus::EndOfMessage,
+            ..Self::new(0, id)
+        }
+    }
+
     pub fn rpc(id: u8) -> Self {
         Self {
             ty: PacketType::Rpc,

@@ -35,6 +35,10 @@ before treating it as final.
   sets its type: a concrete value (`&0i32`) or a typed NULL (`&None::<i32>`;
   bool/integer/float/Uuid only, since other NULLs are sent untyped) — see
   [`examples/call_procedure.rs`](../../mssql/examples/call_procedure.rs).
+- **Transactions** — `BEGIN TRAN`/`COMMIT` batches work, or use
+  `Client::begin_transaction[_with_isolation]`, `commit_transaction`,
+  `rollback_transaction`, `save_transaction` and `rollback_to_savepoint`
+  (TDS Transaction Manager requests; `IsolationLevel` picks the level).
 - **`Query`** — an alternative to the `Client` convenience methods for when
   parameters come from a dynamic collection or need to be bound by value:
   `Query::new("SELECT @P1")`, then `.bind(value)` or `.bind_iter(values)`,
