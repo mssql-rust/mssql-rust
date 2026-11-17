@@ -378,6 +378,20 @@ impl TypeInfo {
                         let precision = src.read_u8().await?;
                         let scale = src.read_u8().await?;
 
+                        // MS-TDS 2.2.5.5.1.1: precision is 1..=38 and scale is
+                        // 0..=precision. Reject out-of-range server values here
+                        // so they never reach `Numeric::new_with_scale`'s
+                        // assert (a remote panic). Ported from upstream
+                        // Tiberius 3e6afc3/b0cf775.
+                        if !(1..=38).contains(&precision) || scale > precision {
+                            return Err(Error::Protocol(
+                                format!(
+                                    "decimal/numeric: invalid precision {precision} / scale {scale}"
+                                )
+                                .into(),
+                            ));
+                        }
+
                         TypeInfo::VarLenSizedPrecision {
                             size: len,
                             ty,
@@ -480,5 +494,43 @@ mod tests {
 
         let result = TypeInfo::VarLenSized(cx).encode(&mut buf);
         assert!(matches!(result, Err(Error::Protocol(_))));
+    }
+
+    // Numericn TYPE_INFO bytes: type, length, precision, scale.
+    fn numericn_bytes(precision: u8, scale: u8) -> BytesMut {
+        let mut buf = BytesMut::new();
+        buf.put_u8(VarLenType::Numericn as u8);
+        buf.put_u8(17);
+        buf.put_u8(precision);
+        buf.put_u8(scale);
+        buf
+    }
+
+    #[tokio::test]
+    async fn decode_rejects_out_of_range_precision_or_scale() {
+        for (precision, scale) in [(0u8, 0u8), (39, 0), (200, 2), (38, 39), (10, 11), (38, 255)] {
+            let err = TypeInfo::decode(&mut numericn_bytes(precision, scale).into_sql_read_bytes())
+                .await
+                .expect_err("out-of-range precision/scale must error, not panic");
+            assert!(
+                matches!(err, Error::Protocol(_)),
+                "{precision}/{scale}: {err:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn decode_accepts_precision_38_scale_38() {
+        let ti = TypeInfo::decode(&mut numericn_bytes(38, 38).into_sql_read_bytes())
+            .await
+            .expect("DECIMAL(38,38) is valid");
+        assert!(matches!(
+            ti,
+            TypeInfo::VarLenSizedPrecision {
+                precision: 38,
+                scale: 38,
+                ..
+            }
+        ));
     }
 }

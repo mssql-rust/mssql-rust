@@ -29,11 +29,13 @@ impl Numeric {
     /// Creates a new Numeric value.
     ///
     /// # Panic
-    /// It will panic if the scale exceed 37.
+    /// It will panic if the scale exceeds 38.
     pub fn new_with_scale(value: i128, scale: u8) -> Self {
-        // scale cannot exceed 37 since a
-        // max precision of 38 is possible here.
-        assert!(scale < 38);
+        // SQL Server's maximum precision is 38, and scale may equal precision
+        // (e.g. `DECIMAL(38,38)`), so 38 itself is a valid scale. This used to
+        // be `scale < 38`, which panicked reading legitimate `DECIMAL(38,38)`
+        // data (fix ported from upstream Tiberius 7d13e22/7803134).
+        assert!(scale <= 38);
 
         Numeric { value, scale }
     }
@@ -134,9 +136,9 @@ impl Numeric {
                 _ => unreachable!(),
             };
 
-            // swap high&low for big endian
-            #[cfg(target_endian = "big")]
-            let (low_part, high_part) = (high_part, low_part);
+            // No big-endian swap: `LittleEndian::read_*` already yields host
+            // values. The former `cfg(target_endian = "big")` swap corrupted
+            // values on big-endian hosts (removed upstream in 3e6afc3).
 
             let high_part = high_part * (u64::MAX as u128 + 1);
             low_part + high_part
@@ -168,7 +170,13 @@ impl Numeric {
                     for item in &mut bytes {
                         *item = src.read_u8().await?;
                     }
-                    decode_d128(&bytes) as i128 * sign
+                    // A 16-byte magnitude above i128::MAX would wrap (and
+                    // `i128::MIN * -1` overflows), so reject it. Valid
+                    // DECIMAL(38) values are below 10^38 < i128::MAX.
+                    let magnitude = i128::try_from(decode_d128(&bytes)).map_err(|_| {
+                        Error::Protocol("decimal/numeric: magnitude out of range".into())
+                    })?;
+                    magnitude * sign
                 }
                 x => {
                     return Err(Error::Protocol(
@@ -176,6 +184,12 @@ impl Numeric {
                     ))
                 }
             };
+
+            if scale > 38 {
+                return Err(Error::Protocol(
+                    format!("decimal/numeric: invalid scale {scale}").into(),
+                ));
+            }
 
             Ok(Some(Numeric::new_with_scale(value, scale)))
         }
@@ -192,7 +206,7 @@ impl Encode<BytesMut> for Numeric {
             dst.put_u8(1);
         }
 
-        let value = self.value().abs();
+        let value = self.value().unsigned_abs();
 
         match self.len() {
             5 => dst.put_u32_le(value as u32),
@@ -201,7 +215,7 @@ impl Encode<BytesMut> for Numeric {
                 dst.put_u64_le(value as u64);
                 dst.put_u32_le((value >> 64) as u32)
             }
-            _ => dst.put_u128_le(value as u128),
+            _ => dst.put_u128_le(value),
         }
 
         Ok(())
@@ -214,8 +228,9 @@ impl Debug for Numeric {
             f,
             "{}{}.{:0pad$}",
             if self.value() < 0 { "-" } else { "" },
-            self.int_part().abs(),
-            self.dec_part().abs(),
+            // `unsigned_abs`, not `abs`: `i128::MIN.abs()` panics.
+            self.int_part().unsigned_abs(),
+            self.dec_part().unsigned_abs(),
             pad = self.scale as usize
         )
     }
@@ -266,13 +281,43 @@ mod decimal {
     use super::{Decimal, Numeric};
     use crate::ColumnData;
 
+    // `Decimal::from_i128_with_scale` panics for a scale above 28 or a value
+    // wider than 96 bits, both of which a legitimate `DECIMAL(38, s)` column
+    // can hold. Convert fallibly instead, first narrowing the scale to 28
+    // when that loses nothing (e.g. trailing zeros of a `DECIMAL(38,38)`).
     #[cfg(feature = "tds73")]
-    from_sql!(Decimal: ColumnData::Numeric(ref num) => num.map(|num| {
-        Decimal::from_i128_with_scale(
-            num.value(),
-            num.scale() as u32,
-        )})
-    );
+    fn numeric_to_decimal(num: Numeric) -> crate::Result<Decimal> {
+        let num = if num.scale() > 28 {
+            num.try_rescale(28).unwrap_or(num)
+        } else {
+            num
+        };
+
+        Decimal::try_from_i128_with_scale(num.value(), num.scale() as u32).map_err(|e| {
+            crate::Error::Conversion(
+                format!("{num} does not fit in a rust_decimal::Decimal: {e}").into(),
+            )
+        })
+    }
+
+    #[cfg(feature = "tds73")]
+    impl<'a> crate::FromSql<'a> for Decimal {
+        fn from_sql(data: &'a ColumnData<'static>) -> crate::Result<Option<Self>> {
+            match data {
+                ColumnData::Numeric(num) => num.map(numeric_to_decimal).transpose(),
+                _ => Err(crate::Error::Conversion(
+                    format!("cannot interpret {:?} as an Decimal value", data).into(),
+                )),
+            }
+        }
+    }
+
+    #[cfg(feature = "tds73")]
+    impl crate::FromSqlOwned for Decimal {
+        fn from_sql_owned(data: ColumnData<'static>) -> crate::Result<Option<Self>> {
+            <Decimal as crate::FromSql>::from_sql(&data)
+        }
+    }
 
     #[cfg(feature = "tds73")]
     to_sql!(self_,
@@ -494,5 +539,73 @@ mod tests {
             ColumnData::Numeric(Some(Numeric::new_with_scale(100000000000000000000i128, 0))),
             res
         );
+    }
+
+    // Hardening tests ported/adapted from upstream Tiberius (7906d55,
+    // 7d13e22, 3e6afc3).
+    #[test]
+    fn scale_38_is_accepted() {
+        let n = Numeric::new_with_scale(1, 38);
+        assert_eq!(n.scale(), 38);
+        assert_eq!(n.int_part(), 0);
+    }
+
+    #[test]
+    fn debug_does_not_panic_on_i128_min() {
+        let s = format!("{:?}", Numeric::new_with_scale(i128::MIN, 0));
+        assert!(s.starts_with('-'), "{s}");
+        let _ = format!("{:?}", Numeric::new_with_scale(i128::MIN, 38));
+    }
+
+    #[test]
+    fn encode_does_not_panic_on_i128_min() {
+        let mut buf = BytesMut::new();
+        Numeric::new_with_scale(i128::MIN, 0)
+            .encode(&mut buf)
+            .unwrap();
+    }
+
+    async fn decode_bytes(bytes: Vec<u8>, scale: u8) -> crate::Result<Option<Numeric>> {
+        use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+        let buf = BytesMut::from(&bytes[..]);
+        Numeric::decode(&mut buf.into_sql_read_bytes(), scale).await
+    }
+
+    #[tokio::test]
+    async fn decode_rejects_16_byte_magnitude_above_i128_max() {
+        let mut bytes = vec![17u8, 0]; // len, negative sign
+        bytes.extend_from_slice(&[0xff; 16]);
+        let err = decode_bytes(bytes, 0).await.unwrap_err();
+        assert!(matches!(err, Error::Protocol(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn decode_rejects_scale_above_38() {
+        let err = decode_bytes(vec![5, 1, 1, 0, 0, 0], 39).await.unwrap_err();
+        assert!(matches!(err, Error::Protocol(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn decode_16_byte_value_round_trips() {
+        let value = 10i128.pow(37) + 12345;
+        let mut buf = BytesMut::new();
+        Numeric::new_with_scale(-value, 38)
+            .encode(&mut buf)
+            .unwrap();
+        let n = decode_bytes(buf.to_vec(), 38).await.unwrap().unwrap();
+        assert_eq!(n.value(), -value);
+    }
+
+    #[cfg(all(feature = "rust_decimal", feature = "tds73"))]
+    #[test]
+    fn rust_decimal_from_wide_scale_does_not_panic() {
+        use crate::{ColumnData, FromSql};
+        // 0.1 as DECIMAL(38,38): exact at scale 28, so it converts.
+        let data = ColumnData::Numeric(Some(Numeric::new_with_scale(10i128.pow(37), 38)));
+        let d = Decimal::from_sql(&data).unwrap().unwrap();
+        assert_eq!(d.to_string(), "0.1000000000000000000000000000");
+        // A value that needs all 38 digits doesn't fit: error, not panic.
+        let data = ColumnData::Numeric(Some(Numeric::new_with_scale(10i128.pow(37) + 1, 38)));
+        assert!(Decimal::from_sql(&data).is_err());
     }
 }
