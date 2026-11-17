@@ -599,7 +599,7 @@ mod tests {
         use super::*;
 
         fn parse(s: &str) -> AdoNetConfig {
-            format!("{s}").parse().unwrap()
+            s.parse().unwrap()
         }
 
         #[test]

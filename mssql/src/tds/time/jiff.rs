@@ -25,28 +25,45 @@ pub use jiff::{Timestamp, Zoned};
 use jiff::civil;
 use jiff::Span;
 
-#[inline]
-fn from_days(days: i64, start_year: i16) -> civil::Date {
-    civil::date(start_year, 1, 1)
-        .checked_add(Span::new().days(days))
-        .expect("TDS date out of range for jiff")
+// The wire values below are server-controlled. A day count past what jiff
+// can represent (e.g. a 3-byte `date` beyond 9999-12-31), or a time of day
+// at or past 24h (a 5-byte scale-7 `time` reaches ~30h, `smalldatetime`
+// minutes reach 65535, `datetime` fragments ~165 days), used to panic via
+// `Span::days`/`.expect`. They are now conversion errors, in the spirit of
+// upstream Tiberius's equivalent chrono/time fixes (tiberius-rs/tiberius
+// 3e6afc3, 0e977bf, 7803134).
+fn out_of_range(what: &str) -> crate::Error {
+    crate::Error::Conversion(format!("TDS {what} out of range for jiff").into())
 }
 
 #[inline]
-fn from_nanos(nanos: i64) -> civil::Time {
+fn from_days(days: i64, start_year: i16) -> crate::Result<civil::Date> {
+    let span = Span::new()
+        .try_days(days)
+        .map_err(|_| out_of_range("date"))?;
+    civil::date(start_year, 1, 1)
+        .checked_add(span)
+        .map_err(|_| out_of_range("date"))
+}
+
+#[inline]
+fn from_nanos(nanos: i64) -> crate::Result<civil::Time> {
+    if !(0..86_400 * 1_000_000_000).contains(&nanos) {
+        return Err(out_of_range("time of day"));
+    }
     civil::Time::midnight()
         .checked_add(Span::new().nanoseconds(nanos))
-        .expect("TDS time out of range for jiff")
+        .map_err(|_| out_of_range("time of day"))
 }
 
 #[inline]
-fn from_sec_fragments(sec_fragments: i64) -> civil::Time {
+fn from_sec_fragments(sec_fragments: i64) -> crate::Result<civil::Time> {
     from_nanos(sec_fragments * (1e9 as i64) / 300)
 }
 
 #[inline]
 #[cfg(feature = "tds73")]
-fn from_mins(mins: u32) -> civil::Time {
+fn from_mins(mins: u32) -> crate::Result<civil::Time> {
     from_nanos(mins as i64 * 60 * 1_000_000_000)
 }
 
@@ -70,9 +87,12 @@ fn to_sec_fragments(time: civil::Time) -> i64 {
 }
 
 #[cfg(feature = "tds73")]
-fn dt2_to_civil(dt2: &DateTime2) -> civil::DateTime {
+fn dt2_to_civil(dt2: &DateTime2) -> crate::Result<civil::DateTime> {
     let ns = dt2.time.increments as i64 * 10i64.pow(9 - dt2.time.scale as u32);
-    civil::DateTime::from_parts(from_days(dt2.date.days() as i64, 1), from_nanos(ns))
+    Ok(civil::DateTime::from_parts(
+        from_days(dt2.date.days() as i64, 1)?,
+        from_nanos(ns)?,
+    ))
 }
 
 #[cfg(feature = "tds73")]
@@ -90,7 +110,7 @@ fn dto_to_timestamp(dto: &DateTimeOffset) -> crate::Result<Timestamp> {
     // On the wire the date and time parts of a `datetimeoffset` are UTC; the
     // offset only records the display zone.
     jiff::tz::TimeZone::UTC
-        .to_timestamp(dt2_to_civil(&dto.datetime2))
+        .to_timestamp(dt2_to_civil(&dto.datetime2)?)
         .map_err(|e| crate::Error::Conversion(e.to_string().into()))
 }
 
@@ -122,7 +142,7 @@ impl<'a> crate::FromSql<'a> for Timestamp {
                 .as_ref()
                 .map(|dt2| {
                     jiff::tz::TimeZone::UTC
-                        .to_timestamp(dt2_to_civil(dt2))
+                        .to_timestamp(dt2_to_civil(dt2)?)
                         .map_err(|e| crate::Error::Conversion(e.to_string().into()))
                 })
                 .transpose(),
@@ -162,21 +182,21 @@ impl crate::FromSqlOwned for Zoned {
 #[cfg(feature = "tds73")]
 from_sql!(
     civil::DateTime:
-        ColumnData::SmallDateTime(ref dt) => dt.map(|dt| civil::DateTime::from_parts(
-            from_days(dt.days as i64, 1900),
-            from_mins(dt.seconds_fragments as u32),
-        )),
-        ColumnData::DateTime2(ref dt) => dt.map(|dt| dt2_to_civil(&dt)),
-        ColumnData::DateTime(ref dt) => dt.map(|dt| civil::DateTime::from_parts(
-            from_days(dt.days as i64, 1900),
-            from_sec_fragments(dt.seconds_fragments as i64)
-        ));
+        ColumnData::SmallDateTime(ref dt) => dt.map(|dt| Ok::<_, crate::Error>(civil::DateTime::from_parts(
+            from_days(dt.days as i64, 1900)?,
+            from_mins(dt.seconds_fragments as u32)?,
+        ))).transpose()?,
+        ColumnData::DateTime2(ref dt) => dt.map(|dt| dt2_to_civil(&dt)).transpose()?,
+        ColumnData::DateTime(ref dt) => dt.map(|dt| Ok::<_, crate::Error>(civil::DateTime::from_parts(
+            from_days(dt.days as i64, 1900)?,
+            from_sec_fragments(dt.seconds_fragments as i64)?
+        ))).transpose()?;
     civil::Time:
         ColumnData::Time(ref time) => time.map(|time| {
             from_nanos(time.increments as i64 * 10i64.pow(9 - time.scale as u32))
-        });
+        }).transpose()?;
     civil::Date:
-        ColumnData::Date(ref date) => date.map(|date| from_days(date.days() as i64, 1))
+        ColumnData::Date(ref date) => date.map(|date| from_days(date.days() as i64, 1)).transpose()?
 );
 
 #[cfg(feature = "tds73")]
@@ -216,10 +236,10 @@ into_sql!(self_,
 #[cfg(not(feature = "tds73"))]
 from_sql!(
     civil::DateTime:
-        ColumnData::DateTime(ref dt) => dt.map(|dt| civil::DateTime::from_parts(
-            from_days(dt.days as i64, 1900),
-            from_sec_fragments(dt.seconds_fragments as i64)
-        ))
+        ColumnData::DateTime(ref dt) => dt.map(|dt| Ok::<_, crate::Error>(civil::DateTime::from_parts(
+            from_days(dt.days as i64, 1900)?,
+            from_sec_fragments(dt.seconds_fragments as i64)?
+        ))).transpose()?
 );
 
 #[cfg(all(test, feature = "tds73"))]
@@ -237,6 +257,41 @@ mod tests {
         assert_eq!(Some(d), civil::Date::from_sql(&d.into_sql()).unwrap());
         let t = civil::time(23, 59, 59, 0);
         assert_eq!(Some(t), civil::Time::from_sql(&t.into_sql()).unwrap());
+    }
+
+    // Hostile/out-of-range wire values must be conversion errors, not panics.
+    #[test]
+    fn out_of_range_wire_values_error_instead_of_panicking() {
+        use crate::tds::time::{SmallDateTime, Time};
+
+        // 5-byte scale-7 time: 2^40 - 1 increments of 100ns is ~30.5h.
+        let t = ColumnData::Time(Some(Time {
+            increments: (1u64 << 40) - 1,
+            scale: 7,
+        }));
+        assert!(civil::Time::from_sql(&t).is_err());
+
+        // smalldatetime minutes >= 1440.
+        let sdt = ColumnData::SmallDateTime(Some(SmallDateTime {
+            days: 0,
+            seconds_fragments: u16::MAX,
+        }));
+        assert!(civil::DateTime::from_sql(&sdt).is_err());
+
+        // 3-byte date day count past 9999-12-31.
+        let d = ColumnData::Date(Some(Date::new((1 << 24) - 1)));
+        assert!(civil::Date::from_sql(&d).is_err());
+
+        // ...and the same via datetime2/Timestamp.
+        let dt2 = ColumnData::DateTime2(Some(DateTime2::new(
+            Date::new((1 << 24) - 1),
+            Time {
+                increments: 0,
+                scale: 7,
+            },
+        )));
+        assert!(civil::DateTime::from_sql(&dt2).is_err());
+        assert!(Timestamp::from_sql(&dt2).is_err());
     }
 
     #[test]

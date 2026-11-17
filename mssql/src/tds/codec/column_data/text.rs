@@ -46,8 +46,10 @@ where
             crate::sql_read_bytes::read_bytes_into(src, &mut bytes, text_len).await?;
 
             let buf: Vec<u16> = bytes
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
                 .collect();
 
             String::from_utf16_lossy(&buf[..])
