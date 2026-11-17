@@ -454,7 +454,7 @@ impl Config {
     /// |`TrustServerCertificate`|`true`,`false`,`yes`,`no`|Specifies whether the driver trusts the server certificate when connecting using TLS. Cannot be used together with `TrustServerCertificateCA`.|
     /// |`TrustServerCertificateCA`|`<path>`|Path to a `pem`, `crt` or `der` certificate file. Cannot be used together with `TrustServerCertificate`.|
     /// |`HostNameInCertificate`, `HostName In Certificate`|`<string>`|The host name to validate the server certificate against, when it differs from `server`.|
-    /// |`encrypt`|`true`,`false`,`yes`,`no`,`strict`,`DANGER_PLAINTEXT`|Specifies whether the driver uses TLS to encrypt communication; `strict` is TDS 8.0. Without a TLS backend compiled in, any value requesting encryption is an error.|
+    /// |`encrypt`|`true`,`false`,`yes`,`no`,`strict`,`DANGER_PLAINTEXT`|Specifies whether the driver uses TLS to encrypt communication; `strict` is TDS 8.0. If omitted: `true` (Required) with a TLS backend, as in modern ADO.NET; `false` only encrypts the login. Without a TLS backend compiled in, any value requesting encryption is an error.|
     /// |`Application Name`, `ApplicationName`|`<string>`|Sets the application name for the connection.|
     /// |`ApplicationIntent`|`ReadOnly`,`ReadWrite`|`ReadOnly` (any letter case) requests read-only intent, e.g. for Always On read-only routing.|
     /// |`WorkstationID`, `Workstation ID`|`<string>`|The client/workstation name reported to the server.|
@@ -868,7 +868,11 @@ pub(crate) trait ConfigString {
                 Err(_) if val.eq_ignore_ascii_case("strict") => Ok(EncryptionLevel::Strict),
                 Err(e) => Err(e),
             })
-            .unwrap_or(Ok(EncryptionLevel::Off))
+            // No `encrypt` key: Required, matching modern ADO.NET
+            // (Microsoft.Data.SqlClient 4.0+) and `Config::new()`'s own default.
+            // It used to be Off (only the login encrypted). Upstream Tiberius
+            // 0.13.0 made the same change (3e6afc3).
+            .unwrap_or(Ok(EncryptionLevel::Required))
     }
 
     #[cfg(not(any(

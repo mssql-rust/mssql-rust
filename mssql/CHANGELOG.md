@@ -115,6 +115,12 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Changed
 
+- BREAKING: a connection string without an `encrypt` key now means
+  `encrypt=true` (Required) when a TLS backend is compiled in, matching
+  modern ADO.NET and `Config::new()`'s own default. Before, it meant `Off`
+  (only the login encrypted). Pass `encrypt=false` explicitly for the old
+  behaviour. No-TLS builds are unchanged (`NotSupported`). Ported from
+  upstream Tiberius 3e6afc3.
 - BREAKING: connections now time out by default instead of potentially
   hanging forever (upstream issues #375, #360; ported from upstream
   Tiberius 2c63330). This matches ADO.NET's two settings:

@@ -328,7 +328,8 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   native-tls/openssl. **Decide**: additive everywhere (widens trust) or
   replace everywhere and fix the docs. Port multi-cert and empty-bundle
   errors either way. Skip upstream's 1380-line rewrite.
-- [ ] **Connection-string `encrypt` default `Required`** (`3e6afc3`), which
+- [x] **Connection-string `encrypt` default `Required`** (`3e6afc3`).
+  **Decided 2026-11-17: yes.** Done on `upstream/tiberius-0.13-decisions`. It
   matches modern ADO.NET. BREAKING; this fork defaults to `Off`.
 - [ ] **Lift the rustls TLS 1.2-only pin**: it matters for TDS 8.0 Strict.
   The pin exists for macOS CI KeyUpdate EOFs, so re-test there first.
