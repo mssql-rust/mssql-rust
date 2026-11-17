@@ -109,6 +109,9 @@ pub(crate) enum TrustConfig {
     CaCertificateLocation(PathBuf),
     #[allow(dead_code)]
     CaCertificateBundle(Vec<u8>),
+    /// Only this CA, without the system roots (rustls only).
+    #[cfg(feature = "rustls")]
+    CaCertificateOnly(PathBuf),
     #[cfg(feature = "rustls-webpki-roots")]
     WebPkiRoots,
     TrustAll,
@@ -245,16 +248,21 @@ impl Config {
     pub fn trust_cert(&mut self) {
         if !matches!(&self.trust, TrustConfig::Default) {
             panic!(
-                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle' and 'trust_webpki_roots' are mutually exclusive! Only use one."
+                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle', 'trust_cert_ca_only' and 'trust_webpki_roots' are mutually exclusive! Only use one."
             )
         }
         self.trust = TrustConfig::TrustAll;
     }
 
     /// If set, the server certificate will be validated against the given CA certificate file, in
-    /// addition to the system-truststore.
+    /// addition to the system-truststore, on every TLS backend. Every certificate in a
+    /// `.pem`/`.crt` file is trusted; a `.der` file holds one.
     /// Useful when using self-signed certificates on the server without having to disable the
-    /// trust-chain.
+    /// trust-chain. To trust *only* this CA (pinning), use
+    /// [`trust_cert_ca_only`](Config::trust_cert_ca_only) (rustls).
+    ///
+    /// On rustls this used to replace the system roots rather than add to
+    /// them, unlike the other backends and these docs.
     ///
     /// # Panics
     /// Will panic in case `trust_cert` or `trust_cert_ca_bundle` was called before.
@@ -263,11 +271,29 @@ impl Config {
     pub fn trust_cert_ca(&mut self, path: impl Into<PathBuf>) {
         if !matches!(&self.trust, TrustConfig::Default) {
             panic!(
-                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle' and 'trust_webpki_roots' are mutually exclusive! Only use one."
+                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle', 'trust_cert_ca_only' and 'trust_webpki_roots' are mutually exclusive! Only use one."
             )
         } else {
             self.trust = TrustConfig::CaCertificateLocation(path.into())
         }
+    }
+
+    /// Trusts *only* the CA certificate(s) in `path`, not the system trust
+    /// store: a server certificate that any other CA issued is rejected,
+    /// even a publicly trusted one. This is the pinning behaviour rustls's
+    /// `trust_cert_ca` used to have. rustls only.
+    ///
+    /// # Panics
+    /// Will panic if another trust setting was set before.
+    #[cfg(feature = "rustls")]
+    #[cfg_attr(feature = "docs", doc(cfg(feature = "rustls")))]
+    pub fn trust_cert_ca_only(&mut self, path: impl Into<PathBuf>) {
+        if !matches!(&self.trust, TrustConfig::Default) {
+            panic!(
+                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle', 'trust_cert_ca_only' and 'trust_webpki_roots' are mutually exclusive! Only use one."
+            )
+        }
+        self.trust = TrustConfig::CaCertificateOnly(path.into());
     }
 
     /// Like [`trust_cert_ca`](Config::trust_cert_ca), but takes the CA
@@ -285,7 +311,7 @@ impl Config {
     pub fn trust_cert_ca_bundle(&mut self, bundle: impl Into<Vec<u8>>) {
         if !matches!(&self.trust, TrustConfig::Default) {
             panic!(
-                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle' and 'trust_webpki_roots' are mutually exclusive! Only use one."
+                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle', 'trust_cert_ca_only' and 'trust_webpki_roots' are mutually exclusive! Only use one."
             )
         } else {
             self.trust = TrustConfig::CaCertificateBundle(bundle.into())
@@ -309,7 +335,7 @@ impl Config {
     pub fn trust_webpki_roots(&mut self) {
         if !matches!(&self.trust, TrustConfig::Default) {
             panic!(
-                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle' and 'trust_webpki_roots' are mutually exclusive! Only use one."
+                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle', 'trust_cert_ca_only' and 'trust_webpki_roots' are mutually exclusive! Only use one."
             )
         } else {
             self.trust = TrustConfig::WebPkiRoots;
@@ -752,6 +778,13 @@ impl ConfigBuilder {
     /// `trust_webpki_roots` was called before.
     pub fn trust_cert_ca(&mut self, path: impl Into<PathBuf>) -> &mut Self {
         self.inner.trust_cert_ca(path);
+        self
+    }
+
+    /// See [`Config::trust_cert_ca_only`].
+    #[cfg(feature = "rustls")]
+    pub fn trust_cert_ca_only(&mut self, path: impl Into<PathBuf>) -> &mut Self {
+        self.inner.trust_cert_ca_only(path);
         self
     }
 

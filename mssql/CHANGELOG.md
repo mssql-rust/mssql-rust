@@ -145,6 +145,15 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Changed
 
+- BREAKING (rustls): `trust_cert_ca` / `trust_cert_ca_bundle` (and
+  `TrustServerCertificateCA=`) now *add* the CA to the system trust store,
+  as they already did on native-tls and vendored-openssl and as documented.
+  On rustls they used to *replace* it, so a server with a publicly trusted
+  certificate was rejected. If you relied on that pinning, switch to the new
+  `Config::trust_cert_ca_only(path)` (rustls only). Also, on every backend,
+  every certificate in a PEM CA file is now trusted (rustls rejected
+  multi-cert files, and native-tls/openssl used only the first), and an
+  empty CA file or bundle is an error.
 - rustls now negotiates TLS 1.3 as well as 1.2 (rustls's safe defaults, as
   upstream does), instead of being pinned to TLS 1.2. That matters for TDS
   8.0 Strict connections to SQL Server 2022+. Servers that only speak 1.2

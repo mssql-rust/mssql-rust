@@ -105,8 +105,9 @@ conflicting `TlsStream` implementations.
 
 Certificate trust defaults to the OS certificate store. `Config::trust_cert()`
 disables validation entirely (development only); `Config::trust_cert_ca()` /
-`Config::trust_cert_ca_bundle()` trust one additional CA (from a file or from
-in-memory bytes) alongside the system store. With `rustls-webpki-roots`
+`Config::trust_cert_ca_bundle()` trust additional CAs (from a file or from
+in-memory bytes) alongside the system store, on every backend;
+`Config::trust_cert_ca_only()` (rustls) trusts only the given CA (pinning). With `rustls-webpki-roots`
 (implies `rustls`), `Config::trust_webpki_roots()` validates against
 Mozilla's bundled root list instead — useful in minimal containers with no
 system trust store (see

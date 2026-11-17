@@ -158,3 +158,66 @@ async fn unreadable_client_certificate_files_are_errors() {
         .unwrap_err();
     assert!(err.to_string().contains("client certificate"), "{err}");
 }
+
+// --- CA trust: trust_cert_ca adds to the system roots; trust_cert_ca_only
+// pins to the given CA. The local server's certificate is signed by the
+// test CA, which no system store contains.
+
+enum Trust {
+    Ca(String),
+    CaOnly(String),
+}
+
+async fn handshake_with(trust: Trust) -> Seen {
+    let (port, seen) = serve_once(false).await;
+    let mut config = Config::new();
+    config.host("localhost");
+    config.port(port);
+    config.encryption(EncryptionLevel::Strict);
+    config.handshake_timeout(Some(Duration::from_secs(5)));
+    match trust {
+        Trust::Ca(path) => config.trust_cert_ca(path),
+        Trust::CaOnly(path) => config.trust_cert_ca_only(path),
+    }
+    let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let _ = mssql::Client::connect(config, tcp.compat_write()).await;
+    seen.await.unwrap()
+}
+
+#[tokio::test]
+async fn trust_cert_ca_and_trust_cert_ca_only_accept_the_right_ca() {
+    for trust in [
+        Trust::Ca(format!("{DIR}/ca.pem")),
+        Trust::CaOnly(format!("{DIR}/ca.pem")),
+    ] {
+        let seen = handshake_with(trust).await;
+        assert_eq!(seen.handshake, Ok(()), "{seen:?}");
+    }
+}
+
+#[tokio::test]
+async fn every_certificate_in_a_ca_file_is_trusted() {
+    // An unrelated CA first, then the right one. rustls used to reject any
+    // file with more than one certificate.
+    let unrelated = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/docker/certs/customCA.crt"
+    ))
+    .unwrap();
+    let right = std::fs::read_to_string(format!("{DIR}/ca.pem")).unwrap();
+    let path = std::env::temp_dir().join(format!("mssql-two-cas-{}.pem", std::process::id()));
+    std::fs::write(&path, format!("{unrelated}\n{right}")).unwrap();
+
+    let seen = handshake_with(Trust::Ca(path.display().to_string())).await;
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(seen.handshake, Ok(()), "{seen:?}");
+}
+
+#[tokio::test]
+async fn pinning_to_a_different_ca_rejects_the_server() {
+    let other = concat!(env!("CARGO_MANIFEST_DIR"), "/docker/certs/customCA.crt");
+    let seen = handshake_with(Trust::CaOnly(other.to_string())).await;
+    assert!(seen.handshake.is_err(), "{seen:?}");
+}

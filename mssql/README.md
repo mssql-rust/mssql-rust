@@ -202,9 +202,10 @@ add `mssql = { version = "*", features = ["rustls"] }` to your `Cargo.toml`.
 Server certificate trust defaults to the operating system's certificate
 store. `Config::trust_cert()` disables validation entirely (development
 only), while `Config::trust_cert_ca()` and `Config::trust_cert_ca_bundle()`
-trust one specific CA certificate — from a file or from bytes already in
+trust specific CA certificates — from a file or from bytes already in
 memory (see [`examples/ca_certificate_bundle.rs`](examples/ca_certificate_bundle.rs))
-— in addition to the system store. With the `rustls-webpki-roots` feature,
+— in addition to the system store, on every TLS backend. To trust *only* a
+given CA (certificate pinning), use `Config::trust_cert_ca_only()` (rustls). With the `rustls-webpki-roots` feature,
 `Config::trust_webpki_roots()` validates against Mozilla's bundled root CA
 list instead (see [`examples/webpki_roots.rs`](examples/webpki_roots.rs)),
 which is useful in minimal containers that don't ship one.

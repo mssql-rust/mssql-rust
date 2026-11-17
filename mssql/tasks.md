@@ -321,7 +321,9 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   on timeout. Here: take the handshake timeout (`None` default, or 15s with
   a CHANGELOG note), and implement a command timeout through the existing
   Attention path rather than poisoning. **Decide** the defaults.
-- [ ] **TLS trust semantics** (`2f3c4a9`, `5885e11`). The rustls
+- [x] **TLS trust semantics** (`2f3c4a9`, `5885e11`). **Decided 2026-11-17:
+  additive everywhere, plus a rustls `trust_cert_ca_only` for pinning.** Done on
+  `upstream/tiberius-0.13-decisions`, along with multi-cert files and empty-file errors. The rustls
   `trust_cert_ca` rejects multi-cert files and *replaces* the roots, while
   native-tls/openssl *add* to them, and the docs claim "in addition to"
   for all three. An empty bundle silently adds nothing on

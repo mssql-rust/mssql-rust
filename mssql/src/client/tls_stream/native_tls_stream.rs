@@ -53,32 +53,49 @@ pub(crate) async fn create_tls_stream<S: AsyncRead + AsyncWrite + Unpin + Send>(
 
     match &config.trust {
         TrustConfig::CaCertificateLocation(path) => {
-            if let Ok(buf) = fs::read(path) {
-                let cert = match path.extension() {
-                        Some(ext)
-                        if ext.eq_ignore_ascii_case("pem")
-                            || ext.eq_ignore_ascii_case("crt") =>
-                            {
-                                Some(Certificate::from_pem(&buf)?)
-                            }
-                        Some(ext) if ext.eq_ignore_ascii_case("der") => {
-                            Some(Certificate::from_der(&buf)?)
-                        }
-                        Some(_) | None => return Err(Error::Io {
+            // Added to the system trust store. Every certificate in a PEM
+            // file is used (this used to take only the first), and a file
+            // with none is an error rather than silently trusting nothing
+            // extra.
+            let buf = fs::read(path).map_err(|e| Error::Io {
+                kind: IoErrorKind::InvalidData,
+                message: format!("Could not read CA certificate {}: {e}", path.display()),
+            })?;
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
+            match ext.as_str() {
+                "pem" | "crt" => {
+                    let mut any = false;
+                    for cert in split_pem_certs(&buf) {
+                        builder = builder.add_root_certificate(Certificate::from_pem(cert)?);
+                        any = true;
+                    }
+                    if !any {
+                        return Err(Error::Io {
                             kind: IoErrorKind::InvalidInput,
-                            message: "Provided CA certificate with unsupported file-extension! Supported types are pem, crt and der.".to_string()}),
-                    };
-                if let Some(c) = cert {
-                    builder = builder.add_root_certificate(c);
+                            message: format!("CA certificate file {} contains no certificates", path.display()),
+                        });
+                    }
                 }
-            } else {
-                return Err(Error::Io {
-                    kind: IoErrorKind::InvalidData,
-                    message: "Could not read provided CA certificate!".to_string(),
-                });
+                "der" => builder = builder.add_root_certificate(Certificate::from_der(&buf)?),
+                _ => {
+                    return Err(Error::Io {
+                        kind: IoErrorKind::InvalidInput,
+                        message: "Provided CA certificate with unsupported file-extension! Supported types are pem, crt and der.".to_string(),
+                    })
+                }
             }
         }
         TrustConfig::CaCertificateBundle(bundle) => {
+            if split_pem_certs(bundle).next().is_none() {
+                return Err(Error::Io {
+                    kind: IoErrorKind::InvalidInput,
+                    message: "Provided CA certificate bundle contains no certificates".to_string(),
+                });
+            }
             for cert in split_pem_certs(bundle) {
                 builder = builder.add_root_certificate(Certificate::from_pem(cert)?);
             }
