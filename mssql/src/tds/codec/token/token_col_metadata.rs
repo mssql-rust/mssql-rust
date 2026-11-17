@@ -193,9 +193,9 @@ impl BaseMetaDataColumn {
                 VarLenType::Xml => ColumnData::Xml(None),
                 // Unreachable, not just unsupported: TypeInfo::decode
                 // (type_info.rs) already rejects a COLMETADATA type byte of
-                // Udt or SSVariant with Error::Protocol before constructing
+                // Udt with Error::Protocol before constructing
                 // a TypeInfo::VarLenSized/VarLenSizedPrecision at all, so no
-                // `ty` reaching this match can ever be one of these two —
+                // `ty` reaching this match can ever be one —
                 // confirmed panicking otherwise (`todo!()`/`unimplemented!()`
                 // on a value a conforming server can send), same class as
                 // prisma/tiberius#424.
@@ -203,7 +203,7 @@ impl BaseMetaDataColumn {
                 VarLenType::Text => ColumnData::String(None),
                 VarLenType::Image => ColumnData::Binary(None),
                 VarLenType::NText => ColumnData::String(None),
-                VarLenType::SSVariant => unreachable!("SSVariant is rejected in TypeInfo::decode"),
+                VarLenType::SSVariant => ColumnData::String(None),
             },
             TypeInfo::VarLenSizedPrecision { ty, .. } => match ty {
                 VarLenType::Guid => ColumnData::Guid(None),
@@ -231,9 +231,9 @@ impl BaseMetaDataColumn {
                 VarLenType::Xml => ColumnData::Xml(None),
                 // Unreachable, not just unsupported: TypeInfo::decode
                 // (type_info.rs) already rejects a COLMETADATA type byte of
-                // Udt or SSVariant with Error::Protocol before constructing
+                // Udt with Error::Protocol before constructing
                 // a TypeInfo::VarLenSized/VarLenSizedPrecision at all, so no
-                // `ty` reaching this match can ever be one of these two —
+                // `ty` reaching this match can ever be one —
                 // confirmed panicking otherwise (`todo!()`/`unimplemented!()`
                 // on a value a conforming server can send), same class as
                 // prisma/tiberius#424.
@@ -241,7 +241,7 @@ impl BaseMetaDataColumn {
                 VarLenType::Text => ColumnData::String(None),
                 VarLenType::Image => ColumnData::Binary(None),
                 VarLenType::NText => ColumnData::String(None),
-                VarLenType::SSVariant => unreachable!("SSVariant is rejected in TypeInfo::decode"),
+                VarLenType::SSVariant => ColumnData::String(None),
             },
             TypeInfo::Xml { .. } => ColumnData::Xml(None),
         }

@@ -336,9 +336,10 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   The pin exists for macOS CI KeyUpdate EOFs, so re-test there first.
 - [ ] **Larger additive features**, each to be built from this fork's
   source with its own review:
-  - SQL_VARIANT decode/encode (`ee4450b`, `dd19eeb`, `b0cf775`). Fix the
-    unchecked fixed-length size and the 16-byte numeric overflow found in
-    review.
+  - SQL_VARIANT decode/encode (`ee4450b`, `dd19eeb`, `b0cf775`). **Decode
+    done** on `upstream/tiberius-0.13-decisions`, with the fixed-length size
+    check and checked numeric magnitude. Encode (bulk insert into
+    sql_variant) is still open.
   - CLR UDT columns as `Binary` (`7c1075c`). Adding `TypeInfo::Udt` is
     breaking.
   - Typed NULL scalar parameters (`73e79d4`). Changes wire bytes; verify

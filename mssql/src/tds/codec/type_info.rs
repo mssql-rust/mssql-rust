@@ -344,6 +344,9 @@ impl TypeInfo {
                     VarLenType::Image | VarLenType::Text | VarLenType::NText => {
                         src.read_u32_le().await? as usize
                     }
+                    // sql_variant's TYPE_INFO is a u32 max length (8016).
+                    // Decoded in column_data/sql_variant.rs.
+                    VarLenType::SSVariant => src.read_u32_le().await? as usize,
                     // SSVariant (sql_variant) and Udt (CLR user-defined type)
                     // are real, on-the-wire column types a conforming server
                     // can send in COLMETADATA — VarLenType::try_from above
@@ -452,17 +455,20 @@ mod tests {
         }
     }
 
-    // SSVariant (0x62) and Udt (0xF0) are real VarLenType byte values a
-    // conforming server can send in COLMETADATA — VarLenType::try_from
-    // accepts them — but neither is implemented, so decode used to hit
-    // `todo!()` and panic on nothing malformed. See prisma/tiberius#424.
+    // sql_variant (0x62): TYPE_INFO is the type byte plus a u32 max length.
     #[tokio::test]
-    async fn decode_rejects_ssvariant_instead_of_panicking() {
+    async fn decode_reads_ssvariant_type_info() {
         let mut buf = BytesMut::new();
         buf.put_u8(VarLenType::SSVariant as u8);
+        buf.put_u32_le(8016);
 
-        let result = TypeInfo::decode(&mut buf.into_sql_read_bytes()).await;
-        assert!(matches!(result, Err(Error::Protocol(_))));
+        let ti = TypeInfo::decode(&mut buf.into_sql_read_bytes())
+            .await
+            .unwrap();
+        assert_eq!(
+            ti,
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::SSVariant, 8016, None))
+        );
     }
 
     #[tokio::test]

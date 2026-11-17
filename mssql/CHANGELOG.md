@@ -105,6 +105,11 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Added
 
+- `sql_variant` columns can be read. Each value comes back as the
+  `ColumnData` of its base type (int as `I32`, nvarchar as `String`, and so
+  on), and NULL as `String(None)`. Before, any `sql_variant` column, including
+  `SELECT SERVERPROPERTY(..)`, failed with "unsupported column type". Writing
+  `sql_variant` (bulk insert) isn't supported yet.
 - `Config::lossy_codepage_decoding` / `ConfigBuilder::lossy_codepage_decoding`
   (default `false`): decode `char`/`varchar`/`text` leniently, so invalid
   sequences become U+FFFD instead of returning `Error::Encoding`. Encoding

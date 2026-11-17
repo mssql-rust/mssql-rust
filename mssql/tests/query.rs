@@ -3328,3 +3328,67 @@ where
 
     Ok(())
 }
+
+// sql_variant columns used to fail the whole query with "unsupported column
+// type: SSVariant", even for `SERVERPROPERTY(..)`. Ported from upstream
+// Tiberius (ee4450b). Needs tds73 for the date/datetime2 base types.
+#[cfg(feature = "tds73")]
+#[test_on_runtimes]
+async fn read_sql_variant_of_every_base_type<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let row = conn
+        .simple_query(
+            "SELECT CAST(CAST(42 AS INT) AS sql_variant), \
+                    CAST(CAST(7 AS TINYINT) AS sql_variant), \
+                    CAST(CAST(-3 AS SMALLINT) AS sql_variant), \
+                    CAST(CAST(9000000000 AS BIGINT) AS sql_variant), \
+                    CAST(CAST(1 AS BIT) AS sql_variant), \
+                    CAST(CAST(1.5 AS FLOAT) AS sql_variant), \
+                    CAST(CAST(123.45 AS DECIMAL(10,2)) AS sql_variant), \
+                    CAST(N'héllo' AS sql_variant), \
+                    CAST('plain' AS sql_variant), \
+                    CAST(0xDEADBEEF AS sql_variant), \
+                    CAST(CAST('6F9619FF-8B86-D011-B42D-00C04FC964FF' AS UNIQUEIDENTIFIER) AS sql_variant), \
+                    CAST(CAST('2020-04-20' AS DATE) AS sql_variant), \
+                    CAST(CAST('2020-04-20T16:20:00.1234567' AS DATETIME2(7)) AS sql_variant), \
+                    CAST(NULL AS sql_variant), \
+                    SERVERPROPERTY('ProductVersion'), \
+                    CAST(CAST(12.34 AS MONEY) AS sql_variant)",
+        )
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+
+    assert_eq!(Some(42i32), row.get(0));
+    assert_eq!(Some(7u8), row.get(1));
+    assert_eq!(Some(-3i16), row.get(2));
+    assert_eq!(Some(9_000_000_000i64), row.get(3));
+    assert_eq!(Some(true), row.get(4));
+    assert_eq!(Some(1.5f64), row.get(5));
+    let n: Numeric = row.get(6).unwrap();
+    assert_eq!((n.value(), n.scale()), (12345, 2));
+    assert_eq!(Some("héllo"), row.get::<&str, _>(7));
+    assert_eq!(Some("plain"), row.get::<&str, _>(8));
+    assert_eq!(Some(&[0xDE, 0xAD, 0xBE, 0xEF][..]), row.get::<&[u8], _>(9));
+    assert_eq!(
+        Some(Uuid::parse_str("6F9619FF-8B86-D011-B42D-00C04FC964FF").unwrap()),
+        row.get::<Uuid, _>(10)
+    );
+    assert!(matches!(
+        row.cells().nth(11).unwrap().1,
+        mssql::ColumnData::Date(Some(_))
+    ));
+    assert!(matches!(
+        row.cells().nth(12).unwrap().1,
+        mssql::ColumnData::DateTime2(Some(_))
+    ));
+    assert_eq!(None, row.get::<&str, _>(13));
+    assert!(row.get::<&str, _>(14).unwrap().contains('.'));
+    assert_eq!(Some(12.34f64), row.get(15));
+    assert_eq!(mssql::ColumnType::SSVariant, row.columns()[0].column_type());
+
+    Ok(())
+}
