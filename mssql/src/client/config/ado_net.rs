@@ -585,4 +585,51 @@ mod tests {
 
         Ok(())
     }
+
+    // No-TLS build: an explicit encryption request must error rather than
+    // silently downgrade to plaintext (upstream Tiberius #305; tests ported
+    // from tiberius-rs/tiberius bd3251a). Opting out and an omitted keyword
+    // stay `NotSupported`.
+    #[cfg(not(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    )))]
+    mod no_tls_encrypt {
+        use super::*;
+
+        fn parse(s: &str) -> AdoNetConfig {
+            format!("{s}").parse().unwrap()
+        }
+
+        #[test]
+        fn encrypt_on_errors_without_tls_backend() {
+            for v in ["true", "yes", "strict", "Strict"] {
+                let err = parse(&format!("encrypt={v}")).encrypt().unwrap_err();
+                assert!(matches!(err, crate::Error::Tls(_)), "{v}: {err:?}");
+                assert!(err.to_string().contains("without a TLS backend"));
+            }
+        }
+
+        #[test]
+        fn encrypt_unknown_token_still_errors() {
+            assert!(parse("encrypt=mandatory").encrypt().is_err());
+        }
+
+        #[test]
+        fn encrypt_off_plaintext_or_missing_ok_without_tls_backend() {
+            for s in [
+                "encrypt=false",
+                "encrypt=no",
+                "encrypt=DANGER_PLAINTEXT",
+                "applicationname=x",
+            ] {
+                assert_eq!(
+                    crate::EncryptionLevel::NotSupported,
+                    parse(s).encrypt().unwrap(),
+                    "{s}"
+                );
+            }
+        }
+    }
 }

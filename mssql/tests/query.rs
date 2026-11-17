@@ -29,11 +29,22 @@ static DOT_CONN_STR: Lazy<String> = Lazy::new(|| CONN_STR.replace("localhost", "
 static APP_NAME_CONN_STR: Lazy<String> =
     Lazy::new(|| format!("{};Application Name=meow", *CONN_STR));
 
+// `encrypt=true` needs a TLS backend; without one it is a hard error (#305).
+#[cfg(any(
+    feature = "rustls",
+    feature = "native-tls",
+    feature = "vendored-openssl"
+))]
 static ENCRYPTED_CONN_STR: Lazy<String> = Lazy::new(|| format!("{};encrypt=true", *CONN_STR));
 
 static PLAIN_TEXT_CONN_STR: Lazy<String> =
     Lazy::new(|| format!("{};encrypt=DANGER_PLAINTEXT", *CONN_STR));
 
+#[cfg(any(
+    feature = "rustls",
+    feature = "native-tls",
+    feature = "vendored-openssl"
+))]
 #[test_on_runtimes(connection_string = "ENCRYPTED_CONN_STR")]
 async fn connect_with_full_encryption<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
