@@ -73,6 +73,11 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
   than a panic.
 - Reserved COLMETADATA flag bits and DONE status bits from newer servers
   no longer fail the result set.
+- A request cancelled mid-write (a dropped `query`/`execute` future, a
+  `select!` or `timeout` firing during a large send) used to leave a torn
+  message on the wire. The next use then appended to it, and the server
+  dropped the connection. That next use now fails immediately with a clear
+  "partly written request" error; open a new connection.
 - `FOR BROWSE` queries (and other browse-mode results) no longer fail with
   "invalid token type a4": COLINFO and TABNAME tokens are skipped.
 - ERROR, INFO and LOGINACK tokens are parsed within their declared length,

@@ -61,6 +61,14 @@ where
     flushed: bool,
     context: Context,
     buf: BytesMut,
+    /// `true` while a write is in flight: a `send`, a login, an Attention, or
+    /// a bulk-load packet batch. If that future is dropped mid-write (a
+    /// cancelled query, a `select!` losing the race, a `tokio::time::timeout`
+    /// firing) the flag stays set. The next use then fails cleanly instead of
+    /// appending a new message, or an Attention, to a half-sent one, which
+    /// desyncs the server or hangs waiting on it. Ported from upstream
+    /// Tiberius (3e6afc3, 3f47d87).
+    poisoned: bool,
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send> Debug for Connection<S> {
@@ -131,6 +139,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
             context,
             flushed: false,
             buf: BytesMut::new(),
+            poisoned: false,
         };
 
         let fed_auth_required = matches!(config.auth, AuthMethod::AADToken(_));
@@ -174,10 +183,37 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
     /// without waiting out however long the abandoned request would
     /// otherwise still take.
     async fn send_attention(&mut self) -> crate::Result<()> {
+        self.ensure_not_poisoned()?;
         let id = self.context.next_packet_id();
+        self.poisoned = true;
         self.write_to_wire(PacketHeader::attention(id), BytesMut::new())
             .await?;
-        self.flush_sink().await
+        self.flush_sink().await?;
+        self.poisoned = false;
+        Ok(())
+    }
+
+    /// Fails if a previous request was left partly written (see the
+    /// `poisoned` field). Such a connection can't be reused; open a new one.
+    pub(crate) fn ensure_not_poisoned(&self) -> crate::Result<()> {
+        if self.poisoned {
+            return Err(crate::Error::Protocol(
+                "connection was left with a partly written request (a write was cancelled \
+                 mid-flight) and can no longer be used; open a new connection"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Marks a request as partly on the wire. See the `poisoned` field.
+    pub(crate) fn poison(&mut self) {
+        self.poisoned = true;
+    }
+
+    /// Clears the mark once the request is completely written and flushed.
+    pub(crate) fn unpoison(&mut self) {
+        self.poisoned = false;
     }
 
     #[cfg(any(windows, feature = "integrated-auth-gssapi", feature = "sspi-rs"))]
@@ -224,11 +260,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
     where
         E: Sized + Encode<BytesMut>,
     {
+        self.ensure_not_poisoned()?;
         self.flushed = false;
         let packet_size = (self.context.packet_size() as usize) - HEADER_BYTES;
 
         let mut payload = BytesMut::new();
         item.encode(&mut payload)?;
+
+        // Encoding happened before anything was written, so an encode error
+        // above leaves the connection clean.
+        self.poisoned = true;
 
         while !payload.is_empty() {
             let writable = cmp::min(payload.len(), packet_size);
@@ -250,6 +291,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         }
 
         self.flush_sink().await?;
+        self.poisoned = false;
 
         Ok(())
     }
@@ -266,6 +308,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         mut header: PacketHeader,
         mut payload: Zeroizing<Vec<u8>>,
     ) -> crate::Result<()> {
+        self.ensure_not_poisoned()?;
+        self.poisoned = true;
         self.flushed = false;
         let packet_size = (self.context.packet_size() as usize) - HEADER_BYTES;
         let mut offset = 0;
@@ -296,6 +340,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         }
 
         (&mut *self.transport).flush().await?;
+        self.poisoned = false;
 
         Ok(())
     }
@@ -335,6 +380,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
     /// answers now, rather than leaving this call to wait out however long
     /// the original request would otherwise still have taken.
     pub async fn flush_stream(&mut self) -> crate::Result<()> {
+        // A half-written previous request can't be resynchronized (not even
+        // with Attention), so fail fast.
+        self.ensure_not_poisoned()?;
         self.buf.truncate(0);
 
         if self.flushed {
@@ -736,6 +784,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
                     context,
                     flushed: false,
                     buf: BytesMut::new(),
+                    poisoned: false,
                 })
             }
         }

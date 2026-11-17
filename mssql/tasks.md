@@ -273,7 +273,9 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   the param-name `u8` counter, which overflows past 255 UTF-16 units. That
   second one is unfixed upstream too, and `ProcParam` names are
   caller-supplied.
-- [ ] **Poisoned connection after a cancelled multi-packet write**
+- [x] **Poisoned connection after a cancelled multi-packet write** (done on the
+  backlog branch; scoped to in-flight writes, since a bulk load dropped
+  between rows was verified to be recoverable)
   (`3e6afc3`/`3f47d87` `connection.rs`, `bulk_load.rs`): new field and
   plumbing. Complements this fork's Attention-on-drop (`60bde67`).
 - [x] **Bulk identifier validation** (done on the backlog branch; also allows `$`) (`7a86677`, `3f47d87`): reject
