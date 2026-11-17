@@ -30,7 +30,7 @@ where
             let mut buf = Vec::new();
             crate::sql_read_bytes::read_bytes_into(src, &mut buf, text_len).await?;
 
-            codec.decode(buf.as_ref())?
+            codec.decode_with(buf.as_ref(), src.context().lossy_codepage_decoding())?
         }
         // NTEXT
         None => {

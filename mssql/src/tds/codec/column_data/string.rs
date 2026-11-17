@@ -25,7 +25,8 @@ where
             let collation = collation
                 .as_ref()
                 .ok_or_else(|| Error::Protocol("char/varchar column without a collation".into()))?;
-            let s = collation.codec()?.decode(buf.as_ref())?;
+            let lossy = src.context().lossy_codepage_decoding();
+            let s = collation.codec()?.decode_with(buf.as_ref(), lossy)?;
 
             Ok(Some(s.into()))
         }

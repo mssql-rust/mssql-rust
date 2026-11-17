@@ -33,6 +33,7 @@ pub struct Config {
     pub(crate) auth: AuthMethod,
     pub(crate) readonly: bool,
     pub(crate) send_string_parameters_as_unicode: bool,
+    pub(crate) lossy_codepage_decoding: bool,
     pub(crate) multi_subnet_failover: bool,
     pub(crate) packet_size: Option<u32>,
 }
@@ -79,6 +80,7 @@ impl Default for Config {
             auth: AuthMethod::None,
             readonly: false,
             send_string_parameters_as_unicode: true,
+            lossy_codepage_decoding: false,
             multi_subnet_failover: false,
             packet_size: None,
         }
@@ -285,6 +287,25 @@ impl Config {
     /// - Defaults to `true`.
     pub fn send_string_parameters_as_unicode(&mut self, enabled: bool) {
         self.send_string_parameters_as_unicode = enabled;
+    }
+
+    /// Decode `char`/`varchar`/`text` values leniently: a byte sequence that
+    /// is invalid in the column's code page becomes U+FFFD instead of failing
+    /// the whole row with `Error::Encoding`. Useful for legacy data that was
+    /// stored through a mismatched code page. Encoding (bulk insert,
+    /// parameters) stays strict either way. `nvarchar`/`ntext` are already
+    /// decoded leniently.
+    ///
+    /// - Defaults to `false`.
+    ///
+    /// Ported from upstream Tiberius (tiberius-rs/tiberius 35605c9).
+    pub fn lossy_codepage_decoding(&mut self, enabled: bool) {
+        self.lossy_codepage_decoding = enabled;
+    }
+
+    /// Whether [`lossy_codepage_decoding`](Self::lossy_codepage_decoding) is on.
+    pub fn get_lossy_codepage_decoding(&self) -> bool {
+        self.lossy_codepage_decoding
     }
 
     /// Sets the `MultiSubnetFailover` flag, hinting that the target is a SQL
@@ -618,6 +639,12 @@ impl ConfigBuilder {
     /// See [`Config::readonly`].
     pub fn readonly(&mut self, readonly: bool) -> &mut Self {
         self.inner.readonly(readonly);
+        self
+    }
+
+    /// See [`Config::lossy_codepage_decoding`].
+    pub fn lossy_codepage_decoding(&mut self, enabled: bool) -> &mut Self {
+        self.inner.lossy_codepage_decoding(enabled);
         self
     }
 

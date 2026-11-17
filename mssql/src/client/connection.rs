@@ -89,6 +89,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
             let mut context = Context::new();
             context.set_spn(config.get_host(), config.get_port());
             context.set_send_string_parameters_as_unicode(config.send_string_parameters_as_unicode);
+            context.set_lossy_codepage_decoding(config.lossy_codepage_decoding);
             context
         };
 

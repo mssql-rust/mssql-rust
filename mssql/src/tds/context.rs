@@ -11,6 +11,7 @@ pub(crate) struct Context {
     last_meta: Option<Arc<TokenColMetaData<'static>>>,
     spn: Option<String>,
     send_string_parameters_as_unicode: bool,
+    lossy_codepage_decoding: bool,
 }
 
 impl Context {
@@ -23,6 +24,7 @@ impl Context {
             last_meta: None,
             spn: None,
             send_string_parameters_as_unicode: true,
+            lossy_codepage_decoding: false,
         }
     }
 
@@ -32,6 +34,14 @@ impl Context {
 
     pub fn send_string_parameters_as_unicode(&self) -> bool {
         self.send_string_parameters_as_unicode
+    }
+
+    pub fn set_lossy_codepage_decoding(&mut self, enabled: bool) {
+        self.lossy_codepage_decoding = enabled;
+    }
+
+    pub fn lossy_codepage_decoding(&self) -> bool {
+        self.lossy_codepage_decoding
     }
 
     pub fn next_packet_id(&mut self) -> u8 {

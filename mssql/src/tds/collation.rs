@@ -153,6 +153,17 @@ impl CollationCodec {
         }
     }
 
+    /// Lenient decode: invalid sequences become U+FFFD. With `lossy`
+    /// false this is [`decode`](Self::decode).
+    pub(crate) fn decode_with(&self, bytes: &[u8], lossy: bool) -> crate::Result<String> {
+        match (self, lossy) {
+            (Self::BuiltIn(encoding), true) => {
+                Ok(encoding.decode_without_bom_handling(bytes).0.into_owned())
+            }
+            _ => self.decode(bytes),
+        }
+    }
+
     /// Strict encode: a character the code page can't represent is an error
     /// naming it.
     pub(crate) fn encode(&self, text: &str) -> crate::Result<Vec<u8>> {
@@ -599,5 +610,20 @@ mod codec_tests {
     fn unrepresentable_characters_are_errors() {
         let err = CollationCodec::Cp437.encode("a€").unwrap_err();
         assert!(err.to_string().contains('€'), "{err}");
+    }
+
+    #[test]
+    fn lossy_decode_replaces_invalid_sequences_only_when_asked() {
+        // Japanese (LCID 0x0411) is Shift_JIS, where a lone lead byte 0x81
+        // at the end is an invalid sequence. (encoding_rs maps every byte of
+        // the single-byte windows-125x pages, so those can't fail.)
+        let codec = Collation::new(0x0411, 0).codec().unwrap();
+        assert!(codec.decode_with(&[b'a', 0x81], false).is_err());
+        assert_eq!(codec.decode_with(&[b'a', 0x81], true).unwrap(), "a\u{fffd}");
+        // Single-byte DOS code pages map every byte, so nothing changes.
+        assert_eq!(
+            CollationCodec::Cp437.decode_with(&[0x82], true).unwrap(),
+            CollationCodec::Cp437.decode(&[0x82]).unwrap()
+        );
     }
 }
