@@ -81,6 +81,9 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 - `char`/`varchar`/`text` data in legacy CP437 and CP850 collations (e.g.
   `SQL_Latin1_General_CP437_BIN`, `SQL_1xCompat_CP850_CI_AS`) can now be read
   and bulk-inserted. Before, both failed with "unsupported encoding".
+- native-tls now requests the `tds/8.0` ALPN protocol for
+  `EncryptionLevel::Strict`, as rustls already did, instead of logging a
+  warning that it couldn't.
 - rustls: a rejected server certificate is now an `Error::Tls` explaining
   the remedies (`trust_cert_ca`, `trust_cert`, native-tls) instead of an
   opaque I/O error (upstream #327).

@@ -5,17 +5,18 @@ use futures_util::io::{AsyncRead, AsyncWrite};
 /// ("strict" encryption) connection during the TLS handshake. Requesting
 /// it is optional - SQL Server infers TDS 8.0 purely from receiving a TLS
 /// ClientHello before any TDS bytes at all (see
-/// [`crate::EncryptionLevel::Strict`]) - but rustls, this crate's only
-/// backend that actually requests it, does so anyway as documented
-/// practice (native-tls and vendored-openssl just log that they can't).
+/// [`crate::EncryptionLevel::Strict`]) - but the rustls and native-tls
+/// backends request it anyway, as documented practice; vendored-openssl
+/// just logs that it can't.
 ///
-/// Gated on `feature = "rustls"` alone rather than "not compiled dead code
-/// under some other combo": since rustls always wins the priority order
-/// established for #308 (rustls > vendored-openssl > native-tls) whenever
-/// it's enabled, the bare feature flag already means it's the active
-/// backend - unlike native-tls/vendored-openssl, which need an explicit
-/// `not(feature = "rustls")` guard for their own shared helpers.
-#[cfg(feature = "rustls")]
+/// Gated so it's only compiled where a backend that uses it is the active
+/// one: rustls wins the backend priority order (rustls > vendored-openssl >
+/// native-tls, see #308) whenever it's enabled, and native-tls only when
+/// neither of the others is.
+#[cfg(any(
+    feature = "rustls",
+    all(feature = "native-tls", not(feature = "vendored-openssl"))
+))]
 pub(crate) const TDS_ALPN_PROTOCOL_NAME: &str = "tds/8.0";
 
 /// Splits a byte buffer holding one or more concatenated PEM-encoded X.509

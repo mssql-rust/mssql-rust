@@ -16,18 +16,12 @@ pub(crate) async fn create_tls_stream<S: AsyncRead + AsyncWrite + Unpin + Send>(
     let mut builder = TlsConnector::new();
 
     if config.encryption == crate::EncryptionLevel::Strict {
-        // Not fatal: SQL Server infers TDS 8.0 purely from the TLS
-        // handshake happening before any TDS bytes, independent of ALPN
-        // (see `EncryptionLevel::Strict`'s doc comment). Bumping
-        // `async-native-tls` to a version with ALPN support (added in
-        // 0.5) would let this backend request it like rustls does, but
-        // that version also changed its runtime-feature names in a way
-        // that needs its own separate, deliberate migration - not folded
-        // into this change.
-        event!(
-            Level::WARN,
-            "native-tls does not support requesting the TDS 8.0 ALPN protocol; proceeding without it. SQL Server will still recognize TDS 8.0 from the handshake ordering alone."
-        );
+        // Request the `tds/8.0` ALPN protocol, as the rustls backend does.
+        // async-native-tls 0.6 (already this crate's version) exposes
+        // `request_alpns` and enables native-tls's `alpn` feature, so the
+        // old "needs a version bump" warning no longer applied. Ported from
+        // upstream Tiberius dd6d913.
+        builder = builder.request_alpns(&[super::TDS_ALPN_PROTOCOL_NAME]);
     }
 
     match &config.trust {
