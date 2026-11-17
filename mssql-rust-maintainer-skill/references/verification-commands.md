@@ -25,6 +25,20 @@ cargo clippy --features=all -- -D warnings
 Clippy warnings are errors in CI — fix them or add a commented `#[allow]`,
 don't leave them for review.
 
+## Benchmarks and coverage (not in CI; run by hand when relevant)
+
+```sh
+cd mssql
+cargo bench --bench offline                       # criterion, no server
+cargo bench --bench live                          # needs MSSQL_TEST_CONNECTION_STRING
+cargo tarpaulin                                   # coverage: unit + tls_local
+cargo tarpaulin --config tarpaulin-live.toml      # coverage incl. the live suite
+```
+
+For a performance-sensitive change, run `-- --save-baseline before` on the
+base commit and `-- --baseline before` on the change. Coverage baseline
+(2026-11-17): 46.6% offline and 71.9% live, on Azure SQL Edge.
+
 ## MSRV check (what CI's `msrv` job runs)
 
 ```sh

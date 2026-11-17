@@ -80,6 +80,37 @@ cargo test --no-default-features --features=rustls
 cargo test --no-default-features --features=vendored-openssl
 ```
 
+### Benchmarks
+
+Benchmarks use [criterion](https://crates.io/crates/criterion):
+
+```sh
+cargo bench --bench offline   # no server: connection-string parsing, row access, conversions
+cargo bench --bench live      # needs MSSQL_TEST_CONNECTION_STRING; skipped otherwise
+```
+
+`live` measures connect + login, a `SELECT 1` round trip, a parameterized
+query, streaming 10,000 rows, and bulk-inserting 10,000 rows. Results and
+HTML reports go to `target/criterion/`. Compare runs on the same machine and
+server; criterion reports the change against the previous run. Save a
+baseline with `-- --save-baseline before` and compare with `-- --baseline before`.
+
+### Coverage
+
+Coverage uses [cargo-tarpaulin](https://crates.io/crates/cargo-tarpaulin)
+(`cargo install cargo-tarpaulin`) with its LLVM engine, so it runs on macOS
+as well as Linux:
+
+```sh
+cargo tarpaulin                                  # offline: unit tests + tests/tls_local.rs
+cargo tarpaulin --config tarpaulin-live.toml     # everything; needs MSSQL_TEST_CONNECTION_STRING
+```
+
+Reports (HTML and `lcov.info`) go to `target/tarpaulin/` and
+`target/tarpaulin-live/`. `tarpaulin.toml` holds the feature set and the
+excluded paths. `target/*` is among them, so the `target/package/` copies
+left by `cargo publish` don't count as uncovered code.
+
 ## Code style and checks
 
 Before opening a PR, run what CI runs:

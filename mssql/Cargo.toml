@@ -27,6 +27,16 @@ members = ["runtimes-macro"]
 # via `rust-version.workspace = true` instead of declaring its own value.
 rust-version = "1.98"
 
+# Benchmarks (criterion; `cargo bench`). `offline` needs no server; `live`
+# is skipped unless MSSQL_TEST_CONNECTION_STRING is set.
+[[bench]]
+name = "offline"
+harness = false
+
+[[bench]]
+name = "live"
+harness = false
+
 [[test]]
 path = "tests/query.rs"
 name = "query"
@@ -196,6 +206,7 @@ version = "1.54"
 path = "./runtimes-macro"
 
 [dev-dependencies]
+criterion = "0.8.2"
 anyhow = "1"
 env_logger = "0.11"
 azure_identity = { version = "1.0.0", default-features = false }

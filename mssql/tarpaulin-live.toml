@@ -1,0 +1,22 @@
+# Test coverage with cargo-tarpaulin (`cargo install cargo-tarpaulin`).
+#
+#   MSSQL_TEST_CONNECTION_STRING=... cargo tarpaulin --config tarpaulin-live.toml
+#
+# Everything: unit tests and every integration test, against a live server
+# (e.g. `./docker/test-server.sh up`). See tarpaulin.toml for offline coverage.
+#
+# Reports land in target/tarpaulin/ (tarpaulin-report.html, lcov.info).
+# The LLVM engine works on macOS and Linux; ptrace is Linux/x86-64 only.
+
+[live]
+engine = "Llvm"
+no-default-features = true
+features = "rustls tds73 rust_decimal bigdecimal time jiff sql-browser-tokio sql-browser-smol serde"
+workspace = false
+run-types = ["Lib", "Tests"]
+exclude-files = ["benches/*", "examples/*", "runtimes-macro/*", "tests/*", "target/*"]
+out = ["Html", "Lcov"]
+output-dir = "target/tarpaulin-live"
+timeout = "600s"
+skip-clean = true
+target-dir = "target/tarpaulin-build"

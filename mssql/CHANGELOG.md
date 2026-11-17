@@ -14,6 +14,16 @@ forward.
 
 ## Unreleased
 
+### Added (tooling)
+
+- Benchmarks with criterion: `benches/offline.rs` (no server needed) and
+  `benches/live.rs` (opt-in through `MSSQL_TEST_CONNECTION_STRING`). See
+  CONTRIBUTING, "Benchmarks".
+- Coverage with cargo-tarpaulin: `tarpaulin.toml` (offline) and
+  `tarpaulin-live.toml` (with the live suite). Baseline with
+  rustls + tds73 + decimal/time/jiff/sql-browser/serde: 46.6% of lines
+  offline and 71.9% with the live suite against Azure SQL Edge.
+
 Much of this cycle ports hardening and fixes from upstream Tiberius 0.13.0
 ([tiberius-rs/tiberius](https://github.com/tiberius-rs/tiberius), released
 2026-09-24). Many thanks to the Tiberius team, especially Matthew Jackson.
