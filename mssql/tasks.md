@@ -299,7 +299,8 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   `35605c9`). Then port upstream's CP437/CP850 bulk live test from
   `75d7afc`.
 - [ ] **Small items**: ~~rustls handshake diagnostics for #327 (`610154f`)~~ (done);
-  connection-string docs and error hints for #333 (`0dec9cb`);
+  ~~connection-string docs and error hints for #333 (`0dec9cb`)~~ (done; the hint
+  is in the ADO parser's error);
   ~~`Row::builder()` for #383 (`30b059c`)~~ (done); ~~case-insensitive
   `ApplicationIntent` and non-null `I16`→`i32` widening (`97bbbfd`); exact
   column match before the `r#` fallback (`bf25ac6`)~~ (done); ~~native-tls ALPN
