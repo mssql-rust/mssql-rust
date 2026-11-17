@@ -115,6 +115,10 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Changed
 
+- rustls now negotiates TLS 1.3 as well as 1.2 (rustls's safe defaults, as
+  upstream does), instead of being pinned to TLS 1.2. That matters for TDS
+  8.0 Strict connections to SQL Server 2022+. Servers that only speak 1.2
+  still negotiate 1.2.
 - BREAKING: a connection string without an `encrypt` key now means
   `encrypt=true` (Required) when a TLS backend is compiled in, matching
   modern ADO.NET and `Config::new()`'s own default. Before, it meant `Off`

@@ -18,8 +18,8 @@ use tokio_rustls::{
         },
         crypto::{ring, CryptoProvider},
         pki_types::{pem::PemObject, CertificateDer, ServerName, UnixTime},
-        version, ClientConfig, ConfigBuilder, DigitallySignedStruct, Error as RustlsError,
-        RootCertStore, SignatureScheme, WantsVerifier,
+        ClientConfig, ConfigBuilder, DigitallySignedStruct, Error as RustlsError, RootCertStore,
+        SignatureScheme, WantsVerifier,
     },
     TlsConnector,
 };
@@ -149,8 +149,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
             .cloned()
             .unwrap_or_else(|| Arc::new(ring::default_provider()));
 
+        // Negotiate TLS 1.2 or 1.3 (rustls's safe defaults), as upstream
+        // Tiberius does. This was pinned to TLS 1.2 (20b20db) to dodge TLS 1.3
+        // KeyUpdate EOFs on an old macOS CI runner. TDS 8.0 Strict connections
+        // to SQL Server 2022+ can use TLS 1.3, and servers that only speak 1.2
+        // (e.g. Azure SQL Edge) still negotiate 1.2.
         let builder = ClientConfig::builder_with_provider(provider)
-            .with_protocol_versions(&[&version::TLS12])
+            .with_safe_default_protocol_versions()
             .map_err(|e| crate::Error::Tls(e.to_string()))?;
 
         let mut client_config = match &config.trust {
@@ -432,7 +437,7 @@ mod handshake_error_tests {
             .cloned()
             .unwrap_or_else(|| Arc::new(ring::default_provider()));
         assert!(ClientConfig::builder_with_provider(provider)
-            .with_protocol_versions(&[&version::TLS12])
+            .with_safe_default_protocol_versions()
             .is_ok());
     }
 }

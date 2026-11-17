@@ -331,7 +331,8 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
 - [x] **Connection-string `encrypt` default `Required`** (`3e6afc3`).
   **Decided 2026-11-17: yes.** Done on `upstream/tiberius-0.13-decisions`. It
   matches modern ADO.NET. BREAKING; this fork defaults to `Off`.
-- [ ] **Lift the rustls TLS 1.2-only pin**: it matters for TDS 8.0 Strict.
+- [x] **Lift the rustls TLS 1.2-only pin** (decided 2026-11-17: yes; done on
+  `upstream/tiberius-0.13-decisions`). It matters for TDS 8.0 Strict.
   The pin exists for macOS CI KeyUpdate EOFs, so re-test there first.
 - [ ] **Larger additive features**, each to be built from this fork's
   source with its own review:
