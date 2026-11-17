@@ -344,8 +344,8 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
     `upstream/tiberius-0.13-decisions`, non-breaking (the UDT_INFO names are
     read and dropped; no `TypeInfo::Udt`). The live test is skipped on Azure
     SQL Edge (no CLR) and runs on the full SQL Server images in CI.
-  - Typed NULL scalar parameters (`73e79d4`). Changes wire bytes; verify
-    live.
+  - Typed NULL scalar parameters (`73e79d4`). **Done** on
+    `upstream/tiberius-0.13-decisions`, verified live.
   - Client-certificate (mTLS) auth (`4a212e7`).
   - Transaction Manager requests (`8338bb8`).
   - Table-valued parameters (`73e79d4`): only without the ungated macro and

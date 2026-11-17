@@ -136,6 +136,24 @@ impl<'a> ColumnData<'a> {
     /// clear error, rather than let it round-trip to SQL Server's own
     /// (much less obvious) "is an untyped NULL but is marked as an output
     /// parameter" protocol error.
+    /// True for a NULL that encodes with no type at all (`NULLTYPE`), i.e.
+    /// one SQL Server can't accept as an RPC OUTPUT placeholder. NULLs of
+    /// `bit`, the integer types, the float types and `uniqueidentifier`
+    /// are sent typed.
+    pub(crate) fn is_untyped_null(&self) -> bool {
+        match self {
+            ColumnData::Bit(None)
+            | ColumnData::U8(None)
+            | ColumnData::I16(None)
+            | ColumnData::I32(None)
+            | ColumnData::I64(None)
+            | ColumnData::F32(None)
+            | ColumnData::F64(None)
+            | ColumnData::Guid(None) => false,
+            other => other.is_null(),
+        }
+    }
+
     pub(crate) fn is_null(&self) -> bool {
         match self {
             ColumnData::U8(v) => v.is_none(),
@@ -870,8 +888,27 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 dst.extend_from_slice(headers);
                 num.encode(&mut *dst)?;
             }
+            // A NULL of these types is sent with its real TYPE_INFO and a
+            // zero value length, instead of the untyped NULLTYPE below. SQL
+            // Server accepts a typed NULL as an RPC OUTPUT placeholder, so
+            // `call_procedure` can take e.g. `&None::<i32>`. Ported from
+            // upstream Tiberius 73e79d4.
+            (ColumnData::Bit(None), None) => dst.extend_from_slice(&[VarLenType::Bitn as u8, 1, 0]),
+            (ColumnData::U8(None), None) => dst.extend_from_slice(&[VarLenType::Intn as u8, 1, 0]),
+            (ColumnData::I16(None), None) => dst.extend_from_slice(&[VarLenType::Intn as u8, 2, 0]),
+            (ColumnData::I32(None), None) => dst.extend_from_slice(&[VarLenType::Intn as u8, 4, 0]),
+            (ColumnData::I64(None), None) => dst.extend_from_slice(&[VarLenType::Intn as u8, 8, 0]),
+            (ColumnData::F32(None), None) => {
+                dst.extend_from_slice(&[VarLenType::Floatn as u8, 4, 0])
+            }
+            (ColumnData::F64(None), None) => {
+                dst.extend_from_slice(&[VarLenType::Floatn as u8, 8, 0])
+            }
+            (ColumnData::Guid(None), None) => {
+                dst.extend_from_slice(&[VarLenType::Guid as u8, 16, 0])
+            }
             (_, None) => {
-                // None/null
+                // Any other None/null: the untyped NULLTYPE.
                 dst.put_u8(FixedLenType::Null as u8);
             }
             (v, ref ti) => {
@@ -915,6 +952,29 @@ impl<'a> IntoSql<'a> for ColumnData<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A typed NULL parameter: TYPE_INFO, then a zero value length.
+    #[test]
+    fn typed_null_parameters_carry_their_type() {
+        for (data, expected) in [
+            (ColumnData::Bit(None), vec![VarLenType::Bitn as u8, 1, 0]),
+            (ColumnData::U8(None), vec![VarLenType::Intn as u8, 1, 0]),
+            (ColumnData::I16(None), vec![VarLenType::Intn as u8, 2, 0]),
+            (ColumnData::I32(None), vec![VarLenType::Intn as u8, 4, 0]),
+            (ColumnData::I64(None), vec![VarLenType::Intn as u8, 8, 0]),
+            (ColumnData::F32(None), vec![VarLenType::Floatn as u8, 4, 0]),
+            (ColumnData::F64(None), vec![VarLenType::Floatn as u8, 8, 0]),
+            (ColumnData::Guid(None), vec![VarLenType::Guid as u8, 16, 0]),
+            (ColumnData::String(None), vec![FixedLenType::Null as u8]),
+        ] {
+            assert_eq!(data.is_untyped_null(), expected.len() == 1, "{data:?}");
+            let mut buf = BytesMut::new();
+            data.clone()
+                .encode(&mut BytesMutWithTypeInfo::new(&mut buf))
+                .unwrap();
+            assert_eq!(buf.as_ref(), expected.as_slice(), "{data:?}");
+        }
+    }
     use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
     use crate::tds::Collation;
     use crate::{Error, VarLenContext};

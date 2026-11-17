@@ -141,17 +141,18 @@ async fn result_set_rows_before_output_params_are_still_readable() -> mssql::Res
 // need the procedure to actually exist - the check happens before anything
 // is sent.
 #[tokio::test]
-async fn null_output_placeholder_is_rejected_client_side() -> mssql::Result<()> {
+async fn untyped_null_output_placeholder_is_rejected_client_side() -> mssql::Result<()> {
     let mut conn = connect().await?;
 
+    // A NULL string is still sent untyped (NULLTYPE), so it can't be OUTPUT.
     let result = conn
         .call_procedure(
             "##does_not_matter",
-            &[ProcParam::output("@out", &None::<i32>)],
+            &[ProcParam::output("@out", &None::<&str>)],
         )
         .await;
 
-    let err = result.expect_err("a NULL OUTPUT placeholder must be rejected");
+    let err = result.expect_err("an untyped NULL OUTPUT placeholder must be rejected");
     assert!(
         matches!(err, mssql::error::Error::Conversion(_)),
         "expected Error::Conversion, got {err:?}"
@@ -174,5 +175,53 @@ async fn into_output_params_on_a_plain_query_is_empty() -> mssql::Result<()> {
     assert_eq!(None, outputs.return_status());
     assert!(outputs.try_get::<i32>("@anything").is_err());
 
+    Ok(())
+}
+
+// NULLs of bit, the integer and float types, and uniqueidentifier are now
+// sent typed, so they work as OUTPUT placeholders. Ported from upstream
+// Tiberius 73e79d4.
+#[tokio::test]
+async fn typed_null_output_placeholders_work() -> mssql::Result<()> {
+    let mut conn = connect().await?;
+    let proc = random_proc_name();
+
+    conn.simple_query(format!(
+        "CREATE PROCEDURE {proc} (@i INT OUTPUT, @b BIGINT OUTPUT, @f FLOAT OUTPUT, \
+         @bit BIT OUTPUT, @g UNIQUEIDENTIFIER OUTPUT, @keep INT OUTPUT) AS \
+         BEGIN SET @i = 1; SET @b = 2; SET @f = 0.5; SET @bit = 1; \
+         SET @g = '6F9619FF-8B86-D011-B42D-00C04FC964FF'; \
+         SET @keep = COALESCE(@keep, -1); END"
+    ))
+    .await?
+    .into_results()
+    .await?;
+
+    let outputs = conn
+        .call_procedure(
+            proc.as_str(),
+            &[
+                ProcParam::output("@i", &None::<i32>),
+                ProcParam::output("@b", &None::<i64>),
+                ProcParam::output("@f", &None::<f64>),
+                ProcParam::output("@bit", &None::<bool>),
+                ProcParam::output("@g", &None::<Uuid>),
+                // The NULL arrives as a real NULL, not a zero.
+                ProcParam::output("@keep", &None::<i32>),
+            ],
+        )
+        .await?
+        .into_output_params()
+        .await?;
+
+    assert_eq!(Some(1i32), outputs.get("@i"));
+    assert_eq!(Some(2i64), outputs.get("@b"));
+    assert_eq!(Some(0.5f64), outputs.get("@f"));
+    assert_eq!(Some(true), outputs.get("@bit"));
+    assert_eq!(
+        Some(Uuid::parse_str("6F9619FF-8B86-D011-B42D-00C04FC964FF").unwrap()),
+        outputs.get("@g")
+    );
+    assert_eq!(Some(-1i32), outputs.get("@keep"));
     Ok(())
 }

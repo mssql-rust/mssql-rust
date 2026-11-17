@@ -105,6 +105,9 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Added
 
+- NULL parameters of `bool`, the integer and float types and `Uuid` are
+  sent typed rather than as the untyped NULLTYPE, so `call_procedure`
+  accepts them as `OUTPUT` placeholders (`&None::<i32>`).
 - CLR UDT columns (`geography`, `geometry`, `hierarchyid`, user-defined CLR
   types) can be read; their values are the raw serialized bytes as
   `ColumnData::Binary`. Before, they failed with "unsupported column type".

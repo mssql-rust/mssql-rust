@@ -32,8 +32,8 @@ before treating it as final.
   `OUTPUT` parameters (built with `ProcParam::input`/`ProcParam::output`)
   and the procedure's `RETURN` value — call `QueryStream::into_output_params`
   on the result to get an `OutputParams`. An `OUTPUT` parameter's placeholder
-  must be a concrete, non-`NULL` value of the right type (e.g. `&0i32`, not
-  `&None::<i32>`) — see
+  sets its type: a concrete value (`&0i32`) or a typed NULL (`&None::<i32>`;
+  bool/integer/float/Uuid only, since other NULLs are sent untyped) — see
   [`examples/call_procedure.rs`](../../mssql/examples/call_procedure.rs).
 - **`Query`** — an alternative to the `Client` convenience methods for when
   parameters come from a dynamic collection or need to be bound by value:

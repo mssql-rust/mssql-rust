@@ -262,12 +262,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     /// with `query` - read those first if you need both.
     ///
     /// An `OUTPUT` parameter's placeholder value (see
-    /// [`ProcParam::output`]) must be a concrete, non-`NULL` value of the
-    /// right type, not e.g. `&None::<i32>` - unlike `execute`/`query`,
-    /// there's no separate type-declaration string here for the server to
-    /// learn the type from otherwise, and SQL Server rejects an untyped
-    /// `NULL` bound as `OUTPUT` outright. Checked client-side with a clear
-    /// error before anything is sent.
+    /// [`ProcParam::output`]) establishes its type. It can be a concrete
+    /// value (`&0i32`), or a NULL of a type that is sent typed: `bool`, the
+    /// integer and float types, and `Uuid` (`&None::<i32>`). Other NULLs
+    /// (e.g. `&None::<&str>`) are sent untyped, which SQL Server rejects as
+    /// `OUTPUT`. Unlike `execute`/`query`, there is no separate
+    /// type-declaration string here for the server to learn the type from.
+    /// This is checked client-side, with a clear error, before anything is
+    /// sent.
     ///
     /// # Example
     ///
@@ -313,12 +315,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     where
         'a: 'b,
     {
-        if let Some(p) = params.iter().find(|p| p.output && p.value.is_null()) {
+        if let Some(p) = params
+            .iter()
+            .find(|p| p.output && p.value.is_untyped_null())
+        {
             return Err(crate::Error::Conversion(
                 format!(
-                    "OUTPUT parameter {} has no type: pass a concrete, non-NULL placeholder \
-                     value (e.g. &0i32) instead of a NULL one - SQL Server rejects an untyped \
-                     NULL bound as OUTPUT",
+                    "OUTPUT parameter {} has no type: pass a concrete placeholder value \
+                     (e.g. &0i32, or a typed NULL like &None::<i32>) - a NULL of this type is \
+                     sent untyped, and SQL Server rejects an untyped NULL bound as OUTPUT",
                     p.name
                 )
                 .into(),

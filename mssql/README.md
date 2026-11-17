@@ -271,10 +271,11 @@ Build the parameter list with `ProcParam::input`/`ProcParam::output`, then
 once the returned `QueryStream` has been read (or if there's no result set
 to read), call `QueryStream::into_output_params` to get an `OutputParams`
 with the `OUTPUT` values and `return_status()`. An `OUTPUT` parameter's
-placeholder value must be a concrete, non-`NULL` value of the right type
-(e.g. `&0i32`, not `&None::<i32>`) — SQL Server rejects an untyped `NULL`
-bound as `OUTPUT`, and `call_procedure` checks for this client-side before
-sending anything. See [`examples/call_procedure.rs`](examples/call_procedure.rs).
+placeholder value establishes its type: a concrete value (`&0i32`) or a
+typed NULL (`&None::<i32>`, which works for `bool`, the integer and float
+types, and `Uuid`). Other NULLs (e.g. `&None::<&str>`) are sent untyped,
+which SQL Server rejects as `OUTPUT`; `call_procedure` checks for this
+client-side before sending anything. See [`examples/call_procedure.rs`](examples/call_procedure.rs).
 
 ## Redirects
 
