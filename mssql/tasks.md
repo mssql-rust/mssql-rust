@@ -347,7 +347,10 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
     SQL Edge (no CLR) and runs on the full SQL Server images in CI.
   - Typed NULL scalar parameters (`73e79d4`). **Done** on
     `upstream/tiberius-0.13-decisions`, verified live.
-  - Client-certificate (mTLS) auth (`4a212e7`).
+  - Client-certificate (mTLS) auth (`4a212e7`). **Done** on
+    `upstream/tiberius-0.13-decisions`, verified against a local rustls server
+    requiring client certificates. Building that server also exposed and fixed
+    a Strict-mode framing bug (raw TLS, not PRELOGIN-wrapped).
   - Transaction Manager requests (`8338bb8`). **Done** on
     `upstream/tiberius-0.13-decisions`, with a name-length fix upstream
     lacks (sent in bytes) and `rollback_to_savepoint`.

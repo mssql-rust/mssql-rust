@@ -47,6 +47,9 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Fixed
 
+- TDS 8.0 Strict (`EncryptionLevel::Strict`, `encrypt=strict`) now does a raw
+  TLS handshake. Before, the handshake records were wrapped in TDS
+  PRELOGIN packets, which a real TDS 8.0 server can't parse.
 - `DECIMAL(38,38)` (scale equal to the maximum precision) panicked on
   read. Reading a wide `DECIMAL(38, s)` into `rust_decimal::Decimal` now
   converts fallibly instead of panicking.
@@ -105,6 +108,11 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Added
 
+- Client-certificate (mutual TLS) authentication:
+  `Config::client_certificate(cert, key)` on rustls (PEM/DER) and
+  native-tls (PEM), and `Config::client_certificate_pkcs12(path, password)`
+  on native-tls and vendored-openssl. The password is zeroized and redacted
+  from `Debug`. Also on `ConfigBuilder`.
 - Table-valued parameters for `call_procedure`:
   `ProcParam::table("@rows", "dbo.MyType", rows)`, with rows as `TokenRow`s
   in the table type's column order. The client fetches the type's columns

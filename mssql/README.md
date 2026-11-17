@@ -160,6 +160,10 @@ Beyond host/port/credentials, `Config` also covers:
   responds. A connection whose command timed out is out of sync; open a
   new one.
 - `client_name` — the workstation name sent in the login packet.
+- `client_certificate(cert, key)` / `client_certificate_pkcs12(path, password)`
+  — present a client certificate (mutual TLS), e.g. to a TLS-terminating
+  proxy that requires one. rustls takes PEM/DER files, native-tls PEM files
+  or PKCS#12, and vendored-openssl PKCS#12 only.
 - `host_name_in_certificate` — validate a TLS certificate issued for a name
   other than the connection address (proxies, load balancers).
 - `packet_size` — request a non-default TDS packet size (512–32767), which

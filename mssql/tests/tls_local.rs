@@ -4,7 +4,9 @@
 //! check:
 //!
 //! - that the Strict handshake is raw TLS asking for the `tds/8.0` ALPN
-//!   protocol, not TLS records framed in TDS PRELOGIN packets.
+//!   protocol, not TLS records framed in TDS PRELOGIN packets;
+//! - client-certificate (mutual TLS) authentication, `Config::client_certificate`
+//!   (ported from upstream Tiberius 4a212e7).
 //!
 //! Fixtures are throwaway, test-only certificates in docker/certs/mtls/ (the
 //! CA key was deleted after signing).
@@ -97,13 +99,20 @@ async fn connect_strict(port: u16, client_cert: bool) -> mssql::Result<()> {
     config.encryption(EncryptionLevel::Strict);
     config.trust_cert_ca(format!("{DIR}/ca.pem"));
     config.handshake_timeout(Some(Duration::from_secs(5)));
-    let _ = client_cert;
+    if client_cert {
+        config.client_certificate(format!("{DIR}/client.pem"), format!("{DIR}/client.key"));
+    }
     let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
     // Our server isn't SQL Server, so this always fails after the
     // handshake; only what the server saw matters here.
     mssql::Client::connect(config, tcp.compat_write())
         .await
         .map(drop)
+}
+
+fn cn(cert: &CertificateDer<'_>) -> bool {
+    cert.windows(b"mssql-test-client".len())
+        .any(|w| w == b"mssql-test-client")
 }
 
 #[tokio::test]
@@ -114,4 +123,38 @@ async fn strict_handshake_is_raw_tls_with_tds8_alpn() {
     assert_eq!(seen.handshake, Ok(()), "{seen:?}");
     assert_eq!(seen.alpn.as_deref(), Some(&b"tds/8.0"[..]));
     assert!(seen.client_cert.is_none());
+}
+
+#[tokio::test]
+async fn client_certificate_is_presented_for_mutual_tls() {
+    let (port, seen) = serve_once(true).await;
+    let _ = connect_strict(port, true).await;
+    let seen = seen.await.unwrap();
+    assert_eq!(seen.handshake, Ok(()), "{seen:?}");
+    assert!(seen.client_cert.as_ref().is_some_and(|c| cn(c)), "{seen:?}");
+}
+
+#[tokio::test]
+async fn a_server_requiring_a_client_certificate_rejects_its_absence() {
+    let (port, seen) = serve_once(true).await;
+    assert!(connect_strict(port, false).await.is_err());
+    let seen = seen.await.unwrap();
+    assert!(seen.handshake.is_err(), "{seen:?}");
+}
+
+#[tokio::test]
+async fn unreadable_client_certificate_files_are_errors() {
+    let mut config = Config::new();
+    config.host("localhost");
+    config.port(1);
+    config.encryption(EncryptionLevel::Strict);
+    config.client_certificate("/nonexistent/client.pem", "/nonexistent/client.key");
+    let (port, _seen) = serve_once(false).await;
+    let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let err = mssql::Client::connect(config, tcp.compat_write())
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("client certificate"), "{err}");
 }

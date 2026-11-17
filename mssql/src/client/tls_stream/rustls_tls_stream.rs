@@ -1,5 +1,8 @@
 use crate::{
-    client::{config::Config, TrustConfig},
+    client::{
+        config::{ClientCertSource, Config},
+        TrustConfig,
+    },
     error::IoErrorKind,
     Error,
 };
@@ -17,7 +20,7 @@ use tokio_rustls::{
             WantsClientCert,
         },
         crypto::{ring, CryptoProvider},
-        pki_types::{pem::PemObject, CertificateDer, ServerName, UnixTime},
+        pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, ServerName, UnixTime},
         ClientConfig, ConfigBuilder, DigitallySignedStruct, Error as RustlsError, RootCertStore,
         SignatureScheme, WantsVerifier,
     },
@@ -30,6 +33,77 @@ impl From<tokio_rustls::rustls::Error> for Error {
     fn from(e: tokio_rustls::rustls::Error) -> Self {
         crate::Error::Tls(e.to_string())
     }
+}
+
+/// Reads the client certificate chain and private key for mutual TLS
+/// (`Config::client_certificate`). Ported from upstream Tiberius 4a212e7.
+fn load_client_auth(
+    source: &ClientCertSource,
+) -> crate::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+    let (cert, key) = match source {
+        ClientCertSource::CertAndKey { cert, key } => (cert, key),
+        #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
+        ClientCertSource::Pkcs12 { .. } => {
+            return Err(Error::Tls(
+                "the rustls backend doesn't support PKCS#12 client certificates; pass \
+                 separate certificate and key files to `Config::client_certificate`"
+                    .into(),
+            ))
+        }
+    };
+
+    let read = |path: &std::path::Path, what: &str| {
+        fs::read(path).map_err(|e| Error::Io {
+            kind: IoErrorKind::InvalidData,
+            message: format!("Could not read client {what} {}: {e}", path.display()),
+        })
+    };
+    let ext = |path: &std::path::Path| {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default()
+    };
+    let invalid = |message: String| Error::Io {
+        kind: IoErrorKind::InvalidData,
+        message,
+    };
+
+    let cert_buf = read(cert, "certificate")?;
+    let chain: Vec<CertificateDer<'static>> = match ext(cert).as_str() {
+        "pem" | "crt" => CertificateDer::pem_slice_iter(&cert_buf)
+            .collect::<Result<_, _>>()
+            .map_err(|e| invalid(format!("Failed to parse PEM client certificate: {e}")))?,
+        "der" => vec![CertificateDer::from(cert_buf)],
+        _ => {
+            return Err(Error::Io {
+                kind: IoErrorKind::InvalidInput,
+                message: "Client certificate must be a .pem, .crt or .der file".into(),
+            })
+        }
+    };
+    if chain.is_empty() {
+        return Err(invalid(format!(
+            "Client certificate file {} contains no certificates",
+            cert.display()
+        )));
+    }
+
+    let key_buf = read(key, "private key")?;
+    let key = match ext(key).as_str() {
+        "pem" | "key" => PrivateKeyDer::from_pem_slice(&key_buf)
+            .map_err(|e| invalid(format!("Failed to parse PEM private key: {e}")))?,
+        "der" => PrivateKeyDer::try_from(key_buf)
+            .map_err(|e| invalid(format!("Failed to parse DER private key: {e}")))?,
+        _ => {
+            return Err(Error::Io {
+                kind: IoErrorKind::InvalidInput,
+                message: "Client private key must be a .pem, .key or .der file".into(),
+            })
+        }
+    };
+
+    Ok((chain, key))
 }
 
 /// Turns a certificate-validation failure during the TLS handshake into an
@@ -158,7 +232,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
             .with_safe_default_protocol_versions()
             .map_err(|e| crate::Error::Tls(e.to_string()))?;
 
-        let mut client_config = match &config.trust {
+        let wants_client_cert: ConfigBuilder<ClientConfig, WantsClientCert> = match &config.trust {
             TrustConfig::CaCertificateLocation(path) => {
                 if let Ok(buf) = fs::read(path) {
                     let cert = match path.extension() {
@@ -202,9 +276,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
                     };
                     let mut cert_store = RootCertStore::empty();
                     cert_store.add(cert)?;
-                    builder
-                        .with_root_certificates(cert_store)
-                        .with_no_client_auth()
+                    builder.with_root_certificates(cert_store)
                 } else {
                     return Err(Error::Io {
                         kind: IoErrorKind::InvalidData,
@@ -233,9 +305,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
                     cert_store.add(cert)?;
                 }
 
-                builder
-                    .with_root_certificates(cert_store)
-                    .with_no_client_auth()
+                builder.with_root_certificates(cert_store)
             }
             TrustConfig::TrustAll => {
                 event!(
@@ -245,17 +315,30 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
                 builder
                     .dangerous()
                     .with_custom_certificate_verifier(Arc::new(NoCertVerifier))
-                    .with_no_client_auth()
             }
             TrustConfig::Default => {
                 event!(Level::INFO, "Using default trust configuration.");
-                builder.with_native_roots()?.with_no_client_auth()
+                builder.with_native_roots()?
             }
             #[cfg(feature = "rustls-webpki-roots")]
             TrustConfig::WebPkiRoots => {
                 event!(Level::INFO, "Using webpki-roots trust configuration.");
-                builder.with_webpki_roots().with_no_client_auth()
+                builder.with_webpki_roots()
             }
+        };
+
+        let mut client_config = match &config.client_cert {
+            Some(source) => {
+                event!(
+                    Level::DEBUG,
+                    "Presenting a client certificate for mutual TLS."
+                );
+                let (chain, key) = load_client_auth(source)?;
+                wants_client_cert
+                    .with_client_auth_cert(chain, key)
+                    .map_err(|e| crate::Error::Tls(e.to_string()))?
+            }
+            None => wants_client_cert.with_no_client_auth(),
         };
 
         if config.encryption == crate::EncryptionLevel::Strict {

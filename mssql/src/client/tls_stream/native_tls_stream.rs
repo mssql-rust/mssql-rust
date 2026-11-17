@@ -1,13 +1,40 @@
 use super::split_pem_certs;
 use crate::{
-    client::{config::Config, TrustConfig},
+    client::{
+        config::{ClientCertSource, Config},
+        TrustConfig,
+    },
     error::{Error, IoErrorKind},
 };
 pub(crate) use async_native_tls::TlsStream;
-use async_native_tls::{Certificate, TlsConnector};
+use async_native_tls::{Certificate, Identity, TlsConnector};
 use futures_util::io::{AsyncRead, AsyncWrite};
 use std::fs;
 use tracing::{event, Level};
+
+/// The mutual-TLS identity for `Config::client_certificate[_pkcs12]`.
+/// Ported from upstream Tiberius 4a212e7.
+fn load_identity(source: &ClientCertSource) -> crate::Result<Identity> {
+    let read = |path: &std::path::Path, what: &str| {
+        fs::read(path).map_err(|e| Error::Io {
+            kind: IoErrorKind::InvalidData,
+            message: format!("Could not read client {what} {}: {e}", path.display()),
+        })
+    };
+    match source {
+        ClientCertSource::CertAndKey { cert, key } => {
+            // native-tls takes a PEM certificate and PKCS#8 PEM key.
+            Ok(Identity::from_pkcs8(
+                &read(cert, "certificate")?,
+                &read(key, "private key")?,
+            )?)
+        }
+        ClientCertSource::Pkcs12 { path, password } => Ok(Identity::from_pkcs12(
+            &read(path, "PKCS#12 identity")?,
+            password,
+        )?),
+    }
+}
 
 pub(crate) async fn create_tls_stream<S: AsyncRead + AsyncWrite + Unpin + Send>(
     config: &Config,
@@ -76,5 +103,55 @@ pub(crate) async fn create_tls_stream<S: AsyncRead + AsyncWrite + Unpin + Send>(
         .as_deref()
         .unwrap_or_else(|| config.get_host());
 
+    if let Some(source) = &config.client_cert {
+        event!(
+            Level::DEBUG,
+            "Presenting a client certificate for mutual TLS."
+        );
+        builder = builder.identity(load_identity(source)?);
+    }
+
     Ok(builder.connect(domain, stream).await?)
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("docker/certs/mtls")
+            .join(name)
+    }
+
+    #[test]
+    fn pkcs12_identity_loads_and_a_wrong_password_fails() {
+        let ok = ClientCertSource::Pkcs12 {
+            path: fixture("client.p12"),
+            password: zeroize::Zeroizing::new("test-password".into()),
+        };
+        assert!(load_identity(&ok).is_ok());
+
+        let bad = ClientCertSource::Pkcs12 {
+            path: fixture("client.p12"),
+            password: zeroize::Zeroizing::new("wrong".into()),
+        };
+        assert!(load_identity(&bad).is_err());
+    }
+}
+
+#[cfg(test)]
+mod pem_identity_tests {
+    use super::*;
+
+    #[test]
+    fn pem_certificate_and_pkcs8_key_load() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docker/certs/mtls");
+        let source = ClientCertSource::CertAndKey {
+            cert: dir.join("client.pem"),
+            key: dir.join("client.key"),
+        };
+        assert!(load_identity(&source).is_ok());
+    }
 }

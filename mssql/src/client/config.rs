@@ -10,6 +10,53 @@ use crate::EncryptionLevel;
 use ado_net::*;
 use jdbc::*;
 
+/// A client certificate presented for mutual TLS; see
+/// [`Config::client_certificate`].
+#[cfg(any(
+    feature = "rustls",
+    feature = "native-tls",
+    feature = "vendored-openssl"
+))]
+#[derive(Clone)]
+pub(crate) enum ClientCertSource {
+    /// Certificate chain and private key files (PEM, or DER on rustls).
+    CertAndKey { cert: PathBuf, key: PathBuf },
+    /// A PKCS#12 bundle (native-tls and vendored-openssl only).
+    #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
+    Pkcs12 {
+        path: PathBuf,
+        // Unread when rustls is also enabled: it wins backend selection and
+        // rejects PKCS#12. The variant still exists in that build so feature
+        // unification can't make `client_certificate_pkcs12` disappear.
+        #[cfg_attr(feature = "rustls", allow(dead_code))]
+        password: zeroize::Zeroizing<String>,
+    },
+}
+
+// Hand-written so the PKCS#12 password is never printed by `{:?}` on Config.
+#[cfg(any(
+    feature = "rustls",
+    feature = "native-tls",
+    feature = "vendored-openssl"
+))]
+impl std::fmt::Debug for ClientCertSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CertAndKey { cert, key } => f
+                .debug_struct("CertAndKey")
+                .field("cert", cert)
+                .field("key", key)
+                .finish(),
+            #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
+            Self::Pkcs12 { path, .. } => f
+                .debug_struct("Pkcs12")
+                .field("path", path)
+                .field("password", &"<HIDDEN>")
+                .finish(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 /// The `Config` struct contains all configuration information
 /// required for connecting to the database with a [`Client`](crate::Client).
@@ -29,6 +76,12 @@ pub struct Config {
     pub(crate) client_name: Option<String>,
     pub(crate) encryption: EncryptionLevel,
     pub(crate) trust: TrustConfig,
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    pub(crate) client_cert: Option<ClientCertSource>,
     pub(crate) host_name_in_certificate: Option<String>,
     pub(crate) auth: AuthMethod,
     pub(crate) readonly: bool,
@@ -84,6 +137,12 @@ impl Default for Config {
             )))]
             encryption: EncryptionLevel::NotSupported,
             trust: TrustConfig::Default,
+            #[cfg(any(
+                feature = "rustls",
+                feature = "native-tls",
+                feature = "vendored-openssl"
+            ))]
+            client_cert: None,
             host_name_in_certificate: None,
             auth: AuthMethod::None,
             readonly: false,
@@ -255,6 +314,46 @@ impl Config {
         } else {
             self.trust = TrustConfig::WebPkiRoots;
         }
+    }
+
+    /// Presents a client certificate during the TLS handshake (mutual TLS),
+    /// for deployments that require one, typically a TLS-terminating proxy
+    /// in front of SQL Server. `cert` is the certificate chain and `key`
+    /// its private key:
+    ///
+    /// - rustls: `.pem`/`.crt` or `.der` certificate, `.pem`/`.key` (PKCS#8,
+    ///   PKCS#1 or SEC1) or `.der` key;
+    /// - native-tls: PEM certificate and PKCS#8 PEM key;
+    /// - vendored-openssl: not supported, use
+    ///   [`client_certificate_pkcs12`](Self::client_certificate_pkcs12).
+    ///
+    /// Files are read when connecting. Ported from upstream Tiberius
+    /// (tiberius-rs/tiberius 4a212e7).
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    pub fn client_certificate(&mut self, cert: impl Into<PathBuf>, key: impl Into<PathBuf>) {
+        self.client_cert = Some(ClientCertSource::CertAndKey {
+            cert: cert.into(),
+            key: key.into(),
+        });
+    }
+
+    /// Like [`client_certificate`](Self::client_certificate), from a
+    /// PKCS#12 (`.p12`/`.pfx`) bundle. The password is zeroized on drop and
+    /// redacted from `Debug`. native-tls and vendored-openssl only.
+    #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
+    pub fn client_certificate_pkcs12(
+        &mut self,
+        path: impl Into<PathBuf>,
+        password: impl Into<String>,
+    ) {
+        self.client_cert = Some(ClientCertSource::Pkcs12 {
+            path: path.into(),
+            password: zeroize::Zeroizing::new(password.into()),
+        });
     }
 
     /// Overrides the hostname used to validate the server's TLS certificate,
@@ -678,6 +777,32 @@ impl ConfigBuilder {
         self
     }
 
+    /// See [`Config::client_certificate`].
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    pub fn client_certificate(
+        &mut self,
+        cert: impl Into<PathBuf>,
+        key: impl Into<PathBuf>,
+    ) -> &mut Self {
+        self.inner.client_certificate(cert, key);
+        self
+    }
+
+    /// See [`Config::client_certificate_pkcs12`].
+    #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
+    pub fn client_certificate_pkcs12(
+        &mut self,
+        path: impl Into<PathBuf>,
+        password: impl Into<String>,
+    ) -> &mut Self {
+        self.inner.client_certificate_pkcs12(path, password);
+        self
+    }
+
     /// See [`Config::host_name_in_certificate`].
     pub fn host_name_in_certificate(&mut self, name: impl ToString) -> &mut Self {
         self.inner.host_name_in_certificate(name);
@@ -945,6 +1070,16 @@ pub(crate) trait ConfigString {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
+    #[test]
+    fn pkcs12_password_is_redacted_from_debug() {
+        let mut config = Config::new();
+        config.client_certificate_pkcs12("/x/client.p12", "s3cret-pass");
+        let shown = format!("{config:?}");
+        assert!(!shown.contains("s3cret-pass"), "{shown}");
+        assert!(shown.contains("client.p12"), "{shown}");
+    }
 
     #[test]
     fn timeouts_default_to_ado_net_values_and_round_trip() {
