@@ -5,8 +5,8 @@
 `mssql` is a fork of [Tiberius](https://github.com/prisma/tiberius), the TDS
 client originally created by Prisma and its contributors. This fork exists
 to prioritize ongoing maintenance and security updates, favoring small,
-focused changes over large rewrites. It works with the Tokio, async-std, or
-smol async runtimes, and is distributed under the same MIT/Apache-2.0 dual
+focused changes over large rewrites. It works with the Tokio or smol async
+runtimes, and is distributed under the same MIT/Apache-2.0 dual
 license as Tiberius.
 
 ## Docs
@@ -22,7 +22,6 @@ license as Tiberius.
 ## Examples
 
 - [tokio.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/tokio.rs): connect and query on the Tokio runtime.
-- [async-std.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/async-std.rs): connect and query on async-std.
 - [smol.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/smol.rs): connect and query on smol.
 - [config_builder.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/config_builder.rs): building a Config with ConfigBuilder.
 - [bulk.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/bulk.rs) and [bulk_insert_with_options.rs](https://github.com/mssql-rust/mssql-rust/blob/main/mssql/examples/bulk_insert_with_options.rs): bulk insert.
