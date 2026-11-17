@@ -515,6 +515,74 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                     dst.put_u64_le(0xffffffffffffffff)
                 }
             }
+            // TEXT/NTEXT bulk-load values (fork issue #352). Ported from
+            // upstream Tiberius 97bbbfd, with the collation `unwrap()` and
+            // unchecked u32 lengths turned into errors.
+            (ColumnData::String(opt), Some(TypeInfo::VarLenSized(vlc)))
+                if vlc.r#type() == VarLenType::Text || vlc.r#type() == VarLenType::NText =>
+            {
+                if let Some(str) = opt {
+                    // TEXT/NTEXT row values carry a text pointer and a
+                    // timestamp ahead of the payload. The server ignores the
+                    // values supplied on bulk load, so send a fixed-size dummy
+                    // pointer and timestamp.
+                    dst.put_u8(16); // text pointer length
+                    dst.extend_from_slice(&[0u8; 16]); // text pointer
+                    dst.extend_from_slice(&[0u8; 8]); // timestamp
+
+                    let bytes = if vlc.r#type() == VarLenType::Text {
+                        // Single-byte character data in the column's collation.
+                        let collation = vlc.collation().ok_or_else(|| {
+                            crate::Error::BulkInput("text column without a collation".into())
+                        })?;
+                        let mut encoder = collation.encoding()?.new_encoder();
+                        let len = encoder
+                            .max_buffer_length_from_utf8_without_replacement(str.len())
+                            .ok_or_else(|| crate::Error::BulkInput("text value too long".into()))?;
+                        let mut bytes = Vec::with_capacity(len);
+                        let (res, _) = encoder.encode_from_utf8_to_vec_without_replacement(
+                            str.as_ref(),
+                            &mut bytes,
+                            true,
+                        );
+                        if let encoding_rs::EncoderResult::Unmappable(c) = res {
+                            return Err(crate::Error::Encoding(
+                                format!("unrepresentable character: {c}").into(),
+                            ));
+                        }
+                        bytes
+                    } else {
+                        // NTEXT: UTF-16LE.
+                        str.encode_utf16().flat_map(u16::to_le_bytes).collect()
+                    };
+
+                    let len = u32::try_from(bytes.len()).map_err(|_| {
+                        crate::Error::BulkInput("text/ntext value exceeds 4 GiB".into())
+                    })?;
+                    dst.put_u32_le(len);
+                    dst.extend_from_slice(&bytes);
+                } else {
+                    // NULL: zero-length text pointer.
+                    dst.put_u8(0);
+                }
+            }
+            // IMAGE bulk-load values: same text-pointer framing as TEXT.
+            (ColumnData::Binary(opt), Some(TypeInfo::VarLenSized(vlc)))
+                if vlc.r#type() == VarLenType::Image =>
+            {
+                if let Some(bytes) = opt {
+                    dst.put_u8(16); // text pointer length
+                    dst.extend_from_slice(&[0u8; 16]); // text pointer
+                    dst.extend_from_slice(&[0u8; 8]); // timestamp
+
+                    let len = u32::try_from(bytes.len())
+                        .map_err(|_| crate::Error::BulkInput("image value exceeds 4 GiB".into()))?;
+                    dst.put_u32_le(len);
+                    dst.extend_from_slice(&bytes);
+                } else {
+                    dst.put_u8(0);
+                }
+            }
             (ColumnData::String(Some(ref s)), None) if s.len() <= 4000 => {
                 dst.put_u8(VarLenType::NVarchar as u8);
                 dst.put_u16_le(8000);

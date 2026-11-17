@@ -7,8 +7,7 @@ use crate::{
 };
 
 use super::{
-    Encode, MetaDataColumn, PacketHeader, PacketStatus, TokenColMetaData, TokenDone, TokenRow,
-    HEADER_BYTES,
+    Encode, MetaDataColumn, PacketHeader, PacketStatus, TokenDone, TokenRow, HEADER_BYTES,
 };
 
 /// A handler for a bulk insert data flow.
@@ -30,15 +29,12 @@ where
     pub(crate) fn new(
         connection: &'a mut Connection<S>,
         columns: Vec<MetaDataColumn<'a>>,
+        table_name: &str,
     ) -> crate::Result<Self> {
         let packet_id = connection.context_mut().next_packet_id();
         let mut buf = BytesMut::new();
 
-        let cmd = TokenColMetaData {
-            columns: columns.clone(),
-        };
-
-        cmd.encode(&mut buf)?;
+        super::token::encode_bulk_col_metadata(&columns, table_name, &mut buf)?;
 
         let this = Self {
             connection,

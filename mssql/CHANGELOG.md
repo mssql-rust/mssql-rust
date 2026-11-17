@@ -60,6 +60,9 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
   default is no longer stored corrupted.
 - Bulk insert: a row that failed to encode partway no longer desyncs the
   stream, and `]` in an ORDER-hint column name is now escaped.
+- Bulk insert into `text`/`ntext`/`image` columns works. Before, it failed
+  with error 4804, and so did any bulk insert into a table that merely had
+  such a column.
 - No panic when the OS trust store is empty or one platform certificate
   fails to load (rustls). Setting both `TrustServerCertificate=true` and
   `TrustServerCertificateCA` in a connection string is now an error rather

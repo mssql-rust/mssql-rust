@@ -230,7 +230,7 @@ scoped out (see its own entry below).
 
 ## Defer — legitimate, but large or low-urgency
 
-- [ ] **#352** — Bulk-inserting a `String` into an `NTEXT` column fails;
+- [x] **#352** — Bulk-inserting a `String` into an `NTEXT` column fails;
   doc comments claim ntext is supported but `column_data.rs`'s bulk-insert
   encode match has no arm for `VarLenType::NText`. Investigated live against
   the test server rather than shipped on a static read, and turned out to
@@ -258,6 +258,16 @@ scoped out (see its own entry below).
     capture from a known-working bulk-copy client (`bcp.exe`, .NET
     `SqlBulkCopy`) doing the same insert to compare against, or primary
     MS-TDS spec text more authoritative than this session had access to.
+  - **Resolved (2026-11-17)** by porting upstream Tiberius 0.13.0's fix
+    (tiberius-rs/tiberius `93837ef`/`103e044`/`74c5fa3`/`97bbbfd`). The
+    missing piece was the TableName *shape*. In the client->server bulk
+    COLMETADATA it is one bare US_VARCHAR holding the whole name, with
+    **no NumParts byte**, unlike the server->client form the decoder reads.
+    Upstream checked this against go-mssqldb's bulk copy. The row format is
+    attempt (a) above: a 16-byte dummy TEXTPTR, an 8-byte timestamp, then a
+    u32 length plus data. Verified live for TEXT, NTEXT and IMAGE: values,
+    NULLs and 20 KB values. Done: see the backlog commit "fix: bulk insert
+    into TEXT/NTEXT/IMAGE columns".
 - [ ] **#365** — Wants an owned (`'static`, non-borrowing) row stream like
   `tokio-postgres`'s `query_raw`/`sqlx`'s `fetch`, instead of one bound to
   `&mut Client`. Legitimate repository-pattern pain point, but would need a

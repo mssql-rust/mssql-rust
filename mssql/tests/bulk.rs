@@ -717,6 +717,7 @@ where
         "CREATE TABLE {} (id INT NOT NULL, \
          v VARCHAR(20) COLLATE Cyrillic_General_CI_AS NOT NULL, \
          c CHAR(6) COLLATE Cyrillic_General_CI_AS NOT NULL, \
+         t TEXT COLLATE Cyrillic_General_CI_AS NOT NULL, \
          n NVARCHAR(20) COLLATE Cyrillic_General_CI_AS NOT NULL)",
         table
     ))
@@ -728,8 +729,7 @@ where
     let mut req = conn.bulk_insert(table).await?;
     let mut row = TokenRow::new();
     row.push(1i32.into_sql());
-    // No TEXT column here (upstream's version has one): bulk-inserting TEXT/
-    // NTEXT doesn't work in this fork yet (issues.md #352, error 4804).
+    row.push(expected.into_sql());
     row.push(expected.into_sql());
     row.push(expected.into_sql());
     row.push(expected.into_sql());
@@ -739,7 +739,8 @@ where
     let row = conn
         .query(
             &format!(
-                "SELECT v, c, n, CONVERT(VARBINARY(20), v), CONVERT(VARBINARY(20), c) FROM {}",
+                "SELECT v, c, t, n, CONVERT(VARBINARY(20), v), CONVERT(VARBINARY(20), c), \
+                 CONVERT(VARBINARY(20), CONVERT(VARCHAR(20), t)) FROM {}",
                 table
             ),
             &[],
@@ -753,8 +754,10 @@ where
     assert_eq!(Some(expected), row.get::<&str, _>(0));
     assert_eq!(Some(expected), row.get::<&str, _>(1));
     assert_eq!(Some(expected), row.get::<&str, _>(2));
-    assert_eq!(Some(cp1251), row.get::<&[u8], _>(3));
+    assert_eq!(Some(expected), row.get::<&str, _>(3));
     assert_eq!(Some(cp1251), row.get::<&[u8], _>(4));
+    assert_eq!(Some(cp1251), row.get::<&[u8], _>(5));
+    assert_eq!(Some(cp1251), row.get::<&[u8], _>(6));
 
     Ok(())
 }
@@ -801,4 +804,73 @@ where
     drop_table(&mut conn, &format!("N'tempdb..{table}'"), &table).await?;
 
     result
+}
+
+// Bulk-inserting into TEXT/NTEXT columns used to fail with "premature end of
+// message" (error 4804) because the bulk COLMETADATA omitted the table name
+// those types carry (fork issue #352). Ported from upstream Tiberius
+// (6eed8df, d10c7bb, 931223f).
+#[test_on_runtimes]
+async fn bulk_insert_text_and_ntext_round_trip<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("##{}", random_table().await);
+
+    conn.simple_query(format!(
+        "CREATE TABLE {} (id INT NOT NULL, t TEXT NULL, nt NTEXT NULL, img IMAGE NULL)",
+        table
+    ))
+    .await?;
+
+    let long = "x".repeat(20_000);
+    let mut req = conn.bulk_insert(&table).await?;
+    for (id, t, nt, img) in [
+        (
+            1,
+            Some("hello"),
+            Some("héllo wörld ✓"),
+            Some(&[1u8, 2, 3][..]),
+        ),
+        (2, None, None, None),
+        (
+            3,
+            Some(long.as_str()),
+            Some(long.as_str()),
+            Some(long.as_bytes()),
+        ),
+    ] {
+        let mut row = TokenRow::new();
+        row.push(ColumnData::I32(Some(id)));
+        row.push(t.into_sql());
+        row.push(nt.into_sql());
+        row.push(img.into_sql());
+        req.send(row).await?;
+    }
+    assert_eq!(req.finalize().await?.total(), 3);
+
+    let rows = conn
+        .query(
+            format!(
+                "SELECT CAST(t AS VARCHAR(MAX)), CAST(nt AS NVARCHAR(MAX)), \
+                 CAST(img AS VARBINARY(MAX)) FROM {} ORDER BY id",
+                table
+            ),
+            &[],
+        )
+        .await?
+        .into_first_result()
+        .await?;
+
+    assert_eq!(Some("hello"), rows[0].get::<&str, _>(0));
+    assert_eq!(Some("héllo wörld ✓"), rows[0].get::<&str, _>(1));
+    assert_eq!(None, rows[1].get::<&str, _>(0));
+    assert_eq!(None, rows[1].get::<&str, _>(1));
+    assert_eq!(Some(long.as_str()), rows[2].get::<&str, _>(0));
+    assert_eq!(Some(long.as_str()), rows[2].get::<&str, _>(1));
+    assert_eq!(Some(&[1u8, 2, 3][..]), rows[0].get::<&[u8], _>(2));
+    assert_eq!(None, rows[1].get::<&[u8], _>(2));
+    assert_eq!(Some(long.as_bytes()), rows[2].get::<&[u8], _>(2));
+
+    Ok(())
 }

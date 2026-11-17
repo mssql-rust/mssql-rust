@@ -255,7 +255,9 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
 
 ## Build next: real value, small to medium, no API decisions needed
 
-- [ ] **Bulk TEXT/NTEXT (fork #352 / error 4804)**: upstream found the
+- [x] **Bulk TEXT/NTEXT (fork #352 / error 4804)**. Done on the backlog
+  branch; the table name is passed via `encode_bulk_col_metadata`, so no
+  public field change was needed.: upstream found the
   format: TableName as a bare US_VARCHAR, no NumParts (`103e044`, with
   `93837ef`, `74c5fa3`), plus the String→Text/NText encode arm from
   `97bbbfd`. Semver: `BaseMetaDataColumn` has pub fields, so carry the

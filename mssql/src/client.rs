@@ -702,7 +702,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         let ts = TokenStream::new(&mut self.connection);
         ts.flush_done().await?;
 
-        BulkLoadRequest::new(&mut self.connection, columns)
+        BulkLoadRequest::new(&mut self.connection, columns, table)
     }
 
     /// Closes this database connection explicitly.

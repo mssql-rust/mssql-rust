@@ -261,6 +261,78 @@ impl<'a> Encode<BytesMut> for TokenColMetaData<'a> {
     }
 }
 
+/// Encodes the COLMETADATA token this client sends ahead of bulk-load rows.
+///
+/// Same as `TokenColMetaData`'s `Encode`, except that `text`/`ntext`/`image`
+/// columns also carry the destination table name after their TYPE_INFO. In
+/// this client->server direction it is a single bare US_VARCHAR holding the
+/// whole name: no NumParts byte, and no splitting on `.`. That differs from
+/// the server->client shape the decoder reads (NumParts + parts). Omitting
+/// it, or sending the result-style NumParts, makes the server misparse the
+/// column and fail with "premature end of message" (error 4804), which is
+/// why bulk-inserting into, or merely into a table *with*, a TEXT/NTEXT/IMAGE
+/// column used to fail (fork issue #352). Ported from upstream Tiberius
+/// (tiberius-rs/tiberius 93837ef, 103e044 and 74c5fa3), whose format was
+/// checked against go-mssqldb's bulk copy. Kept as a separate function so
+/// `BaseMetaDataColumn`'s public fields don't change.
+pub(crate) fn encode_bulk_col_metadata(
+    columns: &[MetaDataColumn<'_>],
+    table_name: &str,
+    dst: &mut BytesMut,
+) -> crate::Result<()> {
+    let count = u16::try_from(columns.len())
+        .map_err(|_| crate::Error::BulkInput("too many columns for a bulk insert".into()))?;
+
+    dst.put_u8(TokenType::ColMetaData as u8);
+    dst.put_u16_le(count);
+
+    for col in columns {
+        dst.put_u32_le(0); // user type
+        dst.put_u16_le(BitFlags::bits(col.base.flags));
+
+        let carries_table_name = matches!(
+            &col.base.ty,
+            TypeInfo::VarLenSized(cx)
+                if matches!(cx.r#type(), VarLenType::Text | VarLenType::NText | VarLenType::Image)
+        );
+
+        col.base.ty.clone().encode(dst)?;
+
+        if carries_table_name {
+            encode_us_varchar(dst, table_name)?;
+        }
+
+        encode_b_varchar(dst, &col.col_name)?;
+    }
+
+    Ok(())
+}
+
+/// A US_VARCHAR: a u16 count of UTF-16 code units, then UTF-16LE.
+fn encode_us_varchar(dst: &mut BytesMut, s: &str) -> crate::Result<()> {
+    let units = u16::try_from(s.encode_utf16().count()).map_err(|_| {
+        crate::Error::BulkInput(format!("table name is too long for COLMETADATA: {s:?}").into())
+    })?;
+    dst.put_u16_le(units);
+    for chr in s.encode_utf16() {
+        dst.put_u16_le(chr);
+    }
+    Ok(())
+}
+
+/// A B_VARCHAR: a u8 count of UTF-16 code units, then UTF-16LE. The old
+/// inline encoder counted in a `u8` that wrapped past 255 and desynced.
+fn encode_b_varchar(dst: &mut BytesMut, s: &str) -> crate::Result<()> {
+    let units = u8::try_from(s.encode_utf16().count()).map_err(|_| {
+        crate::Error::BulkInput(format!("column name is too long for COLMETADATA: {s:?}").into())
+    })?;
+    dst.put_u8(units);
+    for chr in s.encode_utf16() {
+        dst.put_u16_le(chr);
+    }
+    Ok(())
+}
+
 impl<'a> Encode<BytesMut> for MetaDataColumn<'a> {
     fn encode(self, dst: &mut BytesMut) -> crate::Result<()> {
         dst.put_u32_le(0);
@@ -406,6 +478,81 @@ impl BaseMetaDataColumn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn us_varchar(s: &str) -> Vec<u8> {
+        let units: Vec<u16> = s.encode_utf16().collect();
+        let mut out = (units.len() as u16).to_le_bytes().to_vec();
+        units
+            .iter()
+            .for_each(|u| out.extend_from_slice(&u.to_le_bytes()));
+        out
+    }
+
+    fn bulk_column(name: &str, ty: TypeInfo) -> MetaDataColumn<'static> {
+        MetaDataColumn {
+            base: BaseMetaDataColumn {
+                flags: BitFlags::empty(),
+                ty,
+            },
+            col_name: name.to_string().into(),
+        }
+    }
+
+    // In the client->server bulk COLMETADATA a TEXT column's TYPE_INFO is
+    // followed by the whole table name as one bare US_VARCHAR (no NumParts
+    // byte, no splitting on `.`), then the column name. Other types carry
+    // nothing extra. Ported from upstream Tiberius 103e044.
+    #[test]
+    fn bulk_col_metadata_puts_bare_table_name_after_text_type_info() {
+        use crate::tds::codec::VarLenContext;
+
+        let text_ty =
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Text, 0x7fff_ffff, None));
+        let int_ty = TypeInfo::FixedLen(FixedLenType::Int4);
+
+        let mut buf = BytesMut::new();
+        encode_bulk_col_metadata(
+            &[
+                bulk_column("t", text_ty.clone()),
+                bulk_column("i", int_ty.clone()),
+            ],
+            "dbo.MyTable",
+            &mut buf,
+        )
+        .unwrap();
+
+        let mut expected = vec![TokenType::ColMetaData as u8, 2, 0];
+        for (name, ty, table) in [("t", text_ty, true), ("i", int_ty, false)] {
+            expected.extend_from_slice(&[0, 0, 0, 0, 0, 0]); // user type + flags
+            let mut ti = BytesMut::new();
+            ty.encode(&mut ti).unwrap();
+            expected.extend_from_slice(&ti);
+            if table {
+                expected.extend(us_varchar("dbo.MyTable"));
+            }
+            expected.push(1);
+            expected.extend(name.encode_utf16().flat_map(u16::to_le_bytes));
+        }
+
+        assert_eq!(buf.as_ref(), expected.as_slice());
+    }
+
+    #[test]
+    fn bulk_col_metadata_rejects_over_long_names() {
+        let ty = TypeInfo::FixedLen(FixedLenType::Int4);
+        let long_col = "c".repeat(256);
+        let mut buf = BytesMut::new();
+        assert!(encode_bulk_col_metadata(&[bulk_column(&long_col, ty)], "t", &mut buf).is_err());
+
+        use crate::tds::codec::VarLenContext;
+        let text_ty =
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::NText, 0x7fff_ffff, None));
+        let long_table = "t".repeat(u16::MAX as usize + 1);
+        let mut buf = BytesMut::new();
+        assert!(
+            encode_bulk_col_metadata(&[bulk_column("c", text_ty)], &long_table, &mut buf).is_err()
+        );
+    }
 
     // Types INSERT BULK can't declare used to hit `unreachable!()` in Display
     // (a server-controlled panic); they now return `fmt::Error`, which the
