@@ -45,8 +45,9 @@ before treating it as final.
   missing/out-of-range/type-mismatched column and is meant for
   "I know this schema" code; `row.try_get(...)` returns a `Result` instead.
   Both accept a numeric index or a column name. `Row::cells()` iterates the
-  row's raw `ColumnData` values, and `Row::new` builds a `Row` fixture
-  without a live connection (useful in tests).
+  row's raw `ColumnData` values. `Row::new` and `Row::builder()` (column
+  name, type and value added together) build a `Row` fixture without a
+  live connection, which is useful in tests.
 - **`ColumnData`** — the typed enum a single cell decodes to (`I32`,
   `String`, `Binary`, `Numeric`, the `time`/`jiff` date-time variants,
   and so on), each variant wrapping an `Option` for nullability. `FromSql` /

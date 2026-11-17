@@ -103,6 +103,12 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 - `examples/aad-auth.rs` requested the wrong token scope; Azure SQL needs
   `https://database.windows.net/.default`.
 
+### Added
+
+- `Row::builder()` / `RowBuilder`, which adds each column's name, type and
+  value together, for building `Row` fixtures in tests (upstream #383).
+  Complements the existing `Row::new`.
+
 ### Changed
 
 - rustls: a `CryptoProvider` installed process-wide by the application

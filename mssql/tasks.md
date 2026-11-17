@@ -300,7 +300,7 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   `75d7afc`.
 - [ ] **Small items**: ~~rustls handshake diagnostics for #327 (`610154f`)~~ (done);
   connection-string docs and error hints for #333 (`0dec9cb`);
-  `Row::builder()` for #383 (`30b059c`); ~~case-insensitive
+  ~~`Row::builder()` for #383 (`30b059c`)~~ (done); ~~case-insensitive
   `ApplicationIntent` and non-null `I16`→`i32` widening (`97bbbfd`); exact
   column match before the `r#` fallback (`bf25ac6`)~~ (done); ~~native-tls ALPN
   `tds/8.0` for Strict (`dd6d913`; async-native-tls 0.6 has

@@ -272,6 +272,65 @@ where
     fn idx(&self, row: &Row) -> Option<usize>;
 }
 
+/// Builds a [`Row`] outside of a query, mainly to unit-test code that takes
+/// a `Row` or `&[Row]` without a live connection. Obtained from
+/// [`Row::builder`]. Ported from upstream Tiberius (tiberius-rs/tiberius
+/// 30b059c, upstream issue #383), alongside this fork's existing
+/// [`Row::new`].
+///
+/// # Example
+///
+/// ```
+/// use mssql::{ColumnData, ColumnType, Row};
+///
+/// let row = Row::builder()
+///     .column("id", ColumnType::Int4, ColumnData::I32(Some(1)))
+///     .column("name", ColumnType::NVarchar, ColumnData::String(Some("Alice".into())))
+///     .column("age", ColumnType::Int4, ColumnData::I32(None))
+///     .build();
+///
+/// assert_eq!(Some(1), row.get::<i32, _>("id"));
+/// assert_eq!(Some("Alice"), row.get::<&str, _>(1));
+/// assert_eq!(None, row.get::<i32, _>("age"));
+/// ```
+#[derive(Debug, Default)]
+pub struct RowBuilder {
+    columns: Vec<Column>,
+    data: TokenRow<'static>,
+    result_index: usize,
+}
+
+impl RowBuilder {
+    /// Appends a column and its value. `column_type` is what
+    /// [`Column::column_type`] reports; it isn't checked against `value`,
+    /// since the accessors dispatch on the [`ColumnData`] variant.
+    pub fn column(
+        mut self,
+        name: impl Into<String>,
+        column_type: ColumnType,
+        value: ColumnData<'static>,
+    ) -> Self {
+        self.columns.push(Column::new(name.into(), column_type));
+        self.data.push(value);
+        self
+    }
+
+    /// Sets what [`Row::result_index`] reports (default 0).
+    pub fn result_index(mut self, result_index: usize) -> Self {
+        self.result_index = result_index;
+        self
+    }
+
+    /// Finishes the row.
+    pub fn build(self) -> Row {
+        Row {
+            columns: Arc::new(self.columns),
+            data: self.data,
+            result_index: self.result_index,
+        }
+    }
+}
+
 impl QueryIdx for usize {
     fn idx(&self, row: &Row) -> Option<usize> {
         if *self < row.len() {
@@ -325,6 +384,13 @@ impl Row {
             data,
             result_index: 0,
         }
+    }
+
+    /// A [`RowBuilder`] that adds each column together with its value, so
+    /// the two lists can't drift out of sync the way separate `columns` and
+    /// `TokenRow` arguments to [`Row::new`] can.
+    pub fn builder() -> RowBuilder {
+        RowBuilder::default()
     }
 
     /// Columns defining the row data. Columns listed here are in the same order
@@ -493,6 +559,38 @@ impl From<Row> for TokenRow<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builder_round_trips_through_public_accessors() {
+        let row = Row::builder()
+            .column("id", ColumnType::Int4, ColumnData::I32(Some(1)))
+            .column(
+                "name",
+                ColumnType::NVarchar,
+                ColumnData::String(Some("Alice".into())),
+            )
+            .column("flag", ColumnType::Bit, ColumnData::Bit(Some(true)))
+            .column("age", ColumnType::Int4, ColumnData::I32(None))
+            .result_index(3)
+            .build();
+
+        assert_eq!(4, row.len());
+        assert_eq!(3, row.result_index());
+        assert_eq!(ColumnType::NVarchar, row.columns()[1].column_type());
+        assert_eq!(Some("Alice"), row.get::<&str, _>("name"));
+        assert_eq!(Some(true), row.get::<bool, _>(2));
+        assert_eq!(None, row.get::<i32, _>("age"));
+        assert!(row.try_get::<i32, _>("nope").is_err());
+
+        let mut data = TokenRow::new();
+        data.push(ColumnData::I32(Some(7)));
+        assert_eq!(
+            Row::builder()
+                .column("x", ColumnType::Int4, ColumnData::I32(Some(7)))
+                .build(),
+            Row::new(vec![Column::new("x".into(), ColumnType::Int4)], data)
+        );
+    }
 
     #[test]
     fn exact_column_name_wins_over_raw_identifier_stripping() {
