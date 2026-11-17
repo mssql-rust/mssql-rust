@@ -340,8 +340,10 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
     done** on `upstream/tiberius-0.13-decisions`, with the fixed-length size
     check and checked numeric magnitude. Encode (bulk insert into
     sql_variant) is still open.
-  - CLR UDT columns as `Binary` (`7c1075c`). Adding `TypeInfo::Udt` is
-    breaking.
+  - CLR UDT columns as `Binary` (`7c1075c`). **Done** on
+    `upstream/tiberius-0.13-decisions`, non-breaking (the UDT_INFO names are
+    read and dropped; no `TypeInfo::Udt`). The live test is skipped on Azure
+    SQL Edge (no CLR) and runs on the full SQL Server images in CI.
   - Typed NULL scalar parameters (`73e79d4`). Changes wire bytes; verify
     live.
   - Client-certificate (mTLS) auth (`4a212e7`).

@@ -105,6 +105,9 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Added
 
+- CLR UDT columns (`geography`, `geometry`, `hierarchyid`, user-defined CLR
+  types) can be read; their values are the raw serialized bytes as
+  `ColumnData::Binary`. Before, they failed with "unsupported column type".
 - `sql_variant` columns can be read. Each value comes back as the
   `ColumnData` of its base type (int as `I32`, nvarchar as `String`, and so
   on), and NULL as `String(None)`. Before, any `sql_variant` column, including

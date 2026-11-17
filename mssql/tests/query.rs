@@ -3392,3 +3392,47 @@ where
 
     Ok(())
 }
+
+// CLR UDT columns (geography, geometry, hierarchyid) used to fail the whole
+// query with "unsupported column type: Udt". Their values now come back as
+// the raw serialized bytes. Ported from upstream Tiberius (7c1075c).
+#[test_on_runtimes]
+async fn read_clr_udt_columns_as_binary<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let rows = async {
+        conn.simple_query(
+            "SELECT geography::Point(47.65, -122.34, 4326), \
+                    geometry::STGeomFromText('POINT (3 4)', 0), \
+                    hierarchyid::Parse('/1/2/'), \
+                    CAST(NULL AS hierarchyid), \
+                    CAST(geography::Point(47.65, -122.34, 4326) AS VARBINARY(MAX)), \
+                    CAST(hierarchyid::Parse('/1/2/') AS VARBINARY(MAX))",
+        )
+        .await?
+        .into_row()
+        .await
+    }
+    .await;
+
+    // Azure SQL Edge has no CLR, so it can't evaluate these types at all
+    // (error 10347). The full SQL Server images in CI can.
+    let row = match rows {
+        Err(e) if e.code() == Some(10347) => {
+            eprintln!("skipping: this server has no CLR ({e})");
+            return Ok(());
+        }
+        other => other?.unwrap(),
+    };
+
+    assert_eq!(mssql::ColumnType::Udt, row.columns()[0].column_type());
+    let geography: &[u8] = row.get(0).unwrap();
+    assert_eq!(Some(geography), row.get::<&[u8], _>(4));
+    assert!(!row.get::<&[u8], _>(1).unwrap().is_empty());
+    let hierarchy: &[u8] = row.get(2).unwrap();
+    assert_eq!(Some(hierarchy), row.get::<&[u8], _>(5));
+    assert_eq!(None, row.get::<&[u8], _>(3));
+
+    Ok(())
+}

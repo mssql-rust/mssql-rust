@@ -347,6 +347,22 @@ impl TypeInfo {
                     // sql_variant's TYPE_INFO is a u32 max length (8016).
                     // Decoded in column_data/sql_variant.rs.
                     VarLenType::SSVariant => src.read_u32_le().await? as usize,
+                    // CLR UDT (geography, geometry, hierarchyid, ...): UDT_INFO,
+                    // MS-TDS 2.2.5.5.4. A u16 max size, then the database,
+                    // schema and type names (B_VARCHAR) and the assembly-
+                    // qualified name (US_VARCHAR). The names are read to keep
+                    // the stream aligned and then dropped, so `TypeInfo` gains
+                    // no new public variant. Values are raw bytes (Binary).
+                    // Upstream Tiberius 7c1075c keeps them in a
+                    // `TypeInfo::Udt(UdtInfo)`, which would be breaking here.
+                    VarLenType::Udt => {
+                        let max_byte_size = src.read_u16_le().await? as usize;
+                        let _db_name = src.read_b_varchar().await?;
+                        let _schema_name = src.read_b_varchar().await?;
+                        let _type_name = src.read_b_varchar().await?;
+                        let _assembly_qualified_name = src.read_us_varchar().await?;
+                        max_byte_size
+                    }
                     // SSVariant (sql_variant) and Udt (CLR user-defined type)
                     // are real, on-the-wire column types a conforming server
                     // can send in COLMETADATA — VarLenType::try_from above
@@ -472,12 +488,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn decode_rejects_udt_instead_of_panicking() {
+    async fn decode_reads_and_skips_udt_info() {
+        fn b_varchar(buf: &mut BytesMut, s: &str) {
+            buf.put_u8(s.encode_utf16().count() as u8);
+            s.encode_utf16().for_each(|u| buf.put_u16_le(u));
+        }
+
         let mut buf = BytesMut::new();
         buf.put_u8(VarLenType::Udt as u8);
+        buf.put_u16_le(0xffff);
+        b_varchar(&mut buf, "master");
+        b_varchar(&mut buf, "sys");
+        b_varchar(&mut buf, "geography");
+        let aqn = "Microsoft.SqlServer.Types.SqlGeography, Microsoft.SqlServer.Types";
+        buf.put_u16_le(aqn.encode_utf16().count() as u16);
+        aqn.encode_utf16().for_each(|u| buf.put_u16_le(u));
+        buf.put_u8(0x42); // the next field must still be in place
 
-        let result = TypeInfo::decode(&mut buf.into_sql_read_bytes()).await;
-        assert!(matches!(result, Err(Error::Protocol(_))));
+        let mut src = buf.into_sql_read_bytes();
+        let ti = TypeInfo::decode(&mut src).await.unwrap();
+        assert_eq!(
+            ti,
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Udt, 0xffff, None))
+        );
+        assert_eq!(src.read_u8().await.unwrap(), 0x42);
     }
 
     // Encode-side counterpart: not server-controlled (the caller supplies
