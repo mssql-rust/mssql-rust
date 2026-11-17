@@ -1,0 +1,18 @@
+# gitleaks config for the PR secret scan (.github/workflows/pr-code-security.yml):
+# the full default rule set, with the self-signed TLS test fixtures for the
+# local integration-test SQL Server container allowlisted. Adapted from
+# upstream Tiberius (tiberius-rs/tiberius #448) for this monorepo's layout.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Self-signed TLS test fixtures for the local integration-test SQL Server container"
+paths = [
+    '''mssql/docker/certs/.*''',
+]
+# False positive: the generic-api-key rule reads the `integrated-auth-gssapi`
+# feature-flag description in llms.json (an "auth" key followed by prose) as
+# a credential. It's in history, so a full-history scan needs this.
+regexes = [
+    '''^Kerberos/GSSAPI$''',
+]

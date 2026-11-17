@@ -32,7 +32,7 @@ jobs:
         with:
           workspaces: "mssql -> target"
       - name: Install dependencies
-        run: sudo apt install -y openssl libkrb5-dev
+        run: sudo apt-get update && sudo apt-get install -y openssl libkrb5-dev
       - name: Build
         run: cargo build
       - name: Test

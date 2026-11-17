@@ -35,7 +35,7 @@ jobs:
         with:
           workspaces: "mssql -> target"
       - name: Install dependencies
-        run: sudo apt install -y openssl libkrb5-dev
+        run: sudo apt-get update && sudo apt-get install -y openssl libkrb5-dev
       - name: Clippy
         run: cargo clippy --features=all -- -D warnings
 
@@ -67,7 +67,7 @@ jobs:
         with:
           workspaces: "mssql -> target"
       - name: Install dependencies
-        run: sudo apt install -y openssl libkrb5-dev
+        run: sudo apt-get update && sudo apt-get install -y openssl libkrb5-dev
       # Verifies the rust-version declared in Cargo.toml (see
       # spec/rust-msrv-n-minus-2/index.md): the code must compile on this pinned
       # toolchain, not just claim to. A red msrv job means a change started
@@ -124,7 +124,7 @@ jobs:
         run: DOCKER_BUILDKIT=1 docker compose -f docker-compose.yml up -d mssql-${{matrix.database}}
 
       - name: Install dependencies
-        run: sudo apt install -y openssl libkrb5-dev
+        run: sudo apt-get update && sudo apt-get install -y openssl libkrb5-dev
 
       - name: Run tests
         run: cargo test ${{matrix.features}}
