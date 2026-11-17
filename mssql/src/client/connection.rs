@@ -128,9 +128,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         let transport = if config.encryption == EncryptionLevel::Strict {
             event!(Level::DEBUG, "Performing a TLS handshake");
 
-            let mut stream =
-                create_tls_stream(&config, TlsPreloginWrapper::new(tcp_stream)).await?;
-            stream.get_mut().handshake_complete();
+            // TDS 8.0 Strict: the TLS handshake is raw TLS on the TCP stream,
+            // with no TDS PRELOGIN framing (that framing is only for the
+            // legacy in-band handshake in `tls_handshake`). So mark the
+            // wrapper's handshake "complete" *before* handshaking, as
+            // upstream Tiberius does. The reverse order, used until now,
+            // wrapped every handshake record in a PRELOGIN packet, which a
+            // real TDS 8.0 server can't parse.
+            let mut wrapper = TlsPreloginWrapper::new(tcp_stream);
+            wrapper.handshake_complete();
+            let stream = create_tls_stream(&config, wrapper).await?;
 
             event!(Level::DEBUG, "TLS handshake successful");
 

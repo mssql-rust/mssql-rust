@@ -31,6 +31,13 @@ rust-version = "1.98"
 path = "tests/query.rs"
 name = "query"
 
+# Runs against a local rustls *server* (tokio-rustls is only a dependency
+# with the rustls feature), so it can't build without it.
+[[test]]
+path = "tests/tls_local.rs"
+name = "tls_local"
+required-features = ["rustls"]
+
 [[test]]
 path = "tests/named-instance-async.rs"
 name = "named-instance-async"
