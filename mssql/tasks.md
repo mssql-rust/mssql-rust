@@ -307,8 +307,10 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   `tds/8.0` for Strict (`dd6d913`; async-native-tls 0.6 has
   `request_alpns`)~~ (done); ~~honour a process-installed rustls `CryptoProvider`
   with a **ring** fallback (`7235f4c`)~~ (done); `rustls-webpki` floor (`4ab275b`);
-  unit tests for `PacketHeader` (`0fb4067`), `into_results` (`38896ba`)
-  and FeatureExtAck (`931223f`).
+  ~~unit tests for `PacketHeader` (`0fb4067`), `into_results` (`38896ba`)
+  and FeatureExtAck (`931223f`)~~ (done). Still open from this list: the
+  `rustls-webpki` floor (`4ab275b`), which is a dependency declaration, so
+  it belongs in a deliberate dependency-update commit.
 
 ## Needs a decision first: behaviour change or new API surface
 
