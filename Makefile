@@ -10,3 +10,8 @@
 # can be run and read on its own like any other bin/ script.
 github-pages:
 	bin/make-github-pages
+
+# Check and test on the minimum supported Rust version (N-2) and on N-1.
+.PHONY: test-minimum-supported-rust-version
+test-minimum-supported-rust-version:
+	bin/make-test-minimum-supported-rust-version

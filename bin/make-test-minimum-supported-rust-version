@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Check and test on the minimum supported Rust version (N-2) and on N-1.
+# MSRV comes from the first literal `rust-version = "1.X"` found in a
+# Cargo.toml; N-1 is that minor plus one.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+msrv=$(grep -rhE --include=Cargo.toml --exclude-dir=target --exclude-dir=node_modules \
+  '^rust-version[[:space:]]*=[[:space:]]*"[0-9]+\.[0-9]+' . | head -n 1 | sed -E 's/.*"([0-9]+\.[0-9]+).*/\1/')
+if [ -z "$msrv" ]; then
+  echo "error: no rust-version found in any Cargo.toml" >&2
+  exit 1
+fi
+major=${msrv%%.*}
+minor=${msrv##*.}
+n_minus_1="$major.$((minor + 1))"
+
+# Every directory whose Cargo.toml declares a [workspace].
+roots=$(grep -rlE --include=Cargo.toml --exclude-dir=target --exclude-dir=node_modules '^\[workspace\]' . | xargs -n1 dirname | sort)
+
+for tc in "$msrv" "$n_minus_1"; do
+  if ! rustup toolchain list | grep -qE "^$tc([.-]|[[:space:]]|$)"; then
+    echo "error: Rust toolchain $tc is not installed; run: rustup toolchain install $tc" >&2
+    exit 1
+  fi
+  for root in $roots; do
+    echo "==> $tc: $root"
+    (
+      cd "$root"
+      export RUSTUP_TOOLCHAIN="$tc"
+      extra=()
+      case "$root" in */fuzz) ;; *) extra=(--workspace) ;; esac
+      cargo check --all-targets "${extra[@]}"
+      # Fuzz crates need nightly sanitizers; they are compile-checked only.
+      case "$root" in */fuzz) ;; *) cargo test "${extra[@]}" ;; esac
+    )
+  done
+done
+echo "OK: MSRV $msrv and N-1 $n_minus_1 pass"
