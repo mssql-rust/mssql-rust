@@ -195,3 +195,158 @@ original would have broken the default build), plus direct fixes for issues
 3. Work down the "needs rework" tier as time allows: #308, #398, #378, #312,
    #400, #376, #366, #408, #290, #330.
 4. Skip #132, #405, #328, and #357 entirely as submitted.
+
+---
+
+# Upstream Tiberius 0.13.0: triage of merged work
+
+Upstream moved to [tiberius-rs/tiberius](https://github.com/tiberius-rs/tiberius)
+(`prisma/tiberius` now redirects there) and revived in September 2026. It
+merged PRs #438–#453 (about 160 commits, about 32k changed lines, mostly by
+Matthew Jackson) and released **v0.13.0** on 2026-09-24. Many thanks to the
+Tiberius team. Triaged 2026-11-17 against this fork's `main` at `4e04999`.
+Every commit's diff was read, not just the PR descriptions, and each fix
+was checked against the fork's current source: is the fork still
+vulnerable, and at which file and line. Much of #441/#442 is community PRs
+this fork had already built independently (see the first half of this
+file), often in a stricter form. Upstream's own hardening work is the
+valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
+
+## Done: ported, each crediting upstream in its commit message
+
+- [x] **No-TLS `encrypt=true` in a connection string went cleartext**
+  (`bd3251a`, `7fd75bb`; issue #305, which `5a070b0` only half-fixed).
+  Done: `b1e9372`. Unit tests only (parse-time).
+- [x] **TLS pre-login `assert_eq!` / length underflow; SSRP `&buf[3..len]`
+  on a 1–2 byte UDP reply.** Both were remote panics, the first before
+  certificate validation (`3e6afc3`, `fafa78a`). Done: `88dde68`.
+- [x] **Numeric: `DECIMAL(38,38)` panicked on legitimate data; unvalidated
+  server precision/scale; i128 overflow; `abs()` on `i128::MIN`;
+  big-endian swap** (`7d13e22`, `b0cf775`, `3e6afc3`, `7803134`, `7906d55`),
+  plus a fork-only fallible `rust_decimal` conversion. Done: `1b7bcdc`.
+  Verified live: the new test panicked on the old code.
+- [x] **ENVCHANGE PacketSize outside 512..=32767** (size 8 caused an
+  infinite loop) **and ROW before COLMETADATA `unwrap()`** (`bf96855`,
+  `3e6afc3`). Done: `68345bd`.
+- [x] **PLP/TEXT/IMAGE allocations driven by server lengths**: u64
+  `with_capacity`, zero-filling a u32 chunk, an unbounded chunk count
+  (`3e6afc3`, `8255d35`). Done: `73d0eae`.
+- [x] **Out-of-range date/time wire values panicked** (jiff backend:
+  fork-specific; time backend: `0e977bf`, `3e6afc3`, `7803134`). Done:
+  `58f2ada`.
+- [x] **AAD token printed by `{:?}` on `Config`, never zeroized, sent via
+  the non-zeroizing path; LOGIN7/token buffers reallocated, leaving
+  credential copies behind** (`3e6afc3`, `3f47d87`, `35f2fe6`, `d290aea`).
+  BREAKING: `AADToken(Zeroizing<String>)`. Also fixes the aad-auth example's
+  wrong token scope. Done: `2c50da8`.
+- [x] **rustls `load_native_certs().expect` / empty-store `assert!`;
+  conflicting trust settings in a connection string panicked**
+  (`afdf8b3`, `5885e11`, `a1abc80`). Done: `a9418c7`.
+- [x] **Bulk insert: partial-row rollback** (`991702f`); **COLMETADATA
+  Display `unreachable!()`** (`3e6afc3`); **reserved flag bits**
+  (`e59a57f`); fork-only **ORDER-hint `]` escaping**. Done: `ffeb011`.
+  Verified live: both new bulk tests fail on the old code.
+- [x] **#313: in-house ADO.NET tokenizer** (`d0003ad`): `=` in an unquoted
+  value now works. Corrects issues.md's "doesn't reproduce". Done:
+  `58e3e0e`. Verified live with real logins.
+- [x] **INSERT BULK `COLLATE`**: silent text corruption for columns whose
+  collation isn't the database default (`75d7afc`). Done: `3bcc05a`.
+  Verified live (Cyrillic into a CP1252 database).
+
+## Build next: real value, small to medium, no API decisions needed
+
+- [ ] **Bulk TEXT/NTEXT (fork #352 / error 4804)**: upstream found the
+  format: TableName as a bare US_VARCHAR, no NumParts (`103e044`, with
+  `93837ef`, `74c5fa3`), plus the String→Text/NText encode arm from
+  `97bbbfd`. Semver: `BaseMetaDataColumn` has pub fields, so carry the
+  table name without a struct-literal break, or note it. Verify live. Then
+  restore the TEXT column in `bulk_text_keeps_a_non_default_column_collation`.
+- [ ] **Money hardening**: NaN/inf/out-of-range money saturates silently;
+  no Numeric→Money arm; NOT NULL money columns (`FixedLen`) can't be
+  bulk-inserted (`302cfe4`, `e0a65d8`, `1d91e18`, `8510d35`).
+- [ ] **Token-body desync**: ERROR/INFO/LOGINACK parsed straight off the
+  stream instead of within their declared Length; ORDER odd length
+  (`bf96855`).
+- [ ] **RPC name lengths**: proc name `as u16` truncation (`acaa4a4`) and
+  the param-name `u8` counter, which overflows past 255 UTF-16 units. That
+  second one is unfixed upstream too, and `ProcParam` names are
+  caller-supplied.
+- [ ] **Poisoned connection after a cancelled multi-packet write**
+  (`3e6afc3`/`3f47d87` `connection.rs`, `bulk_load.rs`): new field and
+  plumbing. Complements this fork's Attention-on-drop (`60bde67`).
+- [ ] **Bulk identifier validation** (`7a86677`, `3f47d87`): reject
+  control characters and unbalanced `]` in caller-supplied table/column
+  names. Wire it into `fetch_column_metadata` once, not per entry point.
+- [ ] **Tolerate COLINFO / TABNAME tokens** (`FOR BROWSE`) by skipping by
+  length. Don't port upstream's decoders (`8b6e080`, `617dc43`).
+- [ ] **CI, urgent**: this fork's Gitleaks job fails on every PR ("License
+  key is required" for an organization). Run the gitleaks CLI directly
+  with a verified SHA-256, and add `.gitleaks.toml` allowlisting
+  `mssql/docker/certs/` (`47331db`, `1039eb0`, `b448f43`). Also:
+  `apt-get update` before `apt install` (`55be39e`), a Linux SQL Server
+  readiness wait (`169091d`), and a cargo-deny job using this fork's own
+  ignore list (`f823a1b`). The macOS lane currently fails in
+  `setup-docker-action`; colima (`b550fc8`) is a candidate.
+- [ ] **Legacy CP437/CP850 collations** (currently "unsupported
+  encoding") and opt-in lossy code-page decoding (`30f7b36`, `cbacb58`,
+  `35605c9`). Then port upstream's CP437/CP850 bulk live test from
+  `75d7afc`.
+- [ ] **Small items**: rustls handshake diagnostics for #327 (`610154f`);
+  connection-string docs and error hints for #333 (`0dec9cb`);
+  `Row::builder()` for #383 (`30b059c`); case-insensitive
+  `ApplicationIntent` and non-null `I16`→`i32` widening (`97bbbfd`); exact
+  column match before the `r#` fallback (`bf25ac6`); native-tls ALPN
+  `tds/8.0` for Strict (`dd6d913`; async-native-tls 0.6 has
+  `request_alpns`); honour a process-installed rustls `CryptoProvider`
+  with a **ring** fallback (`7235f4c`); `rustls-webpki` floor (`4ab275b`);
+  unit tests for `PacketHeader` (`0fb4067`), `into_results` (`38896ba`)
+  and FeatureExtAck (`931223f`).
+
+## Needs a decision first: behaviour change or new API surface
+
+- [ ] **`handshake_timeout` / `command_timeout`** (#375/#360, `2c63330`).
+  Upstream defaults them to 15s/30s (BREAKING) and poisons the connection
+  on timeout. Here: take the handshake timeout (`None` default, or 15s with
+  a CHANGELOG note), and implement a command timeout through the existing
+  Attention path rather than poisoning. **Decide** the defaults.
+- [ ] **TLS trust semantics** (`2f3c4a9`, `5885e11`). The rustls
+  `trust_cert_ca` rejects multi-cert files and *replaces* the roots, while
+  native-tls/openssl *add* to them, and the docs claim "in addition to"
+  for all three. An empty bundle silently adds nothing on
+  native-tls/openssl. **Decide**: additive everywhere (widens trust) or
+  replace everywhere and fix the docs. Port multi-cert and empty-bundle
+  errors either way. Skip upstream's 1380-line rewrite.
+- [ ] **Connection-string `encrypt` default `Required`** (`3e6afc3`), which
+  matches modern ADO.NET. BREAKING; this fork defaults to `Off`.
+- [ ] **Lift the rustls TLS 1.2-only pin**: it matters for TDS 8.0 Strict.
+  The pin exists for macOS CI KeyUpdate EOFs, so re-test there first.
+- [ ] **Larger additive features**, each to be built from this fork's
+  source with its own review:
+  - SQL_VARIANT decode/encode (`ee4450b`, `dd19eeb`, `b0cf775`). Fix the
+    unchecked fixed-length size and the 16-byte numeric overflow found in
+    review.
+  - CLR UDT columns as `Binary` (`7c1075c`). Adding `TypeInfo::Udt` is
+    breaking.
+  - Typed NULL scalar parameters (`73e79d4`). Changes wire bytes; verify
+    live.
+  - Client-certificate (mTLS) auth (`4a212e7`).
+  - Transaction Manager requests (`8338bb8`).
+  - Table-valued parameters (`73e79d4`): only without the ungated macro and
+    without `format!("DECLARE @P AS {db_type}")` interpolation. Same
+    objection as #328.
+- [ ] **Drop async-std** (`d1f7e18`): it is unmaintained, and Unreleased
+  is already a breaking window.
+
+## Skip
+
+- `secrecy::SecretString` migration (`bacc70b`, `7084c9e`): breaking for no
+  gain over this fork's `Zeroizing<String>` plus redacted `Debug`.
+- `tiberius-macros` as an **ungated** proc-macro dependency (`ed9b1dd`),
+  and the `Command`/`CommandStream` API, which duplicates `call_procedure`.
+- ALTMETADATA/ALTROW (COMPUTE BY was removed in SQL Server 2012).
+  SESSIONSTATE (`491b3b7`) and FEDAUTHINFO (`8234ac4`) decoders: unused
+  here, and both have unchecked server-driven allocations or adds.
+- PRELOGIN INSTOPT/TRACEID (`27d4b2a`), a default `gethostname`
+  workstation name (adds `libc` and unsafe FFI), and `docsrs` cfg hygiene.
+- Upstream-only CI lanes, comment trims, rustfmt-only and rename-only
+  commits.

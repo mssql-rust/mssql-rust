@@ -14,7 +14,66 @@ forward.
 
 ## Unreleased
 
+Much of this cycle ports hardening and fixes from upstream Tiberius 0.13.0
+([tiberius-rs/tiberius](https://github.com/tiberius-rs/tiberius), released
+2026-09-24). Many thanks to the Tiberius team, especially Matthew Jackson.
+See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
+
+### Security
+
+- A malicious or broken server (or, for the TLS pre-login and SQL Browser
+  cases, anyone able to inject packets) could panic, hang or exhaust the
+  memory of the client. Each of these is now an error:
+  - a non-pre-login packet or a short length during the TLS handshake;
+  - a 1–2 byte SQL Browser (SSRP) UDP reply;
+  - a decimal/numeric precision or scale out of range, or a 16-byte
+    magnitude above `i128::MAX`;
+  - an ENVCHANGE packet size outside 512..=32767 (8 caused an infinite
+    loop);
+  - a ROW token before any COLMETADATA;
+  - PLP/TEXT/NTEXT/IMAGE lengths up to `u64::MAX` reserved or zero-filled
+    before any data arrived (now grown in bounded 64 KiB windows, with PLP
+    capped at 2^31 - 1 bytes);
+  - out-of-range `date`/`time`/`smalldatetime`/`datetime2`/`datetimeoffset`
+    values read as jiff or `time` types;
+  - column types `INSERT BULK` can't declare.
+- With no TLS feature compiled in, `encrypt=true`/`yes`/`strict` in a
+  connection string silently connected in plaintext. It is now an
+  `Error::Tls` (upstream #305).
+- The AAD bearer token was printed by `{:?}` on `Config`/`AuthMethod`, was
+  never zeroized, and was sent through a non-zeroizing buffer. The LOGIN7
+  and token buffers could also reallocate, leaving copies of credentials in
+  freed memory. All fixed; see the BREAKING note below.
+
+### Fixed
+
+- `DECIMAL(38,38)` (scale equal to the maximum precision) panicked on
+  read. Reading a wide `DECIMAL(38, s)` into `rust_decimal::Decimal` now
+  converts fallibly instead of panicking.
+- Connection strings: an unquoted value containing `=` (e.g. a base64
+  password `Password=Zm9vYmFy==`) failed to parse (upstream #313). The
+  ADO.NET parser is now in-house and ADO.NET-aligned. Doubled quotes
+  unescape, whitespace inside quotes is kept, and junk after `}` is an
+  error.
+- `INSERT BULK` now declares each character column's `COLLATE`, so text
+  bulk-loaded into a column whose collation differs from the database
+  default is no longer stored corrupted.
+- Bulk insert: a row that failed to encode partway no longer desyncs the
+  stream, and `]` in an ORDER-hint column name is now escaped.
+- No panic when the OS trust store is empty or one platform certificate
+  fails to load (rustls). Setting both `TrustServerCertificate=true` and
+  `TrustServerCertificateCA` in a connection string is now an error rather
+  than a panic.
+- Reserved COLMETADATA flag bits and DONE status bits from newer servers
+  no longer fail the result set.
+- `examples/aad-auth.rs` requested the wrong token scope; Azure SQL needs
+  `https://database.windows.net/.default`.
+
 ### Changed
+
+- BREAKING: `AuthMethod::AADToken` now holds `zeroize::Zeroizing<String>`
+  instead of `String`, and its `Debug` shows `<HIDDEN>`. Construct it with
+  `AuthMethod::aad_token(..)`, which is unchanged.
 
 - BREAKING: the minimum supported Rust version is now 1.98 (current stable
   1.100 minus two).
