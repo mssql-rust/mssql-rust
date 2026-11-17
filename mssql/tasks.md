@@ -298,14 +298,14 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   encoding") and opt-in lossy code-page decoding (`30f7b36`, `cbacb58`,
   `35605c9`). Then port upstream's CP437/CP850 bulk live test from
   `75d7afc`.
-- [ ] **Small items**: rustls handshake diagnostics for #327 (`610154f`);
+- [ ] **Small items**: ~~rustls handshake diagnostics for #327 (`610154f`)~~ (done);
   connection-string docs and error hints for #333 (`0dec9cb`);
-  `Row::builder()` for #383 (`30b059c`); case-insensitive
+  `Row::builder()` for #383 (`30b059c`); ~~case-insensitive
   `ApplicationIntent` and non-null `I16`→`i32` widening (`97bbbfd`); exact
-  column match before the `r#` fallback (`bf25ac6`); native-tls ALPN
+  column match before the `r#` fallback (`bf25ac6`)~~ (done); native-tls ALPN
   `tds/8.0` for Strict (`dd6d913`; async-native-tls 0.6 has
-  `request_alpns`); honour a process-installed rustls `CryptoProvider`
-  with a **ring** fallback (`7235f4c`); `rustls-webpki` floor (`4ab275b`);
+  `request_alpns`); ~~honour a process-installed rustls `CryptoProvider`
+  with a **ring** fallback (`7235f4c`)~~ (done); `rustls-webpki` floor (`4ab275b`);
   unit tests for `PacketHeader` (`0fb4067`), `into_results` (`38896ba`)
   and FeatureExtAck (`931223f`).
 

@@ -81,6 +81,9 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 - `char`/`varchar`/`text` data in legacy CP437 and CP850 collations (e.g.
   `SQL_Latin1_General_CP437_BIN`, `SQL_1xCompat_CP850_CI_AS`) can now be read
   and bulk-inserted. Before, both failed with "unsupported encoding".
+- rustls: a rejected server certificate is now an `Error::Tls` explaining
+  the remedies (`trust_cert_ca`, `trust_cert`, native-tls) instead of an
+  opaque I/O error (upstream #327).
 - `ApplicationIntent=readonly` (any letter case, as ADO.NET accepts) now
   requests read-only intent. Before, only the exact spelling `ReadOnly` did.
 - A `smallint` column can be read as `i32` (lossless widening).
@@ -99,6 +102,9 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Changed
 
+- rustls: a `CryptoProvider` installed process-wide by the application
+  (`CryptoProvider::install_default`, e.g. aws-lc-rs or a FIPS provider) is
+  now used. ring remains the default when none is installed.
 - `bulk_insert*` and `column_metadata` now reject a table or column name
   that can't be a legitimate identifier before building SQL from it:
   control characters, an unbalanced `]` or `)`, an unterminated `[`, a

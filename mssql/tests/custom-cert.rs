@@ -232,7 +232,13 @@ fn connect_to_custom_cert_instance_via_webpki_roots_rejects_self_signed_cert() -
 
         let client = Client::connect(config, tcp.compat_write()).await;
 
-        assert!(client.is_err());
+        // The rejection names its remedies (upstream issue #327).
+        match client {
+            Err(mssql::error::Error::Tls(msg)) => {
+                assert!(msg.contains("trust_cert_ca"), "{msg}")
+            }
+            other => panic!("expected an actionable Error::Tls, got {other:?}"),
+        }
         Ok(())
     })
 }
