@@ -21,6 +21,20 @@ defaults:
     working-directory: mssql
 
 jobs:
+  # Advisories, licenses, bans and sources, per mssql/deny.toml (found next
+  # to the manifest). Ported from upstream Tiberius f823a1b. Pinned to
+  # cargo-deny-action v2.1.1 (cargo-deny 0.20.2, the version this config was
+  # verified with).
+  cargo-deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25  # v2.1.1
+        with:
+          manifest-path: ./mssql/Cargo.toml
+
   clippy:
     runs-on: ubuntu-latest
     steps:
@@ -122,6 +136,25 @@ jobs:
 
       - name: Start SQL Server ${{matrix.database}}
         run: DOCKER_BUILDKIT=1 docker compose -f docker-compose.yml up -d mssql-${{matrix.database}}
+
+      # A started container is not a ready server: SQL Server binds 1433
+      # before it finishes recovering its databases, so tests started at once
+      # race it and hit sporadic login failures. Wait for its own "ready"
+      # log line, as the macOS job and docker/test-server.sh already do.
+      # Idea from upstream Tiberius 169091d, which gates on a sqlcmd SELECT 1
+      # from the legacy mssql-tools image instead.
+      - name: Wait for SQL Server ${{matrix.database}}
+        run: |
+          for _ in $(seq 1 90); do
+            if docker compose -f docker-compose.yml logs mssql-${{matrix.database}} 2>&1 \
+                | grep -q "SQL Server is now ready for client connections"; then
+              echo "SQL Server ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "SQL Server did not become ready in time; logs:" >&2
+          docker compose -f docker-compose.yml logs mssql-${{matrix.database}} || true
+          exit 1
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y openssl libkrb5-dev

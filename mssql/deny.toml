@@ -1,0 +1,49 @@
+# cargo-deny configuration (run in CI by .github/workflows/test.yml's
+# `cargo-deny` job). Adapted from upstream Tiberius (tiberius-rs/tiberius
+# f823a1b), with this fork's own dependency tree and advisory decisions.
+
+[graph]
+all-features = true
+
+[advisories]
+# Every ignore is a documented, accepted risk; see .cargo/audit.toml for the
+# full justification of the shared ones. Only advisories cargo-deny actually
+# matches in this tree are listed: audit.toml's RUSTSEC-2026-0235 (rkyv,
+# absent from Cargo.lock) and RUSTSEC-2026-0097 (rand 0.7.3 is outside its
+# affected range) aren't. Remove an entry as soon as a real fix is released.
+ignore = [
+  { id = "RUSTSEC-2025-0052", reason = "async-std is a deliberately supported optional runtime" },
+  { id = "RUSTSEC-2023-0071", reason = "rsa via sspi/picky; sspi-rs only uses NTLM, which never touches RSA" },
+  { id = "RUSTSEC-2026-0441", reason = "pin-utils (unmaintained, not vulnerable) via async-std and sspi's async-dnssd; no maintained release of either drops it" },
+]
+
+[licenses]
+# Permissive licenses found in the tree with --all-features (checked with
+# `cargo deny list -l license`). mssql itself is MIT OR Apache-2.0.
+allow = [
+  "Apache-2.0",
+  "BSD-1-Clause",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CDLA-Permissive-2.0", # webpki-roots' CA data
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# runtimes-macro is this repo's own unpublished test-only proc-macro.
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

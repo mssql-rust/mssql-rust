@@ -90,6 +90,10 @@ If the `serde` feature is involved, its tests are gated behind
 
 ## Security-relevant checks
 
+- `cargo deny check` (from `mssql/`): advisories, licenses, banned and
+  unknown sources, per [`deny.toml`](../../mssql/deny.toml). CI's
+  `cargo-deny` job runs the same thing. A new dependency with a license
+  outside `deny.toml`'s allow list fails it, which is intended.
 - `cargo audit` — advisory-database check. Documented, accepted exceptions
   live in [`.cargo/audit.toml`](../../mssql/.cargo/audit.toml), each with a
   dated justification; re-check an ignored advisory whenever a dependency

@@ -283,9 +283,9 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   names. Wire it into `fetch_column_metadata` once, not per entry point.
 - [x] **Tolerate COLINFO / TABNAME tokens** (done on the backlog branch) (`FOR BROWSE`) by skipping by
   length. Don't port upstream's decoders (`8b6e080`, `617dc43`).
-- [ ] **CI, urgent**: (Gitleaks CLI and `apt-get update`: done, see the
-  backlog commit "ci: run gitleaks CLI directly". Readiness wait,
-  cargo-deny and the macOS lane are still open.) This fork's Gitleaks job failed on every PR ("License
+- [ ] **CI, urgent**: (Gitleaks CLI, `apt-get update`, the Linux readiness wait
+  and cargo-deny: done on the backlog branch. Only the macOS lane is still
+  open.) This fork's Gitleaks job failed on every PR ("License
   key is required" for an organization). Run the gitleaks CLI directly
   with a verified SHA-256, and add `.gitleaks.toml` allowlisting
   `mssql/docker/certs/` (`47331db`, `1039eb0`, `b448f43`). Also:
