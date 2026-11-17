@@ -73,7 +73,7 @@ the first deployment, set **Settings → Pages → Build and deployment → Sour
 The setup follows the SvelteKit guidance in
 [adapter-static → GitHub Pages](https://svelte.dev/docs/kit/adapter-static#GitHub-Pages):
 
-- `fallback: '404.html'` in [`svelte.config.js`](svelte.config.js), so a
+- `fallback: '404.html'` in [`vite.config.js`](vite.config.js), so a
   wrong URL gets this site's own error page instead of GitHub's default 404;
 - an empty [`static/.nojekyll`](static/.nojekyll), so GitHub does not run
   Jekyll over the build output;
