@@ -20,13 +20,12 @@ where
     match (data, ty) {
         // Codepages other than UTF
         (Some(buf), BigChar) | (Some(buf), BigVarChar) => {
-            let collation = collation.as_ref().unwrap();
-            let encoder = collation.encoding()?;
-
-            let s = encoder
-                .decode_without_bom_handling_and_without_replacement(buf.as_ref())
-                .ok_or_else(|| Error::Encoding("invalid sequence".into()))?
-                .to_string();
+            // TypeInfo::decode always reads a collation for these types, so
+            // this is unreachable from server bytes; error rather than panic.
+            let collation = collation
+                .as_ref()
+                .ok_or_else(|| Error::Protocol("char/varchar column without a collation".into()))?;
+            let s = collation.codec()?.decode(buf.as_ref())?;
 
             Ok(Some(s.into()))
         }

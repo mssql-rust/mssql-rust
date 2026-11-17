@@ -78,6 +78,9 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
   message on the wire. The next use then appended to it, and the server
   dropped the connection. That next use now fails immediately with a clear
   "partly written request" error; open a new connection.
+- `char`/`varchar`/`text` data in legacy CP437 and CP850 collations (e.g.
+  `SQL_Latin1_General_CP437_BIN`, `SQL_1xCompat_CP850_CI_AS`) can now be read
+  and bulk-inserted. Before, both failed with "unsupported encoding".
 - `FOR BROWSE` queries (and other browse-mode results) no longer fail with
   "invalid token type a4": COLINFO and TABNAME tokens are skipped.
 - ERROR, INFO and LOGINACK tokens are parsed within their declared length,

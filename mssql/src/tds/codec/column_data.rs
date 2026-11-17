@@ -380,21 +380,10 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                     || vlc.r#type() == VarLenType::BigVarChar =>
             {
                 if let Some(str) = opt {
-                    let mut encoder = vlc.collation().as_ref().unwrap().encoding()?.new_encoder();
-                    let len = encoder
-                        .max_buffer_length_from_utf8_without_replacement(str.len())
-                        .unwrap();
-                    let mut bytes = Vec::with_capacity(len);
-                    let (res, _) = encoder.encode_from_utf8_to_vec_without_replacement(
-                        str.as_ref(),
-                        &mut bytes,
-                        true,
-                    );
-                    if let encoding_rs::EncoderResult::Unmappable(c) = res {
-                        return Err(crate::Error::Encoding(
-                            format!("unrepresentable character: {c}").into(),
-                        ));
-                    }
+                    let collation = vlc.collation().ok_or_else(|| {
+                        crate::Error::BulkInput("char/varchar column without a collation".into())
+                    })?;
+                    let bytes = collation.codec()?.encode(str.as_ref())?;
 
                     // `vlc.len()` is a real column limit only for a bounded
                     // column; for a MAX column it's the wire's 0xffff "size
@@ -530,22 +519,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                         let collation = vlc.collation().ok_or_else(|| {
                             crate::Error::BulkInput("text column without a collation".into())
                         })?;
-                        let mut encoder = collation.encoding()?.new_encoder();
-                        let len = encoder
-                            .max_buffer_length_from_utf8_without_replacement(str.len())
-                            .ok_or_else(|| crate::Error::BulkInput("text value too long".into()))?;
-                        let mut bytes = Vec::with_capacity(len);
-                        let (res, _) = encoder.encode_from_utf8_to_vec_without_replacement(
-                            str.as_ref(),
-                            &mut bytes,
-                            true,
-                        );
-                        if let encoding_rs::EncoderResult::Unmappable(c) = res {
-                            return Err(crate::Error::Encoding(
-                                format!("unrepresentable character: {c}").into(),
-                            ));
-                        }
-                        bytes
+                        collation.codec()?.encode(str.as_ref())?
                     } else {
                         // NTEXT: UTF-16LE.
                         str.encode_utf16().flat_map(u16::to_le_bytes).collect()

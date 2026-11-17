@@ -966,3 +966,115 @@ where
 
     Ok(())
 }
+
+// CP437/CP850 collations used to fail with "unsupported encoding" in both
+// directions. Ported from upstream Tiberius (75d7afc, 30f7b36).
+/// Bulk-insert every byte 0x80..=0xFF of the code page of `collation`, as
+/// text decoded by the client, into char, varchar, varchar(max) and text
+/// columns of the # temp table `table` and check the stored bytes.
+async fn bulk_every_high_byte_roundtrip<S>(
+    conn: &mut mssql::Client<S>,
+    table: &str,
+    collation: &str,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let bytes: Vec<u8> = (0x80..=0xFF).collect();
+    let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
+
+    conn.simple_query(format!(
+        "CREATE TABLE {table} (c CHAR(128) COLLATE {collation} NOT NULL, \
+         v VARCHAR(128) COLLATE {collation} NOT NULL, \
+         m VARCHAR(MAX) COLLATE {collation} NOT NULL, \
+         t TEXT COLLATE {collation} NOT NULL)"
+    ))
+    .await?
+    .into_results()
+    .await?;
+
+    // The text of the 128 bytes: a varchar value of the collation (a binary
+    // value converts to it byte for byte), decoded by the client, and the
+    // server's own decoding of it for comparison.
+    let row = conn
+        .simple_query(format!(
+            "DECLARE @t TABLE (v VARCHAR(128) COLLATE {collation}); \
+             INSERT INTO @t VALUES (0x{hex}); \
+             SELECT v, CONVERT(NVARCHAR(128), v), CONVERT(VARBINARY(128), v) FROM @t"
+        ))
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+    assert_eq!(
+        Some(bytes.as_slice()),
+        row.get::<&[u8], _>(2),
+        "{collation}"
+    );
+    let text = row.get::<&str, _>(0).unwrap().to_owned();
+    assert_eq!(Some(text.as_str()), row.get::<&str, _>(1), "{collation}");
+    assert_eq!(128, text.chars().count(), "{collation}");
+
+    let mut req = conn.bulk_insert(table).await?;
+    let mut row = TokenRow::new();
+    for _ in 0..4 {
+        row.push(text.clone().into_sql());
+    }
+    req.send(row).await?;
+    assert_eq!(1, req.finalize().await?.total());
+
+    let row = conn
+        .simple_query(format!(
+            "SELECT CONVERT(VARBINARY(MAX), c), CONVERT(VARBINARY(MAX), v), \
+             CONVERT(VARBINARY(MAX), m), \
+             CONVERT(VARBINARY(MAX), CONVERT(VARCHAR(MAX), t)) FROM {table}"
+        ))
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+
+    for (i, column) in ["c", "v", "m", "t"].into_iter().enumerate() {
+        assert_eq!(
+            Some(bytes.as_slice()),
+            row.get::<&[u8], _>(i),
+            "{collation} column {column}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test_on_runtimes]
+async fn bulk_legacy_code_pages_store_every_high_byte<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    // Detecting a missing `COLLATE` in `INSERT BULK` needs a database default
+    // code page other than the columns'.
+    let default_code_page = conn
+        .query(
+            "SELECT CONVERT(INT, COLLATIONPROPERTY(CONVERT(NVARCHAR(128), \
+             DATABASEPROPERTYEX(DB_NAME(), 'Collation')), 'CodePage'))",
+            &[],
+        )
+        .await?
+        .into_row()
+        .await?
+        .unwrap()
+        .get::<i32, _>(0);
+
+    for (collation, code_page) in [
+        ("SQL_Latin1_General_CP437_BIN", 437),
+        ("SQL_1xCompat_CP850_CI_AS", 850),
+    ] {
+        assert_ne!(Some(code_page), default_code_page);
+
+        let table = format!("#{}", random_table().await);
+        let result = bulk_every_high_byte_roundtrip(&mut conn, &table, collation).await;
+        drop_table(&mut conn, &format!("N'tempdb..{table}'"), &table).await?;
+        result?;
+    }
+
+    Ok(())
+}

@@ -293,7 +293,8 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   readiness wait (`169091d`), and a cargo-deny job using this fork's own
   ignore list (`f823a1b`). The macOS lane currently fails in
   `setup-docker-action`; colima (`b550fc8`) is a candidate.
-- [ ] **Legacy CP437/CP850 collations** (currently "unsupported
+- [x] **Legacy CP437/CP850 collations** (done on the backlog branch; the
+  opt-in lossy code-page decoding part is still open) (currently "unsupported
   encoding") and opt-in lossy code-page decoding (`30f7b36`, `cbacb58`,
   `35605c9`). Then port upstream's CP437/CP850 bulk live test from
   `75d7afc`.
