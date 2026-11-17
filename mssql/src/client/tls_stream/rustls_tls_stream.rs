@@ -310,13 +310,21 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
             .cloned()
             .unwrap_or_else(|| Arc::new(ring::default_provider()));
 
-        // Negotiate TLS 1.2 or 1.3 (rustls's safe defaults), as upstream
-        // Tiberius does. This was pinned to TLS 1.2 (20b20db) to dodge TLS 1.3
-        // KeyUpdate EOFs on an old macOS CI runner. TDS 8.0 Strict connections
-        // to SQL Server 2022+ can use TLS 1.3, and servers that only speak 1.2
-        // (e.g. Azure SQL Edge) still negotiate 1.2.
+        // TDS 8.0 Strict (TLS directly on TCP) may negotiate TLS 1.2 or 1.3.
+        // The older TDS 7.x handshake (TLS records wrapped in PRELOGIN
+        // packets, for every other encryption level) supports TLS only up to
+        // 1.2, per Microsoft's TDS 8.0 compatibility table. Verified live: a
+        // SQL Server 2022 allowing TLS 1.3 negotiates it on the TDS 7.x path
+        // and the connection then breaks with "received corrupt message of
+        // type InvalidContentType". So offer 1.3 only for Strict.
+        let versions: &[&'static tokio_rustls::rustls::SupportedProtocolVersion] =
+            if config.encryption == crate::EncryptionLevel::Strict {
+                tokio_rustls::rustls::DEFAULT_VERSIONS
+            } else {
+                &[&tokio_rustls::rustls::version::TLS12]
+            };
         let builder = ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
+            .with_protocol_versions(versions)
             .map_err(|e| crate::Error::Tls(e.to_string()))?;
 
         let wants_client_cert: ConfigBuilder<ClientConfig, WantsClientCert> = match &config.trust {

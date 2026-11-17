@@ -23,10 +23,7 @@ pub trait SqlBrowser {
         Self: Sized + Send + Sync;
 }
 
-#[cfg(any(
-    feature = "sql-browser-tokio",
-    feature = "sql-browser-smol"
-))]
+#[cfg(any(feature = "sql-browser-tokio", feature = "sql-browser-smol"))]
 fn get_port_from_sql_browser_reply(
     mut buf: Vec<u8>,
     len: usize,
@@ -66,13 +63,7 @@ fn get_port_from_sql_browser_reply(
 
 // Tests ported from upstream Tiberius (tiberius-rs/tiberius fafa78a).
 
-#[cfg(all(
-    test,
-    any(
-        feature = "sql-browser-tokio",
-        feature = "sql-browser-smol"
-    )
-))]
+#[cfg(all(test, any(feature = "sql-browser-tokio", feature = "sql-browser-smol")))]
 mod tests {
     use super::*;
 

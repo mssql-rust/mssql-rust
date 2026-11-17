@@ -160,10 +160,11 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
   every certificate in a PEM CA file is now trusted (rustls rejected
   multi-cert files, and native-tls/openssl used only the first), and an
   empty CA file or bundle is an error.
-- rustls now negotiates TLS 1.3 as well as 1.2 (rustls's safe defaults, as
-  upstream does), instead of being pinned to TLS 1.2. That matters for TDS
-  8.0 Strict connections to SQL Server 2022+. Servers that only speak 1.2
-  still negotiate 1.2.
+- rustls negotiates TLS 1.3 as well as 1.2 for TDS 8.0 Strict connections,
+  instead of being pinned to TLS 1.2. Other encryption levels use the TDS 7.x
+  handshake, which supports TLS only up to 1.2, so they stay on 1.2 (offering
+  1.3 there breaks against a server that allows it). Verified live: Strict on
+  SQL Server 2025 negotiates TLS 1.3 and TDS 8.0.
 - BREAKING: a connection string without an `encrypt` key now means
   `encrypt=true` (Required) when a TLS backend is compiled in, matching
   modern ADO.NET and `Config::new()`'s own default. Before, it meant `Off`

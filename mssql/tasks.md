@@ -334,7 +334,12 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   **Decided 2026-11-17: yes.** Done on `upstream/tiberius-0.13-decisions`. It
   matches modern ADO.NET. BREAKING; this fork defaults to `Off`.
 - [x] **Lift the rustls TLS 1.2-only pin** (decided 2026-11-17: yes; done on
-  `upstream/tiberius-0.13-decisions`). It matters for TDS 8.0 Strict.
+  `upstream/tiberius-0.13-decisions`).
+  **Live result (SQL Server 2022 and 2025, Docker Desktop + Rosetta):** TLS 1.3
+  must be Strict-only. The TDS 7.x path breaks with InvalidContentType when 1.3
+  is offered, so it stays on 1.2. Strict negotiates TLS 1.3 + TDS 8.0 on 2025.
+  2022 on Linux refuses Strict with error 17821, even with a certificate that
+  2025 accepts. It matters for TDS 8.0 Strict.
   The pin exists for macOS CI KeyUpdate EOFs, so re-test there first.
 - [ ] **Larger additive features**, each to be built from this fork's
   source with its own review:
