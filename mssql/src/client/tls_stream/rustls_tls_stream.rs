@@ -16,7 +16,7 @@ use tokio_rustls::{
             danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
             WantsClientCert,
         },
-        crypto::aws_lc_rs,
+        crypto::ring,
         pki_types::{pem::PemObject, CertificateDer, ServerName, UnixTime},
         version, ClientConfig, ConfigBuilder, DigitallySignedStruct, Error as RustlsError,
         RootCertStore, SignatureScheme, WantsVerifier,
@@ -105,7 +105,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
     pub(super) async fn new(config: &Config, stream: S) -> crate::Result<Self> {
         event!(Level::INFO, "Performing a TLS handshake");
 
-        let builder = ClientConfig::builder_with_provider(Arc::new(aws_lc_rs::default_provider()))
+        let builder = ClientConfig::builder_with_provider(Arc::new(ring::default_provider()))
             .with_protocol_versions(&[&version::TLS12])
             .map_err(|e| crate::Error::Tls(e.to_string()))?;
 
