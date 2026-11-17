@@ -9,8 +9,13 @@ use crate::{
 };
 use futures_util::{
     io::{AsyncRead, AsyncWrite},
-    stream::{BoxStream, TryStreamExt},
+    stream::{BoxStream, Stream, StreamExt, TryStreamExt},
 };
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context as TaskContext, Poll};
+use std::time::Duration;
 use std::{convert::TryFrom, sync::Arc};
 use tracing::{event, Level};
 
@@ -219,6 +224,13 @@ where
     }
 
     pub fn try_unfold(self) -> BoxStream<'a, crate::Result<ReceivedToken>> {
+        // Every command-result read goes through here (query/execute/
+        // simple_query streams, the bulk-insert acknowledgement,
+        // column_metadata), so this one wrapper bounds them all. The context
+        // value is `None` until login completes.
+        let command_timeout = self.conn.context().command_timeout();
+        let desync = self.conn.command_desync_flag();
+
         let stream = futures_util::stream::try_unfold(self, |mut this| async move {
             let ty = loop {
                 if this.conn.is_eof() {
@@ -278,7 +290,133 @@ where
             Ok(Some((token, this)))
         });
 
-        Box::pin(stream)
+        Box::pin(RoundTripTimeout::new(
+            command_timeout,
+            Some(desync),
+            Box::pin(stream),
+        ))
+    }
+}
+
+/// Bounds each server round-trip of a token stream (`Config::command_timeout`).
+/// The timer runs only while the inner stream is `Pending` waiting on the
+/// server, and resets whenever a token is delivered, so a slow consumer never
+/// trips it; only a stalled server does. When it fires, the connection's
+/// shared desync flag is set (the rest of the response is still unread) and
+/// the stream yields an `Io` `TimedOut` error. Ported from upstream Tiberius
+/// (tiberius-rs/tiberius 2c63330).
+struct RoundTripTimeout<'a> {
+    inner: BoxStream<'a, crate::Result<ReceivedToken>>,
+    timeout: Option<Duration>,
+    delay: Option<futures_timer::Delay>,
+    desync: Option<Arc<AtomicBool>>,
+}
+
+impl<'a> RoundTripTimeout<'a> {
+    fn new(
+        timeout: Option<Duration>,
+        desync: Option<Arc<AtomicBool>>,
+        inner: BoxStream<'a, crate::Result<ReceivedToken>>,
+    ) -> Self {
+        Self {
+            inner,
+            timeout,
+            delay: None,
+            desync,
+        }
+    }
+}
+
+impl Stream for RoundTripTimeout<'_> {
+    type Item = crate::Result<ReceivedToken>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        match this.inner.poll_next_unpin(cx) {
+            Poll::Ready(item) => {
+                this.delay = None;
+                Poll::Ready(item)
+            }
+            Poll::Pending => {
+                let Some(timeout) = this.timeout else {
+                    return Poll::Pending;
+                };
+
+                let delay = this
+                    .delay
+                    .get_or_insert_with(|| futures_timer::Delay::new(timeout));
+
+                match Pin::new(delay).poll(cx) {
+                    Poll::Ready(()) => {
+                        this.delay = None;
+                        if let Some(desync) = &this.desync {
+                            desync.store(true, Ordering::Release);
+                        }
+                        Poll::Ready(Some(Err(Error::Io {
+                            kind: std::io::ErrorKind::TimedOut,
+                            message: format!(
+                                "the server sent nothing more of the command result within \
+                                 {timeout:?}; the connection is now out of sync and must be \
+                                 dropped. Raise the bound with `Config::command_timeout`, or \
+                                 pass `None` to wait indefinitely."
+                            ),
+                        })))
+                    }
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod round_trip_timeout_tests {
+    use super::*;
+    use futures_util::stream;
+
+    fn done() -> crate::Result<ReceivedToken> {
+        Ok(ReceivedToken::Done(TokenDone::default()))
+    }
+
+    #[tokio::test]
+    async fn a_stalled_server_times_out_and_marks_desync() {
+        let desync = Arc::new(AtomicBool::new(false));
+        let inner = stream::iter(vec![done()]).chain(stream::pending()).boxed();
+        let mut s =
+            RoundTripTimeout::new(Some(Duration::from_millis(30)), Some(desync.clone()), inner);
+
+        assert!(s.next().await.unwrap().is_ok());
+        let err = s.next().await.unwrap().unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::Io {
+                    kind: std::io::ErrorKind::TimedOut,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert!(desync.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn slow_consumer_does_not_trip_it() {
+        let inner = stream::iter(vec![done(), done()]).boxed();
+        let mut s = RoundTripTimeout::new(Some(Duration::from_millis(20)), None, inner);
+        assert!(s.next().await.unwrap().is_ok());
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(s.next().await.unwrap().is_ok());
+        assert!(s.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn none_is_unbounded() {
+        let inner = stream::pending::<crate::Result<ReceivedToken>>().boxed();
+        let mut s = RoundTripTimeout::new(None, None, inner);
+        let polled = tokio::time::timeout(Duration::from_millis(50), s.next()).await;
+        assert!(polled.is_err(), "must still be pending");
     }
 }
 

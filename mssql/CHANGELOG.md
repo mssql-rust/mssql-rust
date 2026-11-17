@@ -115,6 +115,19 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Changed
 
+- BREAKING: connections now time out by default instead of potentially
+  hanging forever (upstream issues #375, #360; ported from upstream
+  Tiberius 2c63330). This matches ADO.NET's two settings:
+  - `Config::handshake_timeout` (default 15s) bounds PRELOGIN, TLS and
+    login. Each stage is logged at DEBUG.
+  - `Config::command_timeout` (default 30s) bounds each server round-trip
+    while reading results. It resets on every token, so it measures a
+    stalled server, not total query time. When it fires, the read fails
+    with `Io` `TimedOut`, and the connection is unusable afterwards.
+  A statement that runs longer than 30s before the server answers (a long
+  `WAITFOR`, a big sort, a slow procedure) now fails unless you raise
+  `command_timeout` or pass `None`. Both have `ConfigBuilder` setters.
+  Adds the runtime-agnostic `futures-timer` dependency.
 - rustls: a `CryptoProvider` installed process-wide by the application
   (`CryptoProvider::install_default`, e.g. aws-lc-rs or a FIPS provider) is
   now used. ring remains the default when none is installed.

@@ -12,6 +12,10 @@ pub(crate) struct Context {
     spn: Option<String>,
     send_string_parameters_as_unicode: bool,
     lossy_codepage_decoding: bool,
+    /// Per-round-trip deadline for reading command results; set from
+    /// `Config::command_timeout` only after login, so it never bounds the
+    /// handshake. `None` means unbounded.
+    command_timeout: Option<std::time::Duration>,
 }
 
 impl Context {
@@ -25,6 +29,7 @@ impl Context {
             spn: None,
             send_string_parameters_as_unicode: true,
             lossy_codepage_decoding: false,
+            command_timeout: None,
         }
     }
 
@@ -42,6 +47,14 @@ impl Context {
 
     pub fn lossy_codepage_decoding(&self) -> bool {
         self.lossy_codepage_decoding
+    }
+
+    pub(crate) fn command_timeout(&self) -> Option<std::time::Duration> {
+        self.command_timeout
+    }
+
+    pub(crate) fn set_command_timeout(&mut self, timeout: Option<std::time::Duration>) {
+        self.command_timeout = timeout;
     }
 
     pub fn next_packet_id(&mut self) -> u8 {

@@ -10,7 +10,9 @@ before treating it as final.
 - **`Config`** — everything needed to open a connection: host, port,
   authentication, encryption/trust settings, and a handful of tuning knobs
   (`client_name`, `host_name_in_certificate`, `packet_size`,
-  `multi_subnet_failover`, `readonly`). Build it with `Config::new()` plus
+  `multi_subnet_failover`, `readonly`, `handshake_timeout` (15s) and
+  `command_timeout` (30s per server round-trip; a timed-out connection
+  must be discarded)). Build it with `Config::new()` plus
   setters, or the equivalent chainable `Config::builder()` — both produce the
   same `Config` and are fully supported (see
   [`examples/config_builder.rs`](../../mssql/examples/config_builder.rs)).

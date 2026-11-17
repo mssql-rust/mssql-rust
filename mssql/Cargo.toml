@@ -123,6 +123,13 @@ features = ["std"]
 version = "0.3"
 optional = true
 
+# Runtime-agnostic timer behind `Config::handshake_timeout` and
+# `Config::command_timeout`: its `Delay` works under any executor, so the
+# generic `Client::connect` path can bound waits without tying itself to
+# tokio's or smol's timers. (Ported from upstream Tiberius 2c63330.)
+[dependencies.futures-timer]
+version = "3"
+
 [dependencies.futures-util]
 version = "0.3"
 default-features = false

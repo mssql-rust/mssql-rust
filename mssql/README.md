@@ -153,6 +153,12 @@ settings through an environment variable or a configuration file.
 
 Beyond host/port/credentials, `Config` also covers:
 
+- `handshake_timeout` (default 15s) and `command_timeout` (default 30s,
+  per server round-trip): a stalled server becomes an `Io` `TimedOut` error
+  instead of a hang. Raise `command_timeout`, or set it to `None`, for
+  statements that legitimately run longer than 30s before the server
+  responds. A connection whose command timed out is out of sync; open a
+  new one.
 - `client_name` — the workstation name sent in the login packet.
 - `host_name_in_certificate` — validate a TLS certificate issued for a name
   other than the connection address (proxies, load balancers).

@@ -314,7 +314,9 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
 
 ## Needs a decision first: behaviour change or new API surface
 
-- [ ] **`handshake_timeout` / `command_timeout`** (#375/#360, `2c63330`).
+- [x] **`handshake_timeout` / `command_timeout`** (#375/#360, `2c63330`).
+  **Decided 2026-11-17: use upstream's design and defaults** (15s/30s,
+  poison-on-timeout). Done on branch `upstream/tiberius-0.13-decisions`.
   Upstream defaults them to 15s/30s (BREAKING) and poisons the connection
   on timeout. Here: take the handshake timeout (`None` default, or 15s with
   a CHANGELOG note), and implement a command timeout through the existing

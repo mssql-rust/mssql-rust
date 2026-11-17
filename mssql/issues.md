@@ -363,7 +363,8 @@ old/new swap).
 #320 `EncryptionLevel::Off` still handshaking, #332 quieting `tracing`
 output) would benefit from a one-paragraph README callout if a docs pass is
 ever done, but none warrant a code change.
-**Update (2026-11-17):** #327 did get a code change after all. Upstream
+**Update (2026-11-17):** #360 and #375 got `handshake_timeout` / `command_timeout`
+(upstream defaults, 15s/30s). #327 did get a code change after all. Upstream
 Tiberius 0.13.0 (`610154f`) turns a rustls certificate rejection into an
 `Error::Tls` naming the remedies. Ported on the backlog branch. #360 and
 #375 (timeouts) are now tracked in tasks.md's upstream-0.13 section as

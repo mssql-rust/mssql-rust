@@ -34,6 +34,8 @@ pub struct Config {
     pub(crate) readonly: bool,
     pub(crate) send_string_parameters_as_unicode: bool,
     pub(crate) lossy_codepage_decoding: bool,
+    pub(crate) handshake_timeout: Option<std::time::Duration>,
+    pub(crate) command_timeout: Option<std::time::Duration>,
     pub(crate) multi_subnet_failover: bool,
     pub(crate) packet_size: Option<u32>,
 }
@@ -41,6 +43,12 @@ pub struct Config {
 /// The valid range for [`Config::packet_size`], per the TDS `LOGIN7`
 /// packet's `PacketSize` field.
 const PACKET_SIZE_RANGE: std::ops::RangeInclusive<u32> = 512..=32767;
+
+/// ADO.NET's `Connect Timeout` default.
+const DEFAULT_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// ADO.NET's `CommandTimeout` default.
+const DEFAULT_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 pub(crate) enum TrustConfig {
@@ -81,6 +89,8 @@ impl Default for Config {
             readonly: false,
             send_string_parameters_as_unicode: true,
             lossy_codepage_decoding: false,
+            handshake_timeout: Some(DEFAULT_HANDSHAKE_TIMEOUT),
+            command_timeout: Some(DEFAULT_COMMAND_TIMEOUT),
             multi_subnet_failover: false,
             packet_size: None,
         }
@@ -306,6 +316,50 @@ impl Config {
     /// Whether [`lossy_codepage_decoding`](Self::lossy_codepage_decoding) is on.
     pub fn get_lossy_codepage_decoding(&self) -> bool {
         self.lossy_codepage_decoding
+    }
+
+    /// Bounds the whole connection handshake after the TCP connect: PRELOGIN,
+    /// TLS negotiation and login. A server that accepts the TCP connection
+    /// and then stalls (upstream issues #375 and #360) makes `Client::connect`
+    /// fail with an `Io` error of kind `TimedOut` instead of hanging. Each
+    /// stage is logged with `tracing` at DEBUG, so a stall can be located.
+    ///
+    /// - Defaults to 15 seconds (ADO.NET's `Connect Timeout`). `None` waits
+    ///   indefinitely.
+    ///
+    /// The timer is runtime-agnostic (`futures-timer`). Ported from upstream
+    /// Tiberius (tiberius-rs/tiberius 2c63330).
+    pub fn handshake_timeout(&mut self, timeout: Option<std::time::Duration>) {
+        self.handshake_timeout = timeout;
+    }
+
+    /// See [`handshake_timeout`](Self::handshake_timeout).
+    pub fn get_handshake_timeout(&self) -> Option<std::time::Duration> {
+        self.handshake_timeout
+    }
+
+    /// Bounds each server round-trip while reading command results:
+    /// `query`, `execute`, `simple_query`, `call_procedure`, `column_metadata`
+    /// and the `bulk_insert` acknowledgement. The deadline resets every time
+    /// a token arrives, so it measures a *stalled server*, not total query
+    /// time, and a slow consumer never trips it. When it fires, the read
+    /// fails with an `Io` error of kind `TimedOut`, and the connection is out
+    /// of sync (the rest of the response is still unread), so every later use
+    /// returns an error. Drop it and open a new one.
+    ///
+    /// - Defaults to 30 seconds (ADO.NET's `CommandTimeout`). A statement
+    ///   that legitimately runs longer than that before the server sends
+    ///   anything (a long `WAITFOR`, a big sort or aggregate, a slow
+    ///   procedure) needs a larger value, or `None` to wait indefinitely.
+    ///
+    /// Ported from upstream Tiberius (tiberius-rs/tiberius 2c63330).
+    pub fn command_timeout(&mut self, timeout: Option<std::time::Duration>) {
+        self.command_timeout = timeout;
+    }
+
+    /// See [`command_timeout`](Self::command_timeout).
+    pub fn get_command_timeout(&self) -> Option<std::time::Duration> {
+        self.command_timeout
     }
 
     /// Sets the `MultiSubnetFailover` flag, hinting that the target is a SQL
@@ -642,6 +696,18 @@ impl ConfigBuilder {
         self
     }
 
+    /// See [`Config::handshake_timeout`].
+    pub fn handshake_timeout(&mut self, timeout: Option<std::time::Duration>) -> &mut Self {
+        self.inner.handshake_timeout(timeout);
+        self
+    }
+
+    /// See [`Config::command_timeout`].
+    pub fn command_timeout(&mut self, timeout: Option<std::time::Duration>) -> &mut Self {
+        self.inner.command_timeout(timeout);
+        self
+    }
+
     /// See [`Config::lossy_codepage_decoding`].
     pub fn lossy_codepage_decoding(&mut self, enabled: bool) -> &mut Self {
         self.inner.lossy_codepage_decoding(enabled);
@@ -875,6 +941,29 @@ pub(crate) trait ConfigString {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeouts_default_to_ado_net_values_and_round_trip() {
+        use std::time::Duration;
+        let mut config = Config::new();
+        assert_eq!(
+            config.get_handshake_timeout(),
+            Some(Duration::from_secs(15))
+        );
+        assert_eq!(config.get_command_timeout(), Some(Duration::from_secs(30)));
+
+        config.handshake_timeout(None);
+        config.command_timeout(Some(Duration::from_millis(1)));
+        assert_eq!(config.get_handshake_timeout(), None);
+        assert_eq!(config.get_command_timeout(), Some(Duration::from_millis(1)));
+
+        let built = Config::builder()
+            .handshake_timeout(Some(Duration::from_secs(3)))
+            .command_timeout(None)
+            .build();
+        assert_eq!(built.get_handshake_timeout(), Some(Duration::from_secs(3)));
+        assert_eq!(built.get_command_timeout(), None);
+    }
 
     #[test]
     fn conflicting_trust_settings_in_connection_string_error_instead_of_panicking() {
