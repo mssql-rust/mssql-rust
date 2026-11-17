@@ -276,10 +276,10 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
 - [ ] **Poisoned connection after a cancelled multi-packet write**
   (`3e6afc3`/`3f47d87` `connection.rs`, `bulk_load.rs`): new field and
   plumbing. Complements this fork's Attention-on-drop (`60bde67`).
-- [ ] **Bulk identifier validation** (`7a86677`, `3f47d87`): reject
+- [x] **Bulk identifier validation** (done on the backlog branch; also allows `$`) (`7a86677`, `3f47d87`): reject
   control characters and unbalanced `]` in caller-supplied table/column
   names. Wire it into `fetch_column_metadata` once, not per entry point.
-- [ ] **Tolerate COLINFO / TABNAME tokens** (`FOR BROWSE`) by skipping by
+- [x] **Tolerate COLINFO / TABNAME tokens** (done on the backlog branch) (`FOR BROWSE`) by skipping by
   length. Don't port upstream's decoders (`8b6e080`, `617dc43`).
 - [ ] **CI, urgent**: (Gitleaks CLI and `apt-get update`: done, see the
   backlog commit "ci: run gitleaks CLI directly". Readiness wait,

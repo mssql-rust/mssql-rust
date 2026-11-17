@@ -73,6 +73,8 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
   than a panic.
 - Reserved COLMETADATA flag bits and DONE status bits from newer servers
   no longer fail the result set.
+- `FOR BROWSE` queries (and other browse-mode results) no longer fail with
+  "invalid token type a4": COLINFO and TABNAME tokens are skipped.
 - ERROR, INFO and LOGINACK tokens are parsed within their declared length,
   so a length that disagrees with the fields no longer desyncs every later
   token. An odd-length ORDER token is an error.
@@ -84,6 +86,12 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Changed
 
+- `bulk_insert*` and `column_metadata` now reject a table or column name
+  that can't be a legitimate identifier before building SQL from it:
+  control characters, an unbalanced `]` or `)`, an unterminated `[`, a
+  top-level space, comma or `;`, or text spliced after a closing `]`/`)`.
+  Normal, bracket-quoted, multi-part and `#`/`##` temp names are unaffected.
+  This is defense-in-depth only. Don't pass untrusted names.
 - BREAKING: `AuthMethod::AADToken` now holds `zeroize::Zeroizing<String>`
   instead of `String`, and its `Debug` shows `<HIDDEN>`. Construct it with
   `AuthMethod::aad_token(..)`, which is unchanged.
