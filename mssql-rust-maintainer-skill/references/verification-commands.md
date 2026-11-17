@@ -28,10 +28,10 @@ don't leave them for review.
 ## MSRV check (what CI's `msrv` job runs)
 
 ```sh
-cargo +1.96 check --all-targets --workspace
+cargo +1.98 check --all-targets --workspace
 ```
 
-`1.96` is the value currently pinned in `Cargo.toml`'s
+`1.98` is the value currently pinned in `Cargo.toml`'s
 `[workspace.package] rust-version` — read that file for the current number
 rather than trusting this one if it's been a while; see
 [`spec/rust-msrv-n-minus-2/index.md`](../../mssql/spec/rust-msrv-n-minus-2/index.md)
@@ -66,7 +66,7 @@ product of SQL Server versions (2017, 2019, 2022, azure-sql-edge) against:
 ```sh
 cargo test --features=all
 cargo test --no-default-features
-cargo test --no-default-features --features=chrono
+cargo test --no-default-features --features=jiff
 cargo test --no-default-features --features=time
 cargo test --no-default-features --features=rustls
 cargo test --no-default-features --features=rustls-webpki-roots
@@ -76,7 +76,7 @@ cargo test --no-default-features --features=vendored-openssl
 Windows CI additionally covers `--no-default-features
 --features=rustls,winauth` and `--no-default-features
 --features=vendored-openssl,winauth`; macOS CI covers a broad
-`--no-default-features --features=rustls,chrono,time,tds73,sql-browser-*,
+`--no-default-features --features=rustls,jiff,time,tds73,sql-browser-*,
 integrated-auth-gssapi,rust_decimal,bigdecimal` combination plus
 `--no-default-features --features=vendored-openssl`. Run the legs relevant
 to what changed, not necessarily all of them — but if the change touches a

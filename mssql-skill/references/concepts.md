@@ -48,7 +48,7 @@ before treating it as final.
   row's raw `ColumnData` values, and `Row::new` builds a `Row` fixture
   without a live connection (useful in tests).
 - **`ColumnData`** — the typed enum a single cell decodes to (`I32`,
-  `String`, `Binary`, `Numeric`, the `time`/`chrono` date-time variants,
+  `String`, `Binary`, `Numeric`, the `time`/`jiff` date-time variants,
   and so on), each variant wrapping an `Option` for nullability. `FromSql` /
   `FromSqlOwned` convert a `ColumnData` into a plain Rust value; `ToSql` /
   `IntoSql` go the other way for binding parameters. With the `serde`

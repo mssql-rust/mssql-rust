@@ -30,15 +30,16 @@ use uuid::Uuid;
 /// |`Decimal` (with feature flag `rust_decimal`, see [`crate::numeric`])|`numeric`/`decimal`|
 /// |`BigDecimal` (with feature flag `bigdecimal`, see [`crate::numeric`])|`numeric`/`decimal`|
 /// |[`XmlData`]|`xml`|
-/// |`NaiveDate` (with `chrono` feature, TDS 7.3 >)|`date`|
-/// |`NaiveTime` (with `chrono` feature, TDS 7.3 >)|`time`|
-/// |`DateTime` (with `chrono` feature, TDS 7.3 >)|`datetimeoffset`|
-/// |`NaiveDateTime` (with `chrono` feature, TDS 7.3 >)|`datetime2`|
-/// |`NaiveDateTime` (with `chrono` feature, TDS 7.2)|`datetime`|
+/// |`jiff::civil::Date` (with `jiff` feature, TDS 7.3 >)|`date`|
+/// |`jiff::civil::Time` (with `jiff` feature, TDS 7.3 >)|`time`|
+/// |`jiff::Zoned` (with `jiff` feature, TDS 7.3 >)|`datetimeoffset`|
+/// |`jiff::Timestamp` (with `jiff` feature, TDS 7.3 >)|`datetime2` (UTC)|
+/// |`jiff::civil::DateTime` (with `jiff` feature, TDS 7.3 >)|`datetime2`|
+/// |`jiff::civil::DateTime` (with `jiff` feature, TDS 7.2)|`datetime`|
 ///
 /// It is possible to use some of the types to write into columns that are not
 /// of the same type. For example on systems following the TDS 7.3 standard (SQL
-/// Server 2008 and later), the chrono type `NaiveDateTime` can also be used to
+/// Server 2008 and later), the jiff type `civil::DateTime` can also be used to
 /// write to `datetime`, `datetime2` and `smalldatetime` columns. All string
 /// types can also be used with `ntext`, `text`, `varchar`, `nchar` and `char`
 /// columns. All binary types can also be used with `binary` and `image`

@@ -2230,18 +2230,13 @@ mod bigdecimal {
     }
 }
 
-#[cfg(all(not(feature = "tds73"), feature = "chrono"))]
+#[cfg(all(not(feature = "tds73"), feature = "jiff"))]
 #[test_on_runtimes]
 async fn naive_date_time_tds72<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    use chrono::NaiveDate;
-
-    let dt = NaiveDate::from_ymd_opt(2020, 4, 20)
-        .unwrap()
-        .and_hms_opt(16, 20, 0)
-        .unwrap();
+    let dt = jiff::civil::date(2020, 4, 20).at(16, 20, 0, 0);
 
     let stream = conn.query("SELECT @P1", &[&dt]).await?;
     let row = stream.into_row().await?.unwrap();
@@ -2251,18 +2246,13 @@ where
     Ok(())
 }
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 #[test_on_runtimes]
 async fn naive_small_date_time_tds73<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    use chrono::NaiveDate;
-
-    let dt = NaiveDate::from_ymd_opt(2020, 4, 20)
-        .unwrap()
-        .and_hms_opt(16, 20, 0)
-        .unwrap();
+    let dt = jiff::civil::date(2020, 4, 20).at(16, 20, 0, 0);
     let table = random_table().await;
 
     conn.execute(
@@ -2289,18 +2279,13 @@ where
     Ok(())
 }
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 #[test_on_runtimes]
 async fn naive_date_time2_tds73<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    use chrono::NaiveDate;
-
-    let dt = NaiveDate::from_ymd_opt(2020, 4, 20)
-        .unwrap()
-        .and_hms_opt(16, 20, 0)
-        .unwrap();
+    let dt = jiff::civil::date(2020, 4, 20).at(16, 20, 0, 0);
 
     let table = random_table().await;
 
@@ -2325,13 +2310,13 @@ where
     Ok(())
 }
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 #[test_on_runtimes]
 async fn datetime_as_datetime2_tds73<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    let dt = chrono::DateTime::parse_from_rfc3339("2020-02-27T19:10:00Z").unwrap();
+    let dt: jiff::Timestamp = "2020-02-27T19:10:00Z".parse().unwrap();
     let table = random_table().await;
 
     conn.execute(format!("CREATE TABLE ##{} (date datetime2)", table), &[])
@@ -2351,19 +2336,22 @@ where
         .await?
         .unwrap();
 
-    assert_eq!(Some(dt.naive_utc()), row.get(0));
+    assert_eq!(
+        Some(dt.to_zoned(jiff::tz::TimeZone::UTC).datetime()),
+        row.get(0)
+    );
     Ok(())
 }
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 #[test_on_runtimes]
 async fn naive_time<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    use chrono::NaiveTime;
+    use jiff::civil::Time as NaiveTime;
 
-    let time = NaiveTime::from_hms_opt(16, 20, 0).unwrap();
+    let time = jiff::civil::time(16, 20, 0, 0);
 
     let row = conn
         .query("SELECT @P1", &[&time])
@@ -2388,15 +2376,15 @@ where
     Ok(())
 }
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 #[test_on_runtimes]
 async fn naive_date<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    use chrono::NaiveDate;
+    use jiff::civil::Date as NaiveDate;
 
-    let date = NaiveDate::from_ymd_opt(2020, 4, 20).unwrap();
+    let date = jiff::civil::date(2020, 4, 20);
 
     let row = conn
         .query("SELECT @P1", &[&date])
@@ -2421,19 +2409,15 @@ where
     Ok(())
 }
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 #[test_on_runtimes]
 async fn date_time_utc<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    use chrono::{offset::Utc, DateTime, NaiveDate};
+    use jiff::Timestamp;
 
-    let naive = NaiveDate::from_ymd_opt(2020, 4, 20)
-        .unwrap()
-        .and_hms_opt(16, 20, 0)
-        .unwrap();
-    let dt: DateTime<Utc> = DateTime::from_naive_utc_and_offset(naive, Utc);
+    let dt: Timestamp = "2020-04-20T16:20:00Z".parse().unwrap();
 
     let row = conn
         .query("SELECT @P1", &[&dt])
@@ -2447,32 +2431,28 @@ where
     let mut query = Query::new("SELECT @P1, @P2");
 
     query.bind(dt);
-    query.bind(Option::<DateTime<Utc>>::None);
+    query.bind(Option::<Timestamp>::None);
 
     let stream = query.query(&mut conn).await?;
     let row = stream.into_row().await?.unwrap();
 
     assert_eq!(Some(dt), row.get(0));
-    assert_eq!(Option::<DateTime<Utc>>::None, row.get(1));
+    assert_eq!(Option::<Timestamp>::None, row.get(1));
 
     Ok(())
 }
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 #[test_on_runtimes]
 async fn date_time_fixed<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    use chrono::{offset::FixedOffset, DateTime, NaiveDate};
+    use jiff::{tz::TimeZone, Timestamp, Zoned};
 
-    let naive = NaiveDate::from_ymd_opt(2020, 4, 20)
-        .unwrap()
-        .and_hms_opt(16, 20, 0)
-        .unwrap();
-
-    let fixed = FixedOffset::east_opt(3600 * 3).unwrap();
-    let dt: DateTime<FixedOffset> = DateTime::from_naive_utc_and_offset(naive, fixed);
+    let fixed = TimeZone::fixed(jiff::tz::offset(3));
+    let ts: Timestamp = "2020-04-20T16:20:00Z".parse().unwrap();
+    let dt: Zoned = ts.to_zoned(fixed);
 
     let row = conn
         .query("SELECT @P1", &[&dt])
@@ -2481,39 +2461,39 @@ where
         .await?
         .unwrap();
 
-    assert_eq!(Some(dt), row.get(0));
+    assert_eq!(Some(dt.clone()), row.get(0));
 
     let mut query = Query::new("SELECT @P1, @P2");
 
-    query.bind(dt);
-    query.bind(Option::<DateTime<FixedOffset>>::None);
+    query.bind(dt.clone());
+    query.bind(Option::<Zoned>::None);
 
     let stream = query.query(&mut conn).await?;
     let row = stream.into_row().await?.unwrap();
 
-    assert_eq!(Some(dt), row.get(0));
-    assert_eq!(Option::<DateTime<FixedOffset>>::None, row.get(1));
+    assert_eq!(Some(dt.clone()), row.get(0));
+    assert_eq!(Option::<Zoned>::None, row.get(1));
 
     Ok(())
 }
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 #[test_on_runtimes]
 async fn date_time_fixed_convertion<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    use chrono::{offset::FixedOffset, DateTime, NaiveDate};
+    use jiff::{tz::TimeZone, Timestamp, Zoned};
 
-    let naive = NaiveDate::from_ymd_opt(2020, 4, 20)
-        .unwrap()
-        .and_hms_opt(16, 20, 0)
-        .unwrap();
-    let fixed = FixedOffset::east_opt(3600 * 3).unwrap();
-    let dt: DateTime<FixedOffset> = DateTime::from_naive_utc_and_offset(naive, fixed);
+    let fixed = TimeZone::fixed(jiff::tz::offset(3));
+    let ts: Timestamp = "2020-04-20T16:20:00Z".parse().unwrap();
+    let dt: Zoned = ts.to_zoned(fixed);
 
     let row = conn
-        .query(format!("SELECT CAST('{}' AS datetimeoffset(7))", dt), &[])
+        .query(
+            "SELECT CAST('2020-04-20 19:20:00.0000000 +03:00' AS datetimeoffset(7))",
+            &[],
+        )
         .await?
         .into_row()
         .await?

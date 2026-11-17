@@ -74,7 +74,7 @@ default build:
 ```sh
 cargo test --features=all
 cargo test --no-default-features
-cargo test --no-default-features --features=chrono
+cargo test --no-default-features --features=jiff
 cargo test --no-default-features --features=time
 cargo test --no-default-features --features=rustls
 cargo test --no-default-features --features=vendored-openssl

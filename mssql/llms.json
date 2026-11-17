@@ -34,7 +34,7 @@
     "SqlBrowser": "Trait to resolve a SQL Server named instance's port via the UDP SQL Browser service.",
     "EncryptionLevel": "TLS requirement level negotiated during login (off / on / required).",
     "numeric": "TDS DECIMAL/NUMERIC support (arbitrary-precision; optional `rust_decimal`/`bigdecimal` conversions).",
-    "time": "TDS date/time types, with optional `chrono` and `time`-crate conversions.",
+    "time": "TDS date/time types, with optional `jiff` and `time`-crate conversions.",
     "xml": "TDS XML column support.",
     "codec": "Low-level TDS wire types for advanced use: ColumnData, TypeInfo, MetaDataColumn, BulkLoadRequest, TokenRow, IntoRow.",
     "Uuid": "Re-exported `uuid::Uuid`, used for TDS UNIQUEIDENTIFIER columns."
@@ -43,7 +43,7 @@
     "default": "tds73 + winauth + native-tls",
     "all": "Every optional feature below, for CI/testing.",
     "tds73": "TDS protocol version 7.3 support (on by default).",
-    "chrono": "chrono date/time conversions.",
+    "jiff": "jiff date/time conversions.",
     "time": "`time`-crate date/time conversions.",
     "rust_decimal": "rust_decimal <-> TDS DECIMAL/NUMERIC conversions.",
     "bigdecimal": "bigdecimal <-> TDS DECIMAL/NUMERIC conversions.",

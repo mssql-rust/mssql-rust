@@ -14,6 +14,22 @@ forward.
 
 ## Unreleased
 
+### Changed
+
+- BREAKING: the minimum supported Rust version is now 1.98 (current stable
+  1.100 minus two).
+- BREAKING: the `chrono` feature was removed and replaced by a `jiff`
+  feature (`jiff` 0.2). Mappings: `date` <-> `jiff::civil::Date`, `time` <->
+  `jiff::civil::Time`, `datetime`/`datetime2`/`smalldatetime` <->
+  `jiff::civil::DateTime`, `datetimeoffset` <-> `jiff::Timestamp` (UTC
+  instant) or `jiff::Zoned` (fixed offset kept). Unlike the old chrono
+  `DateTime<Utc>` reader, `Timestamp` treats the wire date/time of a
+  `datetimeoffset` as UTC (as TDS defines it) and does not subtract the
+  offset again.
+- GitHub Actions pins bumped (codeql-action 4.39.1, crates-io-auth-action
+  1.0.6, setup-docker-action 5.6.0, dtolnay/rust-toolchain).
+
+
 ## Version 1.1.0
 
 ### Changed

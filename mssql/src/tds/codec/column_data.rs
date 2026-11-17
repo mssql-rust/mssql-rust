@@ -1851,7 +1851,7 @@ mod tests {
     #[cfg(feature = "tds73")]
     #[tokio::test]
     async fn datetime2_encodes_as_datetimen_for_bulk_insert() {
-        // 2024-01-15, scale 7 (100ns increments), matching what the chrono
+        // 2024-01-15, scale 7 (100ns increments), matching what the jiff
         // and time interop conversions always produce.
         let date = Date::new(738_901); // days since 0001-01-01
         let time = Time::new(453_780_000_000, 7); // 12:36:18 as 100ns increments

@@ -5,10 +5,10 @@ Read this before touching any file under `mssql/src/`, `mssql/tests/`,
 
 ## The non-negotiables
 
-- **MSRV**: current stable minus two minor versions (currently `1.96`; see
+- **MSRV**: current stable minus two minor versions (currently `1.98`; see
   [`../mssql/spec/rust-msrv-n-minus-2/index.md`](../mssql/spec/rust-msrv-n-minus-2/index.md)).
   Don't use a language/stdlib feature stabilized after the MSRV. `cargo
-  +1.96 check --all-targets` is the ground truth, not "it compiles on my
+  +1.98 check --all-targets` is the ground truth, not "it compiles on my
   machine."
 - **`-D warnings`**: CI runs `cargo clippy` with warnings denied, under both
   default features and `--features all`. Run both locally before calling

@@ -7,10 +7,10 @@ use std::env;
 use std::sync::Once;
 use uuid::Uuid;
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
-use chrono::DateTime;
-#[cfg(all(feature = "tds73", feature = "chrono"))]
-use chrono::NaiveDateTime;
+#[cfg(all(feature = "tds73", feature = "jiff"))]
+use jiff::civil::DateTime as CivilDateTime;
+#[cfg(all(feature = "tds73", feature = "jiff"))]
+use jiff::Timestamp;
 
 use runtimes_macro::test_on_runtimes;
 
@@ -168,75 +168,77 @@ test_bulk_type!(decimal(
     vec![mssql::numeric::Decimal::from_i128_with_scale(123456789, 4); 100].into_iter()
 ));
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 test_bulk_type!(datetime2(
     "DATETIME2",
     100,
-    vec![DateTime::from_timestamp(1658524194, 123456789); 100].into_iter()
+    vec![Timestamp::new(1658524194, 123456789).unwrap(); 100].into_iter()
 ));
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 test_bulk_type!(datetime2_naive("DATETIME2", 100, {
-    #[allow(deprecated)]
-    let dt = NaiveDateTime::from_timestamp_opt(1658524194, 123456789).unwrap();
+    let dt: CivilDateTime = Timestamp::new(1658524194, 123456789)
+        .unwrap()
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .datetime();
 
     vec![dt; 100].into_iter()
 }));
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 test_bulk_type!(datetime2_0(
     "DATETIME2(0)",
     100,
-    vec![DateTime::from_timestamp(1658524194, 123456789); 100].into_iter()
+    vec![Timestamp::new(1658524194, 123456789).unwrap(); 100].into_iter()
 ));
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 test_bulk_type!(datetime2_1(
     "DATETIME2(1)",
     100,
-    vec![DateTime::from_timestamp(1658524194, 123456789); 100].into_iter()
+    vec![Timestamp::new(1658524194, 123456789).unwrap(); 100].into_iter()
 ));
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 test_bulk_type!(datetime2_2(
     "DATETIME2(2)",
     100,
-    vec![DateTime::from_timestamp(1658524194, 123456789); 100].into_iter()
+    vec![Timestamp::new(1658524194, 123456789).unwrap(); 100].into_iter()
 ));
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 test_bulk_type!(datetime2_3(
     "DATETIME2(3)",
     100,
-    vec![DateTime::from_timestamp(1658524194, 123456789); 100].into_iter()
+    vec![Timestamp::new(1658524194, 123456789).unwrap(); 100].into_iter()
 ));
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 test_bulk_type!(datetime2_4(
     "DATETIME2(4)",
     100,
-    vec![DateTime::from_timestamp(1658524194, 123456789); 100].into_iter()
+    vec![Timestamp::new(1658524194, 123456789).unwrap(); 100].into_iter()
 ));
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 test_bulk_type!(datetime2_5(
     "DATETIME2(5)",
     100,
-    vec![DateTime::from_timestamp(1658524194, 123456789); 100].into_iter()
+    vec![Timestamp::new(1658524194, 123456789).unwrap(); 100].into_iter()
 ));
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 test_bulk_type!(datetime2_6(
     "DATETIME2(6)",
     100,
-    vec![DateTime::from_timestamp(1658524194, 123456789); 100].into_iter()
+    vec![Timestamp::new(1658524194, 123456789).unwrap(); 100].into_iter()
 ));
 
-#[cfg(all(feature = "tds73", feature = "chrono"))]
+#[cfg(all(feature = "tds73", feature = "jiff"))]
 test_bulk_type!(datetime2_7(
     "DATETIME2(7)",
     100,
-    vec![DateTime::from_timestamp(1658524194, 123456789); 100].into_iter()
+    vec![Timestamp::new(1658524194, 123456789).unwrap(); 100].into_iter()
 ));
 
 macro_rules! test_bulk_columns {

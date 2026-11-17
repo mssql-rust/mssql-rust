@@ -12,8 +12,8 @@ trust `Cargo.toml` — it's the thing that actually governs what compiles.
 | `rustls` | Pure-Rust TLS implementation instead of an OS library. Recommended on macOS (Security Framework doesn't work correctly with SQL Server's TLS settings there). | disabled |
 | `vendored-openssl` | Statically links a vendored OpenSSL build instead of the OS's. | disabled |
 | `rustls-webpki-roots` | Validate server certificates against Mozilla's bundled root CA list instead of the OS trust store — useful in minimal containers with no system store. Implies `rustls`. | disabled |
-| `chrono` | Read/write date-time columns using `chrono`'s types. | disabled |
-| `time` | Read/write date-time columns using the `time` crate's types (recommended over `chrono` for new code). | disabled |
+| `jiff` | Read/write date-time columns using `jiff`'s types (the recommended date/time backend for new code). | disabled |
+| `time` | Read/write date-time columns using the `time` crate's types (an alternative to `jiff`). | disabled |
 | `rust_decimal` | Read/write `numeric`/`decimal` columns using `rust_decimal`'s `Decimal`. | disabled |
 | `bigdecimal` | Read/write `numeric`/`decimal` columns using `bigdecimal`'s `BigDecimal`. | disabled |
 | `sql-browser-async-std` | SQL Browser (named-instance resolution) for async-std's `TcpStream`. | disabled |
@@ -23,7 +23,7 @@ trust `Cargo.toml` — it's the thing that actually governs what compiles.
 | `sspi-rs` | Pure-Rust NTLM for `AuthMethod::windows` on Unix, with explicit credentials, no Kerberos ticket cache needed. | disabled |
 | `serde` | `Serialize`/`Deserialize` for the query result types (`Row`, `Column`, `ColumnType`, `ColumnData`, `TokenRow`, `Numeric`, and the `time`/`xml` types), so a result set can be shipped over the network as JSON. Added this cycle — see `CHANGELOG.md`'s "Unreleased" section. | disabled |
 | `docs` | Enables `#![feature(doc_cfg)]`-style `doc(cfg(...))` annotations throughout the crate, so docs.rs renders "available on feature X only" badges. Nightly-only attribute; not meant to be enabled in a normal build — it's how `[package.metadata.docs.rs] features = ["all", "docs"]` builds the published docs. | disabled |
-| `all` | Meta-feature enabling every backend/type/auth extra at once: `chrono`, `time`, `tds73`, all three `sql-browser-*`, `integrated-auth-gssapi`, `sspi-rs`, `rust_decimal`, `bigdecimal`, `native-tls`, `serde`. This is what CI's `--features=all` job and `cargo clippy`/`cargo test` in CONTRIBUTING.md build against. Note it does *not* include `rustls`, `vendored-openssl`, `rustls-webpki-roots`, or `winauth` — those are exercised by CI's separate `--no-default-features --features=...` matrix legs instead. | not default; opt in explicitly |
+| `all` | Meta-feature enabling every backend/type/auth extra at once: `jiff`, `time`, `tds73`, all three `sql-browser-*`, `integrated-auth-gssapi`, `sspi-rs`, `rust_decimal`, `bigdecimal`, `native-tls`, `serde`. This is what CI's `--features=all` job and `cargo clippy`/`cargo test` in CONTRIBUTING.md build against. Note it does *not* include `rustls`, `vendored-openssl`, `rustls-webpki-roots`, or `winauth` — those are exercised by CI's separate `--no-default-features --features=...` matrix legs instead. | not default; opt in explicitly |
 
 ## Notes
 

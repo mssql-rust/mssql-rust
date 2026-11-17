@@ -2,7 +2,7 @@
 [![crates.io](https://img.shields.io/crates/v/mssql.svg)](https://crates.io/crates/mssql)
 [![docs.rs](https://docs.rs/mssql/badge.svg)](https://docs.rs/mssql)
 [![Cargo tests](https://github.com/mssql-rust/mssql-rust/actions/workflows/test.yml/badge.svg)](https://github.com/mssql-rust/mssql-rust/actions/workflows/test.yml)
-[![MSRV](https://img.shields.io/badge/rustc-1.96%2B-blue.svg)](#minimum-supported-rust-version-msrv)
+[![MSRV](https://img.shields.io/badge/rustc-1.98%2B-blue.svg)](#minimum-supported-rust-version-msrv)
 
 A native, asynchronous Microsoft SQL Server (TDS) client for Rust.
 
@@ -115,7 +115,7 @@ an intentional bump — please open an issue.
 | `rustls`                 | Use the builtin TLS implementation from rustls instead of linking to the operating system implementation for traffic encryption. | `disabled` |
 | `vendored-openssl`       | Statically link against OpenSSL instead of dynamically linking to the operating system implementation for traffic encryption.    | `disabled` |
 | `rustls-webpki-roots`    | Validate server certificates against Mozilla's bundled root CA list instead of the OS trust store. Implies `rustls`.             | `disabled` |
-| `chrono`                 | Read and write date and time values using `chrono`'s types. (for greenfield, using time instead of chrono is recommended)        | `disabled` |
+| `jiff`                   | Read and write date and time values using `jiff`'s types (the `chrono` feature was removed in favour of this one).                 | `disabled` |
 | `time`                   | Read and write date and time values using `time` crate types.                                                                    | `disabled` |
 | `rust_decimal`           | Read and write `numeric`/`decimal` values using `rust_decimal`'s `Decimal`.                                                      | `disabled` |
 | `bigdecimal`             | Read and write `numeric`/`decimal` values using `bigdecimal`'s `BigDecimal`.                                                     | `disabled` |

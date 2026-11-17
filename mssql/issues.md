@@ -256,10 +256,9 @@ scoped out (see its own entry below).
   `tokio-postgres`'s `query_raw`/`sqlx`'s `fetch`, instead of one bound to
   `&mut Client`. Legitimate repository-pattern pain point, but would need a
   real API/ownership redesign, not a small change.
-- [ ] **#354** — Add `jiff` as a third date/time backend alongside `chrono`
-  and `time`. Would triple the already-nontrivial time-crate feature-matrix
-  maintenance burden for a newer, less-adopted crate with only one low-signal
-  comment.
+- [x] **#354** — Add `jiff` as a date/time backend. Done: the `chrono`
+  feature was replaced by `jiff` (chrono is no longer supported), alongside
+  `time`.
 - [ ] **#299** — Connection reset (`sp_reset_connection`-equivalent) for
   pool reuse without full re-login. The wire-level `PacketStatus::
   ResetConnection` flag and `EnvChangeTy::ResetConnection` ack already exist
@@ -358,7 +357,7 @@ SQL Server (via `docker/test-server.sh`, over `rustls`), confirmed to
 reproduce the original bug/error without the fix and pass with it, and was
 verified compiling and clippy-clean under multiple feature-flag combinations
 (default, `--features=all`, and `--no-default-features --features=tds73`
-where relevant) plus the pinned MSRV toolchain (1.96) before being
+where relevant) plus the pinned MSRV toolchain (1.98) before being
 committed. One item didn't end up as a fix: #333's leading hypothesis was
 disproven by the regression tests written to check it, recorded with its
 findings under "Not actionable" rather than left as a stale entry in the

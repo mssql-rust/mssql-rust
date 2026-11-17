@@ -23,10 +23,10 @@ use uuid::Uuid;
 /// |[`Numeric`](crate::numeric::Numeric)|`numeric`/`decimal`|
 /// |`Decimal` (with feature flag `rust_decimal`, see [`crate::numeric`])|`numeric`/`decimal`|
 /// |[`XmlData`](crate::xml::XmlData)|`xml`|
-/// |`NaiveDateTime` (with feature flag `chrono`)|`datetime`/`datetime2`/`smalldatetime`|
-/// |`NaiveDate` (with feature flag `chrono`)|`date`|
-/// |`NaiveTime` (with feature flag `chrono`)|`time`|
-/// |`DateTime` (with feature flag `chrono`)|`datetimeoffset`|
+/// |`jiff::civil::DateTime` (with feature flag `jiff`)|`datetime`/`datetime2`/`smalldatetime`|
+/// |`jiff::civil::Date` (with feature flag `jiff`)|`date`|
+/// |`jiff::civil::Time` (with feature flag `jiff`)|`time`|
+/// |`jiff::Timestamp` / `jiff::Zoned` (with feature flag `jiff`)|`datetimeoffset`|
 ///
 /// See the [`time`](crate::time) module for more information about the date
 /// and time structs.

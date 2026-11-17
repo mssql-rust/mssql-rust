@@ -17,11 +17,11 @@
 //! - `DateTime` -> `PrimitiveDateTime`
 //! - `SmallDateTime` -> `PrimitiveDateTime`
 
-#[cfg(feature = "chrono")]
-#[cfg_attr(feature = "docs", doc(cfg(feature = "chrono")))]
-pub mod chrono;
+#[cfg(feature = "jiff")]
+#[cfg_attr(feature = "docs", doc(cfg(feature = "jiff")))]
+pub mod jiff;
 
-// Named after the `time` crate it maps to/from, matching the `chrono`
+// Named after the `time` crate it maps to/from, matching the `jiff`
 // submodule above; not an accidental duplication of the parent module name.
 #[allow(clippy::module_inception)]
 #[cfg(feature = "time")]
