@@ -662,9 +662,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
                 self = self.post_login_encryption(encryption);
             }
             AuthMethod::AADToken(token) => {
-                login_message.aad_token(token, prelogin.fed_auth_required, prelogin.nonce);
+                // Same zeroizing send path as SQL auth: the bearer token used
+                // to go through `send`, leaving copies in the codec's
+                // never-wiped BytesMut (ported from upstream Tiberius 3e6afc3).
+                login_message.aad_token(token.as_str(), prelogin.fed_auth_required, prelogin.nonce);
+                let payload = login_message.encode_to_vec()?;
+                drop(token);
+
                 let id = self.context.next_packet_id();
-                self.send(PacketHeader::login(id), login_message).await?;
+                self.send_sensitive_login(PacketHeader::login(id), payload)
+                    .await?;
                 self = self.post_login_encryption(encryption);
             }
         }

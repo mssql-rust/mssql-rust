@@ -50,7 +50,7 @@ impl Debug for WindowsAuth {
 }
 
 /// Defines the method of authentication to the server.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum AuthMethod {
     /// Authenticate directly with SQL Server.
     SqlServer(SqlServerAuth),
@@ -75,7 +75,11 @@ pub enum AuthMethod {
     Integrated,
     /// Authenticate with an AAD token. The token should encode an AAD user/service principal
     /// which has access to SQL Server.
-    AADToken(String),
+    ///
+    /// The token is a bearer credential, so it is held in a
+    /// [`Zeroizing`] buffer (wiped on drop) and redacted from `Debug` output.
+    /// Construct it with [`AuthMethod::aad_token`].
+    AADToken(Zeroizing<String>),
     #[doc(hidden)]
     None,
 }
@@ -110,7 +114,28 @@ impl AuthMethod {
 
     /// Construct a new configuration with AAD auth token.
     pub fn aad_token(token: impl ToString) -> Self {
-        Self::AADToken(token.to_string())
+        Self::AADToken(Zeroizing::new(token.to_string()))
+    }
+}
+
+// Hand-written so the AAD bearer token is never printed: `Config` derives
+// `Debug`, so `{:?}` on a `Config` (e.g. in a log line) used to include the
+// token verbatim. Pattern ported from upstream Tiberius (3e6afc3 / 3f47d87).
+impl Debug for AuthMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SqlServer(auth) => f.debug_tuple("SqlServer").field(auth).finish(),
+            #[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs"), doc))]
+            Self::Windows(auth) => f.debug_tuple("Windows").field(auth).finish(),
+            #[cfg(any(
+                all(windows, feature = "winauth"),
+                all(unix, feature = "integrated-auth-gssapi"),
+                doc
+            ))]
+            Self::Integrated => f.write_str("Integrated"),
+            Self::AADToken(_) => f.debug_tuple("AADToken").field(&"<HIDDEN>").finish(),
+            Self::None => f.write_str("None"),
+        }
     }
 }
 
@@ -172,5 +197,18 @@ mod tests {
 
         auth.password.zeroize();
         assert!(auth.password.is_empty());
+    }
+
+    #[test]
+    fn aad_token_is_redacted_from_debug() {
+        let auth = AuthMethod::aad_token("eyJ-super-secret-token");
+        let shown = format!("{auth:?}");
+        assert!(!shown.contains("super-secret"), "{shown}");
+        assert!(shown.contains("<HIDDEN>"), "{shown}");
+
+        let mut config = crate::Config::new();
+        config.authentication(auth);
+        let shown = format!("{config:?}");
+        assert!(!shown.contains("super-secret"), "{shown}");
     }
 }
