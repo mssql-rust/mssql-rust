@@ -171,6 +171,7 @@ where
 
         match change {
             TokenEnvChange::PacketSize(new_size, _) => {
+                let new_size = validate_negotiated_packet_size(new_size)?;
                 self.conn.context_mut().set_packet_size(new_size);
             }
             TokenEnvChange::BeginTransaction(desc) => {
@@ -258,5 +259,41 @@ where
         });
 
         Box::pin(stream)
+    }
+}
+
+/// MS-TDS: a negotiated packet size must be within 512..=32767. An
+/// out-of-range ENVCHANGE value from the server used to be stored as-is:
+/// exactly 8 made the send path's `packet_size - HEADER_BYTES` chunk size
+/// zero and spun `split_to(0)` forever, below 8 underflowed, and above 65535
+/// truncated the u16 frame length and desynced the stream. Ported from
+/// upstream Tiberius (tiberius-rs/tiberius bf96855 / 3e6afc3).
+fn validate_negotiated_packet_size(new_size: u32) -> crate::Result<u32> {
+    if (512..=32767).contains(&new_size) {
+        Ok(new_size)
+    } else {
+        Err(crate::Error::Protocol(
+            format!("server requested an invalid packet size of {new_size}").into(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod packet_size_tests {
+    use super::validate_negotiated_packet_size;
+
+    #[test]
+    fn out_of_range_negotiated_packet_size_is_rejected() {
+        for size in [0, 7, 8, 511, 32768, 65536, u32::MAX] {
+            let err = validate_negotiated_packet_size(size).unwrap_err();
+            assert!(matches!(err, crate::Error::Protocol(_)), "{size}: {err:?}");
+        }
+    }
+
+    #[test]
+    fn in_range_negotiated_packet_size_is_accepted() {
+        for size in [512, 4096, 8000, 32767] {
+            assert_eq!(validate_negotiated_packet_size(size).unwrap(), size);
+        }
     }
 }

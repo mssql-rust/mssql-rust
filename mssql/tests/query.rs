@@ -29,11 +29,22 @@ static DOT_CONN_STR: Lazy<String> = Lazy::new(|| CONN_STR.replace("localhost", "
 static APP_NAME_CONN_STR: Lazy<String> =
     Lazy::new(|| format!("{};Application Name=meow", *CONN_STR));
 
+// `encrypt=true` needs a TLS backend; without one it is a hard error (#305).
+#[cfg(any(
+    feature = "rustls",
+    feature = "native-tls",
+    feature = "vendored-openssl"
+))]
 static ENCRYPTED_CONN_STR: Lazy<String> = Lazy::new(|| format!("{};encrypt=true", *CONN_STR));
 
 static PLAIN_TEXT_CONN_STR: Lazy<String> =
     Lazy::new(|| format!("{};encrypt=DANGER_PLAINTEXT", *CONN_STR));
 
+#[cfg(any(
+    feature = "rustls",
+    feature = "native-tls",
+    feature = "vendored-openssl"
+))]
 #[test_on_runtimes(connection_string = "ENCRYPTED_CONN_STR")]
 async fn connect_with_full_encryption<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
@@ -1993,6 +2004,35 @@ where
         .unwrap();
 
     assert_eq!(Some(num), row.get(0));
+
+    Ok(())
+}
+
+// DECIMAL(38,38) is legitimate SQL Server data; reading it used to panic
+// (`Numeric::new_with_scale` asserted scale < 38). Ported from upstream
+// Tiberius 7d13e22.
+#[test_on_runtimes]
+async fn read_decimal_38_38<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let row = conn
+        .simple_query("SELECT CAST(0.1 AS DECIMAL(38,38)), CAST(-0.5 AS NUMERIC(38,38))")
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+
+    let a: Numeric = row.get(0).unwrap();
+    assert_eq!((a.value(), a.scale()), (10i128.pow(37), 38));
+    let b: Numeric = row.get(1).unwrap();
+    assert_eq!((b.value(), b.scale()), (-5 * 10i128.pow(37), 38));
+
+    #[cfg(feature = "rust_decimal")]
+    {
+        let d: mssql::numeric::Decimal = row.get(0).unwrap();
+        assert_eq!(d.to_string(), "0.1000000000000000000000000000");
+    }
 
     Ok(())
 }

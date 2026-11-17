@@ -4,7 +4,6 @@ use std::{
 };
 
 use crate::{
-    error::Error,
     tds::codec::{Encode, FixedLenType, TokenType, TypeInfo, VarLenType},
     Column, ColumnData, ColumnType, SqlReadBytes,
 };
@@ -52,7 +51,10 @@ impl<'a> Display for MetaDataColumn<'a> {
                 FixedLenType::Float8 => write!(f, "float")?,
                 FixedLenType::Money4 => write!(f, "smallmoney")?,
                 FixedLenType::Int8 => write!(f, "bigint")?,
-                FixedLenType::Null => unreachable!(),
+                // A type `INSERT BULK` can't declare. This used to be
+                // `unreachable!()`: a server-controlled panic, since
+                // `TypeInfo::decode` accepts it. (Upstream Tiberius 3e6afc3.)
+                FixedLenType::Null => return Err(std::fmt::Error),
             },
             TypeInfo::VarLenSized(ctx) => match ctx.r#type() {
                 VarLenType::Bitn => write!(f, "bit")?,
@@ -98,19 +100,19 @@ impl<'a> Display for MetaDataColumn<'a> {
                     2 => write!(f, "smallint")?,
                     4 => write!(f, "int")?,
                     8 => write!(f, "bigint")?,
-                    _ => unreachable!(),
+                    _ => return Err(std::fmt::Error),
                 },
                 VarLenType::Floatn => match ctx.len() {
                     4 => write!(f, "real")?,
                     8 => write!(f, "float")?,
-                    _ => unreachable!(),
+                    _ => return Err(std::fmt::Error),
                 },
                 VarLenType::Money => match ctx.len() {
                     4 => write!(f, "smallmoney")?,
                     8 => write!(f, "money")?,
-                    _ => unreachable!(),
+                    _ => return Err(std::fmt::Error),
                 },
-                _ => unreachable!(),
+                _ => return Err(std::fmt::Error),
             },
             TypeInfo::VarLenSizedPrecision {
                 ty,
@@ -120,7 +122,7 @@ impl<'a> Display for MetaDataColumn<'a> {
             } => match ty {
                 VarLenType::Decimaln => write!(f, "decimal({},{})", precision, scale)?,
                 VarLenType::Numericn => write!(f, "numeric({},{})", precision, scale)?,
-                _ => unreachable!(),
+                _ => return Err(std::fmt::Error),
             },
             TypeInfo::Xml { .. } => write!(f, "xml")?,
         }
@@ -379,8 +381,10 @@ impl BaseMetaDataColumn {
 
         let _user_ty = src.read_u32_le().await?;
 
-        let flags = BitFlags::from_bits(src.read_u16_le().await?)
-            .map_err(|_| Error::Protocol("column metadata: invalid flags".into()))?;
+        // MS-TDS marks several flag bits reserved ("must be ignored"), so a
+        // newer server setting one must not fail the whole result set.
+        // Ported from upstream Tiberius e59a57f.
+        let flags = BitFlags::from_bits_truncate(src.read_u16_le().await?);
 
         let ty = TypeInfo::decode(src).await?;
 
@@ -402,6 +406,32 @@ impl BaseMetaDataColumn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Types INSERT BULK can't declare used to hit `unreachable!()` in Display
+    // (a server-controlled panic); they now return `fmt::Error`, which the
+    // bulk-insert path maps to Error::BulkInput.
+    #[test]
+    fn display_errors_instead_of_panicking_on_undeclarable_types() {
+        use crate::tds::codec::VarLenContext;
+        use std::fmt::Write;
+
+        for ty in [
+            TypeInfo::FixedLen(FixedLenType::Null),
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Intn, 3, None)),
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Floatn, 5, None)),
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Money, 2, None)),
+        ] {
+            let col = MetaDataColumn {
+                base: BaseMetaDataColumn {
+                    flags: BitFlags::empty(),
+                    ty,
+                },
+                col_name: "c".into(),
+            };
+            let mut s = String::new();
+            assert!(write!(s, "{col}").is_err());
+        }
+    }
 
     // Regression test for the ColumnFlag bit positions, verified against
     // MS-TDS 2.2.7.4 COLMETADATA's `Flags` field:

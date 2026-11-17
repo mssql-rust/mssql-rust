@@ -418,8 +418,18 @@ impl<'a> Stream for QueryStream<'a> {
                     return Poll::Ready(Some(Ok(query_item)));
                 }
                 ReceivedToken::Row(data) => {
-                    let columns = this.columns.as_ref().unwrap().clone();
-                    let result_index = this.result_set_index.unwrap();
+                    // A ROW before any COLMETADATA in this stream is a protocol
+                    // violation; it used to `unwrap()`-panic. (Context's
+                    // `last_meta` survives across queries, so such a ROW still
+                    // decodes fine before reaching here.) Ported from upstream
+                    // Tiberius 3e6afc3.
+                    let Some(columns) = this.columns.as_ref() else {
+                        return Poll::Ready(Some(Err(crate::Error::Protocol(
+                            "ROW token arrived before any column metadata".into(),
+                        ))));
+                    };
+                    let columns = columns.clone();
+                    let result_index = this.result_set_index.unwrap_or(0);
 
                     let row = Row {
                         columns,

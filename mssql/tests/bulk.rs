@@ -610,3 +610,195 @@ where
 
     Ok(())
 }
+
+// A row whose encoding fails partway (here the second column, a smallmoney
+// out of range) must not leave its first column's bytes in the bulk-load
+// buffer: they used to be flushed with the next row and desync the stream.
+// Ported from upstream Tiberius 991702f.
+#[test_on_runtimes]
+async fn bulk_insert_failed_row_is_rolled_back<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("##{}", random_table().await);
+
+    conn.simple_query(format!(
+        "CREATE TABLE {} (id INT NOT NULL, m SMALLMONEY NULL)",
+        table
+    ))
+    .await?;
+
+    let mut req = conn.bulk_insert(&table).await?;
+
+    let mut bad = TokenRow::new();
+    bad.push(ColumnData::I32(Some(1)));
+    bad.push(ColumnData::F64(Some(1e12)));
+    assert!(req.send(bad).await.is_err());
+
+    let mut good = TokenRow::new();
+    good.push(ColumnData::I32(Some(2)));
+    good.push(ColumnData::F64(Some(1.5)));
+    req.send(good).await?;
+
+    let result = req.finalize().await?;
+    assert_eq!(result.rows_affected(), &[1]);
+
+    let row = conn
+        .query(format!("SELECT id, CAST(m AS FLOAT) FROM {}", table), &[])
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+    assert_eq!(Some(2), row.get::<i32, _>(0));
+    assert_eq!(Some(1.5), row.get::<f64, _>(1));
+
+    Ok(())
+}
+
+// An ORDER hint naming a column with `]` in it must be bracket-escaped like
+// every other identifier in the generated INSERT BULK statement.
+#[test_on_runtimes]
+async fn bulk_insert_order_hint_escapes_closing_bracket<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("##{}", random_table().await);
+
+    conn.simple_query(format!("CREATE TABLE {} ([a]]b] INT NOT NULL)", table))
+        .await?;
+
+    let order_hints = [("a]b", SortOrder::Ascending)];
+    let mut req = conn
+        .bulk_insert_with_options(
+            &table,
+            &["*"],
+            SqlBulkCopyOption::TableLock.into(),
+            &order_hints,
+        )
+        .await?;
+
+    for val in [1, 2] {
+        let mut row = TokenRow::new();
+        row.push(ColumnData::I32(Some(val)));
+        req.send(row).await?;
+    }
+    assert_eq!(req.finalize().await?.rows_affected(), &[2]);
+
+    Ok(())
+}
+
+// INSERT BULK must declare each character column's collation, or text bulk-
+// loaded into a non-default-collation column is stored corrupted. Ported
+// from upstream Tiberius (tiberius-rs/tiberius 75d7afc).
+/// Bulk-insert "Привет" into Cyrillic_General_CI_AS (CP1251) columns of
+/// `table` and check the stored bytes. The database default collation must
+/// not use CP1251 for this to detect a missing `COLLATE` in `INSERT BULK`:
+/// the server would then read the CP1251 bytes in the default code page.
+async fn bulk_cyrillic_roundtrip<S>(conn: &mut mssql::Client<S>, table: &str) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let default_code_page = conn
+        .query(
+            "SELECT CONVERT(INT, COLLATIONPROPERTY(CONVERT(NVARCHAR(128), \
+             DATABASEPROPERTYEX(DB_NAME(), 'Collation')), 'CodePage'))",
+            &[],
+        )
+        .await?
+        .into_row()
+        .await?
+        .unwrap()
+        .get::<i32, _>(0);
+    assert_ne!(Some(1251), default_code_page);
+
+    // A plain batch, not `execute`: a `#` temp table created inside the
+    // sp_executesql call `execute` sends is dropped when that call returns.
+    conn.simple_query(format!(
+        "CREATE TABLE {} (id INT NOT NULL, \
+         v VARCHAR(20) COLLATE Cyrillic_General_CI_AS NOT NULL, \
+         c CHAR(6) COLLATE Cyrillic_General_CI_AS NOT NULL, \
+         n NVARCHAR(20) COLLATE Cyrillic_General_CI_AS NOT NULL)",
+        table
+    ))
+    .await?
+    .into_results()
+    .await?;
+
+    let expected = "Привет";
+    let mut req = conn.bulk_insert(table).await?;
+    let mut row = TokenRow::new();
+    row.push(1i32.into_sql());
+    // No TEXT column here (upstream's version has one): bulk-inserting TEXT/
+    // NTEXT doesn't work in this fork yet (issues.md #352, error 4804).
+    row.push(expected.into_sql());
+    row.push(expected.into_sql());
+    row.push(expected.into_sql());
+    req.send(row).await?;
+    assert_eq!(1, req.finalize().await?.total());
+
+    let row = conn
+        .query(
+            &format!(
+                "SELECT v, c, n, CONVERT(VARBINARY(20), v), CONVERT(VARBINARY(20), c) FROM {}",
+                table
+            ),
+            &[],
+        )
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+
+    let cp1251: &[u8] = &[0xCF, 0xF0, 0xE8, 0xE2, 0xE5, 0xF2];
+    assert_eq!(Some(expected), row.get::<&str, _>(0));
+    assert_eq!(Some(expected), row.get::<&str, _>(1));
+    assert_eq!(Some(expected), row.get::<&str, _>(2));
+    assert_eq!(Some(cp1251), row.get::<&[u8], _>(3));
+    assert_eq!(Some(cp1251), row.get::<&[u8], _>(4));
+
+    Ok(())
+}
+
+#[test_on_runtimes]
+async fn bulk_text_keeps_a_non_default_column_collation<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    // A table in the current database, named with its schema.
+    let table = format!("dbo.bulk_collate_{}", random_table().await);
+
+    let result = bulk_cyrillic_roundtrip(&mut conn, &table).await;
+    drop_table(&mut conn, &format!("N'{table}'"), &table).await?;
+
+    result
+}
+
+/// Drops `table`, whose `OBJECT_ID` name is `object_name`, in a plain batch.
+async fn drop_table<S>(conn: &mut mssql::Client<S>, object_name: &str, table: &str) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    conn.simple_query(format!(
+        "IF OBJECT_ID({object_name}) IS NOT NULL DROP TABLE {table}"
+    ))
+    .await?
+    .into_results()
+    .await?;
+
+    Ok(())
+}
+
+#[test_on_runtimes]
+async fn bulk_text_keeps_a_non_default_column_collation_in_a_temp_table<S>(
+    mut conn: mssql::Client<S>,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("#{}", random_table().await);
+
+    let result = bulk_cyrillic_roundtrip(&mut conn, &table).await;
+    drop_table(&mut conn, &format!("N'tempdb..{table}'"), &table).await?;
+
+    result
+}

@@ -26,14 +26,14 @@ async fn main() -> anyhow::Result<()> {
         ClientSecretCredential::new(&tenant_id, client_id, Secret::new(client_secret), None)?;
 
     let token = credential
-        .get_token(&["https://management.azure.com/.default"], None)
+        .get_token(&["https://database.windows.net/.default"], None)
         .await?;
 
     let mut config = Config::new();
     let server = env::var("SERVER").expect("Missing SERVER environment variable.");
     config.host(server);
     config.port(1433);
-    config.authentication(AuthMethod::AADToken(token.token.secret().to_owned()));
+    config.authentication(AuthMethod::aad_token(token.token.secret()));
     config.trust_cert();
 
     let tcp = TcpStream::connect(config.get_addr()).await?;

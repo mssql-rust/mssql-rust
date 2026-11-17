@@ -449,10 +449,30 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         table: &'a str,
         columns: &'a [&'a str],
     ) -> crate::Result<Vec<MetaDataColumn<'static>>> {
+        Ok(self.fetch_column_metadata(table, columns, false).await?.0)
+    }
+
+    /// Like [`column_metadata`], and with `collations` also the
+    /// `(column name, collation name)` of every column of the table, from
+    /// `sp_tablecollations_100` run in the same batch (see
+    /// [`table_collations_sql`]). Without `collations` that list is empty.
+    ///
+    /// [`column_metadata`]: #method.column_metadata
+    async fn fetch_column_metadata(
+        &mut self,
+        table: &str,
+        columns: &[&str],
+        collations: bool,
+    ) -> crate::Result<(Vec<MetaDataColumn<'static>>, Vec<(String, Option<String>)>)> {
         self.connection.flush_stream().await?;
 
         let columns_list = columns.join(", ");
-        let query = format!("SELECT TOP 0 {columns_list} FROM {table}");
+        let mut query = format!("SELECT TOP 0 {columns_list} FROM {table}");
+        if collations {
+            let version = self.connection.context().version();
+            query.push_str("; ");
+            query.push_str(&table_collations_sql(table, version));
+        }
 
         let req = BatchRequest::new(query, self.connection.context().transaction_descriptor());
 
@@ -461,19 +481,39 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
 
         let token_stream = TokenStream::new(&mut self.connection).try_unfold();
 
-        let columns = token_stream
-            .try_fold(None, |mut columns, token| async move {
-                if let ReceivedToken::NewResultset(metadata) = token {
-                    columns = Some(metadata.columns.clone());
-                };
+        // The `SELECT TOP 0` result set comes first and has no rows; every
+        // row is one of the collation list (`colid`, `name`,
+        // `tds_collation_100`, `collation_100`).
+        let (columns, collations) = token_stream
+            .try_fold(
+                (None, Vec::new()),
+                |(mut columns, mut collations), token| async move {
+                    match token {
+                        ReceivedToken::NewResultset(metadata) if columns.is_none() => {
+                            columns = Some(metadata.columns.clone());
+                        }
+                        ReceivedToken::Row(row) => {
+                            let string = |i| match row.get(i) {
+                                Some(ColumnData::String(s)) => s.as_ref().map(|s| s.to_string()),
+                                _ => None,
+                            };
+                            if let Some(name) = string(1) {
+                                collations.push((name, string(3)));
+                            }
+                        }
+                        _ => {}
+                    }
 
-                Ok(columns)
-            })
+                    Ok((columns, collations))
+                },
+            )
             .await?;
 
-        columns.ok_or_else(|| {
+        let columns = columns.ok_or_else(|| {
             crate::Error::Protocol("expecting column metadata from query but not found".into())
-        })
+        })?;
+
+        Ok((columns, collations))
     }
 
     /// Execute a `BULK INSERT` statement, efficiently storing a large number of
@@ -579,9 +619,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     ) -> crate::Result<BulkLoadRequest<'a, S>> {
         let keep_identity = options.contains(SqlBulkCopyOption::KeepIdentity);
 
-        let columns: Vec<_> = self
-            .column_metadata(table, columns)
-            .await?
+        // The same batch lists every column's collation, which the INSERT
+        // BULK column list declares for character columns (see
+        // `bulk_column_list`).
+        let (columns, collations) = self.fetch_column_metadata(table, columns, true).await?;
+        let columns: Vec<_> = columns
             .into_iter()
             // `usUpdateable` is a 2-bit value (0 = read-only, 1 = read/write,
             // 2 = unknown), not two independent flags: keep the column
@@ -604,7 +646,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
 
         // now start bulk upload
         self.connection.flush_stream().await?;
-        let col_data = columns.iter().map(|c| format!("{}", c)).join(", ");
+        let col_data = bulk_column_list(&columns, &collations)?;
         let mut query = format!("INSERT BULK {} ({})", table, col_data);
 
         // Note: `KeepIdentity` never contributes a hint here - it's handled
@@ -636,7 +678,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
                         SortOrder::Descending => "DESC",
                     };
 
-                    format!("[{col}] {dir}")
+                    // Escape `]` the same way column names are escaped
+                    // elsewhere, so an ORDER hint can't break out of the
+                    // bracket-quoted identifier.
+                    format!("[{}] {dir}", col.replace(']', "]]"))
                 })
                 .join(", ");
 
@@ -772,5 +817,411 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         self.connection.send(PacketHeader::rpc(id), req).await?;
 
         Ok(())
+    }
+}
+
+/// Build the `INSERT BULK` column list: each column bracket-quoted with its
+/// type, and every character column followed by ` COLLATE <name>`.
+///
+/// SQL Server reads the bulk data of a column as the type declared here. A
+/// char/varchar/text declaration without `COLLATE` takes the database default
+/// collation, so the server read the bytes in that code page and converted
+/// them to the column's, silently corrupting text bulk-loaded into a column
+/// whose collation differs from the database default. Like SqlClient's
+/// `SqlBulkCopy`, each character column's own collation is now declared.
+/// Ported from upstream Tiberius (tiberius-rs/tiberius 75d7afc).
+///
+/// `MetaDataColumn`'s Display returns `fmt::Error` for a column type INSERT
+/// BULK can't declare; this maps that to `Error::BulkInput`, where `format!`
+/// would panic.
+fn bulk_column_list(
+    columns: &[MetaDataColumn<'_>],
+    collations: &[(String, Option<String>)],
+) -> crate::Result<String> {
+    let mut list = Vec::with_capacity(columns.len());
+
+    for column in columns {
+        let mut item = String::new();
+        std::fmt::Write::write_fmt(&mut item, format_args!("{column}")).map_err(|_| {
+            crate::Error::BulkInput(
+                format!(
+                    "column {} has a type bulk insert cannot declare: {:?}",
+                    column.col_name, column.base.ty
+                )
+                .into(),
+            )
+        })?;
+
+        if declares_collation(&column.base.ty) {
+            if let Some(collation) = column_collation(&column.col_name, collations) {
+                validate_collation_name(collation)?;
+                item.push_str(" COLLATE ");
+                item.push_str(collation);
+            }
+        }
+
+        list.push(item);
+    }
+
+    Ok(list.join(", "))
+}
+
+/// Whether the `INSERT BULK` declaration of a column of type `ty` carries a
+/// `COLLATE` clause: the character types SqlClient declares one for.
+fn declares_collation(ty: &TypeInfo) -> bool {
+    matches!(
+        ty,
+        TypeInfo::VarLenSized(ctx) if matches!(
+            ctx.r#type(),
+            VarLenType::BigChar
+                | VarLenType::BigVarChar
+                | VarLenType::Text
+                | VarLenType::NChar
+                | VarLenType::NVarchar
+                | VarLenType::NText
+        )
+    )
+}
+
+/// The collation name listed for the column `name`: the row with exactly this
+/// name, else the only row whose name matches ignoring case.
+fn column_collation<'a>(name: &str, collations: &'a [(String, Option<String>)]) -> Option<&'a str> {
+    let row = match collations.iter().find(|(n, _)| n == name) {
+        Some(row) => row,
+        None => {
+            let name = name.to_lowercase();
+            let mut rows = collations.iter().filter(|(n, _)| n.to_lowercase() == name);
+            match (rows.next(), rows.next()) {
+                (Some(row), None) => row,
+                _ => return None,
+            }
+        }
+    };
+
+    row.1.as_deref()
+}
+
+/// The batch statement listing the collation of every column of `table`, as
+/// SqlClient's `SqlBulkCopy` runs it:
+/// `EXEC <catalog>..sp_tablecollations_100 N'<schema>.<table>'`.
+///
+/// The procedure reads the catalog it is called in: the catalog part of
+/// `table`, else `tempdb` for a `#` temp table, else the current database.
+/// Schema and table are bracket-quoted inside an N'' literal with `'`
+/// doubled, and the catalog is bracket-quoted, so a caller-supplied name
+/// cannot break out of either. Before SQL Server 2008 the procedure is
+/// `sp_tablecollations_90`.
+fn table_collations_sql(table: &str, version: codec::FeatureLevel) -> String {
+    let parts = split_multipart_identifier(table);
+    let part = |from_end: usize| {
+        parts
+            .len()
+            .checked_sub(from_end + 1)
+            .map_or("", |i| parts[i].as_str())
+    };
+
+    let table_name = part(0);
+    let schema = part(1);
+    let catalog = part(2);
+
+    let catalog = if catalog.is_empty() {
+        if table_name.starts_with('#') {
+            "tempdb".to_owned()
+        } else {
+            String::new()
+        }
+    } else {
+        quote_identifier(catalog)
+    };
+
+    let literal = |part: &str| {
+        if part.is_empty() {
+            String::new()
+        } else {
+            quote_identifier(&part.replace('\'', "''"))
+        }
+    };
+
+    let procedure = if version as u32 >= codec::FeatureLevel::SqlServer2008 as u32 {
+        "sp_tablecollations_100"
+    } else {
+        "sp_tablecollations_90"
+    };
+
+    format!(
+        "EXEC {catalog}..{procedure} N'{}.{}'",
+        literal(schema),
+        literal(table_name)
+    )
+}
+
+/// Bracket-quote `name`, doubling any `]` in it.
+fn quote_identifier(name: &str) -> String {
+    format!("[{}]", name.replace(']', "]]"))
+}
+
+/// Split a multi-part identifier (`server.catalog.schema.table`, any leading
+/// parts omitted or empty) into its unquoted parts: `[a]]b].c` gives `a]b`
+/// and `c`. An unterminated bracket simply runs to the end.
+fn split_multipart_identifier(ident: &str) -> Vec<String> {
+    let mut parts = vec![String::new()];
+    let mut chars = ident.chars().peekable();
+    let mut in_bracket = false;
+
+    while let Some(c) = chars.next() {
+        let part = parts.last_mut().expect("parts is never empty");
+
+        if in_bracket {
+            if c == ']' {
+                if chars.peek() == Some(&']') {
+                    chars.next();
+                    part.push(']');
+                } else {
+                    in_bracket = false;
+                }
+            } else {
+                part.push(c);
+            }
+        } else {
+            match c {
+                '[' => in_bracket = true,
+                '.' => parts.push(String::new()),
+                c => part.push(c),
+            }
+        }
+    }
+
+    parts
+}
+
+/// Reject a server-reported collation name that is not a plain identifier of
+/// ASCII letters, digits and `_`, as every SQL Server collation name is: it is
+/// put into the `INSERT BULK` statement unquoted.
+fn validate_collation_name(name: &str) -> crate::Result<()> {
+    if !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+        Ok(())
+    } else {
+        Err(crate::Error::Protocol(
+            format!("invalid collation name {name:?} for a bulk insert column").into(),
+        ))
+    }
+}
+
+// Ported from upstream Tiberius (tiberius-rs/tiberius 75d7afc).
+// Server-free tests for the column collations declared in `INSERT BULK`.
+#[cfg(test)]
+mod bulk_collation_tests {
+    use super::{bulk_column_list, table_collations_sql, validate_collation_name};
+    use crate::tds::codec::FeatureLevel;
+    use crate::tds::codec::{
+        BaseMetaDataColumn, ColumnFlag, FixedLenType, TypeInfo, VarLenContext, VarLenType,
+    };
+    use crate::tds::Collation;
+    use crate::MetaDataColumn;
+    use std::borrow::Cow;
+
+    fn column(name: &'static str, ty: TypeInfo) -> MetaDataColumn<'static> {
+        MetaDataColumn {
+            base: BaseMetaDataColumn {
+                flags: ColumnFlag::Updateable.into(),
+                ty,
+            },
+            col_name: Cow::Borrowed(name),
+        }
+    }
+
+    fn var(ty: VarLenType, len: usize) -> TypeInfo {
+        // Latin1_General_CI_AS; the declared name comes from the server's
+        // collation list, not from these bytes.
+        let collation = match ty {
+            VarLenType::BigChar
+            | VarLenType::BigVarChar
+            | VarLenType::Text
+            | VarLenType::NChar
+            | VarLenType::NVarchar
+            | VarLenType::NText => Some(Collation::new(0x00d0_0409, 52)),
+            _ => None,
+        };
+        TypeInfo::VarLenSized(VarLenContext::new(ty, len, collation))
+    }
+
+    fn collations(rows: &[(&str, Option<&str>)]) -> Vec<(String, Option<String>)> {
+        rows.iter()
+            .map(|(name, collation)| (name.to_string(), collation.map(str::to_string)))
+            .collect()
+    }
+
+    #[test]
+    fn character_columns_declare_their_collation() {
+        let columns = [
+            column("id", TypeInfo::FixedLen(FixedLenType::Int4)),
+            column("c", var(VarLenType::BigChar, 6)),
+            column("v", var(VarLenType::BigVarChar, 20)),
+            column("vmax", var(VarLenType::BigVarChar, 0xffff)),
+            column("t", var(VarLenType::Text, 0x7fff_ffff)),
+            column("nc", var(VarLenType::NChar, 12)),
+            column("nv", var(VarLenType::NVarchar, 40)),
+            column("nt", var(VarLenType::NText, 0x7fff_ffff)),
+            column("b", var(VarLenType::BigVarBin, 16)),
+            column("img", var(VarLenType::Image, 0x7fff_ffff)),
+        ];
+        let rows = collations(&[
+            ("id", None),
+            ("c", Some("Cyrillic_General_CI_AS")),
+            ("v", Some("Cyrillic_General_CI_AS")),
+            ("vmax", Some("Chinese_PRC_CI_AS")),
+            ("t", Some("Cyrillic_General_CI_AS")),
+            ("nc", Some("Latin1_General_100_CI_AS_SC")),
+            ("nv", Some("Latin1_General_100_CI_AS_SC")),
+            ("nt", Some("Latin1_General_100_CI_AS_SC")),
+            ("b", None),
+            ("img", None),
+        ]);
+
+        assert_eq!(
+            bulk_column_list(&columns, &rows).unwrap(),
+            "[id] int, \
+             [c] char(6) COLLATE Cyrillic_General_CI_AS, \
+             [v] varchar(20) COLLATE Cyrillic_General_CI_AS, \
+             [vmax] varchar(max) COLLATE Chinese_PRC_CI_AS, \
+             [t] text COLLATE Cyrillic_General_CI_AS, \
+             [nc] nchar(12) COLLATE Latin1_General_100_CI_AS_SC, \
+             [nv] nvarchar(40) COLLATE Latin1_General_100_CI_AS_SC, \
+             [nt] ntext COLLATE Latin1_General_100_CI_AS_SC, \
+             [b] varbinary(16), \
+             [img] image"
+        );
+    }
+
+    #[test]
+    fn non_character_columns_never_declare_a_collation() {
+        // Even if the server listed a collation for them.
+        let columns = [
+            column("id", TypeInfo::FixedLen(FixedLenType::Int4)),
+            column("b", var(VarLenType::BigVarBin, 16)),
+        ];
+        let rows = collations(&[
+            ("id", Some("Latin1_General_CI_AS")),
+            ("b", Some("Latin1_General_CI_AS")),
+        ]);
+
+        assert_eq!(
+            bulk_column_list(&columns, &rows).unwrap(),
+            "[id] int, [b] varbinary(16)"
+        );
+    }
+
+    #[test]
+    fn collations_are_matched_by_column_name() {
+        let columns = [
+            column("B", var(VarLenType::BigVarChar, 10)),
+            column("a", var(VarLenType::BigVarChar, 10)),
+            column("missing", var(VarLenType::BigVarChar, 10)),
+            column("no_collation", var(VarLenType::BigVarChar, 10)),
+        ];
+        // Out of order, a case-insensitive match for `B`, an exact match for
+        // `a` that wins over `A`, no row for `missing` and a NULL collation.
+        let rows = collations(&[
+            ("A", Some("Greek_CI_AS")),
+            ("a", Some("Cyrillic_General_CI_AS")),
+            ("b", Some("Hebrew_CI_AS")),
+            ("no_collation", None),
+        ]);
+
+        assert_eq!(
+            bulk_column_list(&columns, &rows).unwrap(),
+            "[B] varchar(10) COLLATE Hebrew_CI_AS, \
+             [a] varchar(10) COLLATE Cyrillic_General_CI_AS, \
+             [missing] varchar(10), \
+             [no_collation] varchar(10)"
+        );
+    }
+
+    #[test]
+    fn bad_collation_names_are_rejected() {
+        for name in [
+            "",
+            "Latin1_General_CI_AS; DROP TABLE t",
+            "Latin1 General",
+            "Latin1_General_CI_AS'",
+            "[Latin1_General_CI_AS]",
+            "Latin1-General",
+            "Latin1_General_CI_AS\0",
+            "Кириллица",
+        ] {
+            assert!(validate_collation_name(name).is_err(), "{name:?}");
+        }
+        for name in [
+            "Latin1_General_CI_AS",
+            "SQL_Latin1_General_CP1_CI_AS",
+            "Latin1_General_100_CI_AS_SC_UTF8",
+        ] {
+            assert!(validate_collation_name(name).is_ok(), "{name:?}");
+        }
+
+        let columns = [column("v", var(VarLenType::BigVarChar, 10))];
+        let rows = collations(&[("v", Some("Latin1_General_CI_AS) --"))]);
+        assert!(matches!(
+            bulk_column_list(&columns, &rows),
+            Err(crate::Error::Protocol(_))
+        ));
+    }
+
+    #[test]
+    fn table_collations_query_matches_sqlclient() {
+        let v = FeatureLevel::SqlServerN;
+        assert_eq!(
+            table_collations_sql("t", v),
+            "EXEC ..sp_tablecollations_100 N'.[t]'"
+        );
+        assert_eq!(
+            table_collations_sql("dbo.t", v),
+            "EXEC ..sp_tablecollations_100 N'[dbo].[t]'"
+        );
+        assert_eq!(
+            table_collations_sql("[my db].[dbo].[it's]]x]", v),
+            "EXEC [my db]..sp_tablecollations_100 N'[dbo].[it''s]]x]'"
+        );
+        assert_eq!(
+            table_collations_sql("srv.db.s.t", v),
+            "EXEC [db]..sp_tablecollations_100 N'[s].[t]'"
+        );
+        assert_eq!(
+            table_collations_sql("db..t", v),
+            "EXEC [db]..sp_tablecollations_100 N'.[t]'"
+        );
+    }
+
+    #[test]
+    fn table_collations_query_reads_temp_tables_from_tempdb() {
+        let v = FeatureLevel::SqlServerN;
+        assert_eq!(
+            table_collations_sql("#t", v),
+            "EXEC tempdb..sp_tablecollations_100 N'.[#t]'"
+        );
+        assert_eq!(
+            table_collations_sql("##t", v),
+            "EXEC tempdb..sp_tablecollations_100 N'.[##t]'"
+        );
+        assert_eq!(
+            table_collations_sql("[#t]", v),
+            "EXEC tempdb..sp_tablecollations_100 N'.[#t]'"
+        );
+        assert_eq!(
+            table_collations_sql("tempdb..#t", v),
+            "EXEC [tempdb]..sp_tablecollations_100 N'.[#t]'"
+        );
+    }
+
+    #[test]
+    fn table_collations_query_uses_the_2005_procedure_before_2008() {
+        assert_eq!(
+            table_collations_sql("t", FeatureLevel::SqlServer2005),
+            "EXEC ..sp_tablecollations_90 N'.[t]'"
+        );
+        assert_eq!(
+            table_collations_sql("t", FeatureLevel::SqlServer2008),
+            "EXEC ..sp_tablecollations_100 N'.[t]'"
+        );
     }
 }

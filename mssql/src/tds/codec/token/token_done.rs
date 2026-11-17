@@ -1,4 +1,4 @@
-use crate::{tds::codec::Encode, Error, SqlReadBytes, TokenType};
+use crate::{tds::codec::Encode, SqlReadBytes, TokenType};
 use asynchronous_codec::BytesMut;
 use bytes::BufMut;
 use enumflags2::{bitflags, BitFlags};
@@ -31,8 +31,9 @@ impl TokenDone {
     where
         R: SqlReadBytes + Unpin,
     {
-        let status = BitFlags::from_bits(src.read_u16_le().await?)
-            .map_err(|_| Error::Protocol("done(variant): invalid status".into()))?;
+        // Ignore reserved/unknown status bits rather than failing the stream
+        // when a newer server sets one (ported from upstream Tiberius 3e6afc3).
+        let status = BitFlags::from_bits_truncate(src.read_u16_le().await?);
 
         let cur_cmd = src.read_u16_le().await?;
         let done_row_count_bytes = src.context().version().done_row_count_bytes();

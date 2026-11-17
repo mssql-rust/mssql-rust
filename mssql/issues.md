@@ -23,6 +23,12 @@ context for this fork's positioning but not itself an action item.
   the clear while the caller believes `encrypt=true` is in effect. Small fix
   (a few lines in `tls_handshake`'s no-TLS-feature fallback, mirroring the
   `Strict` guard already in place). Done: `5a070b0` (see Build now below).
+  **Correction (2026-11-17):** `5a070b0` only guarded
+  `Config::encryption(..)`. The connection-string path was still open: the
+  no-TLS `ConfigString::encrypt()` returned `NotSupported` for any value,
+  so `encrypt=true` in a connection string still went cleartext. Found
+  while triaging upstream Tiberius 0.13.0, which fixed exactly this
+  (tiberius-rs/tiberius `bd3251a`). Ported in `b1e9372`.
 - [x] **#316** — Reading a legitimate, in-spec `datetime` value before 1900
   (e.g. `1899-12-30`) panics via an `i32→u64` cast overflow in
   `src/tds/time/time.rs` (`from_days(dt.days as u64, 1900)`). SQL Server's
@@ -301,6 +307,17 @@ between when they reported it and this fork's pinned `0.2`; couldn't
 narrow further without their exact original string (this fork's fix, if
 any, predates this triage and isn't separately attributable). Done:
 `ff27a89`.
+**Correction (2026-11-17): this conclusion was wrong.** #313 does
+reproduce on `connection-string` 0.2.0. Its ADO tokenizer requires a `;`
+directly after a value, so any *unquoted value containing `=`* fails
+with that exact error. Base64 padding (`Password=Zm9vYmFy==`) is the
+common case. The reporter's literal string was redacted and didn't
+contain one. Upstream Tiberius 0.13.0 found and fixed it with an in-house
+ADO tokenizer (tiberius-rs/tiberius `d0003ad`), ported here in `58e3e0e`
+and confirmed live: a real login with a `=`-padded password fails on the
+old parser and succeeds on the new one. Lesson: reproduce with the
+*class* of input the error message implies, not just the one redacted
+string in the report.
 
 **Investigated, hypothesis disproven:** #333 — passwords containing `$`/`%`
 reportedly fail login even when a wire capture showed the "correct" password

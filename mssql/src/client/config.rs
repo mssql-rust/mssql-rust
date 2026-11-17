@@ -1,4 +1,5 @@
 mod ado_net;
+mod ado_parser;
 mod jdbc;
 
 use std::collections::HashMap;
@@ -424,11 +425,25 @@ impl Config {
             builder.application_name(name);
         }
 
-        if s.trust_cert()? {
+        // `trust_cert` and `trust_cert_ca` panic if both are set, so a
+        // connection string naming both used to panic the caller. Reject it
+        // as a conversion error instead (ported from upstream Tiberius a1abc80).
+        let trust_cert = s.trust_cert()?;
+        let trust_cert_ca = s.trust_cert_ca();
+
+        if trust_cert && trust_cert_ca.is_some() {
+            return Err(crate::Error::Conversion(
+                "Connection string: TrustServerCertificate=true and TrustServerCertificateCA \
+                 are mutually exclusive"
+                    .into(),
+            ));
+        }
+
+        if trust_cert {
             builder.trust_cert();
         }
 
-        if let Some(ca) = s.trust_cert_ca() {
+        if let Some(ca) = trust_cert_ca {
             builder.trust_cert_ca(ca);
         }
 
@@ -738,7 +753,38 @@ pub(crate) trait ConfigString {
         feature = "vendored-openssl"
     )))]
     fn encrypt(&self) -> crate::Result<EncryptionLevel> {
-        Ok(EncryptionLevel::NotSupported)
+        // Security (upstream Tiberius #305, ported from tiberius-rs/tiberius
+        // bd3251a): a no-TLS build cannot encrypt, so an explicit request to
+        // do so must fail loudly rather than silently connect in plaintext.
+        // Tokens are classified exactly like the with-TLS `encrypt()` above:
+        // `true`/`yes`/`strict` become a TLS-missing error, while opting out
+        // (`false`/`no`/`DANGER_PLAINTEXT`) and an omitted keyword still
+        // resolve to `NotSupported`. Unrecognized tokens keep the bad-boolean
+        // error.
+        let Some(val) = self.dict().get("encrypt") else {
+            return Ok(EncryptionLevel::NotSupported);
+        };
+
+        match Self::parse_bool(val) {
+            Ok(false) => Ok(EncryptionLevel::NotSupported),
+            Err(_) if val == "DANGER_PLAINTEXT" => Ok(EncryptionLevel::NotSupported),
+            Ok(true) => Err(Self::tls_backend_missing()),
+            Err(_) if val.eq_ignore_ascii_case("strict") => Err(Self::tls_backend_missing()),
+            Err(e) => Err(e),
+        }
+    }
+
+    #[cfg(not(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    )))]
+    fn tls_backend_missing() -> crate::Error {
+        crate::Error::Tls(
+            "encryption was requested (`encrypt=...`) but the crate was compiled without a TLS \
+             backend; enable one of the `native-tls`, `rustls` or `vendored-openssl` features."
+                .to_string(),
+        )
     }
 
     fn parse_bool<T: AsRef<str>>(v: T) -> crate::Result<bool> {
@@ -769,6 +815,14 @@ pub(crate) trait ConfigString {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conflicting_trust_settings_in_connection_string_error_instead_of_panicking() {
+        let s = "server=tcp:localhost,1433;TrustServerCertificate=true;\
+                 TrustServerCertificateCA=/tmp/ca.pem";
+        let err = Config::from_ado_string(s).unwrap_err();
+        assert!(matches!(err, crate::Error::Conversion(_)), "{err:?}");
+    }
 
     #[test]
     fn client_name_defaults_to_none() {

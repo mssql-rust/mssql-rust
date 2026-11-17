@@ -59,9 +59,19 @@ where
     ///
     /// [`finalize`]: #method.finalize
     pub async fn send(&mut self, row: TokenRow<'a>) -> crate::Result<()> {
+        // A row that fails to encode partway (e.g. a smallmoney out of range,
+        // or a Numeric that can't be rescaled) used to leave its partial
+        // bytes in the buffer, to be flushed later and desync the bulk-load
+        // stream. Roll back to the row boundary instead, so the caller can
+        // skip the bad row and carry on. Ported from upstream Tiberius 991702f.
+        let row_start = self.buf.len();
         let mut buf_with_columns = BytesMutWithDataColumns::new(&mut self.buf, &self.columns);
 
-        row.encode(&mut buf_with_columns)?;
+        if let Err(e) = row.encode(&mut buf_with_columns) {
+            self.buf.truncate(row_start);
+            return Err(e);
+        }
+
         self.write_packets().await?;
 
         Ok(())

@@ -200,7 +200,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
             }
             TrustConfig::Default => {
                 event!(Level::INFO, "Using default trust configuration.");
-                builder.with_native_roots().with_no_client_auth()
+                builder.with_native_roots()?.with_no_client_auth()
             }
             #[cfg(feature = "rustls-webpki-roots")]
             TrustConfig::WebPkiRoots => {
@@ -262,20 +262,30 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> AsyncWrite for TlsStream<S> {
 }
 
 trait ConfigBuilderExt {
-    fn with_native_roots(self) -> ConfigBuilder<ClientConfig, WantsClientCert>;
+    fn with_native_roots(self) -> crate::Result<ConfigBuilder<ClientConfig, WantsClientCert>>;
 
     #[cfg(feature = "rustls-webpki-roots")]
     fn with_webpki_roots(self) -> ConfigBuilder<ClientConfig, WantsClientCert>;
 }
 
 impl ConfigBuilderExt for ConfigBuilder<ClientConfig, WantsVerifier> {
-    fn with_native_roots(self) -> ConfigBuilder<ClientConfig, WantsClientCert> {
+    // Used to `.expect()` the platform cert load, which in rustls-native-certs
+    // 0.8 panics if *any* error occurred (e.g. one unreadable file under
+    // SSL_CERT_DIR), and to `assert!` a non-empty store, which panicked on
+    // every connect in a container without CA certificates. Partial load
+    // errors are now logged and tolerated, and an empty store is a TLS error
+    // (fails closed). Ported from upstream Tiberius afdf8b3 / 5885e11 / 3e6afc3.
+    fn with_native_roots(self) -> crate::Result<ConfigBuilder<ClientConfig, WantsClientCert>> {
         let mut roots = RootCertStore::empty();
         let mut valid_count = 0;
         let mut invalid_count = 0;
 
-        for cert in rustls_native_certs::load_native_certs().expect("could not load platform certs")
-        {
+        let loaded = rustls_native_certs::load_native_certs();
+        for err in &loaded.errors {
+            event!(Level::WARN, "error loading a platform certificate: {}", err);
+        }
+
+        for cert in loaded.certs {
             match roots.add(cert) {
                 Ok(_) => valid_count += 1,
                 Err(err) => {
@@ -290,9 +300,15 @@ impl ConfigBuilderExt for ConfigBuilder<ClientConfig, WantsVerifier> {
             valid_count,
             invalid_count
         );
-        assert!(!roots.is_empty(), "no CA certificates found");
+        if roots.is_empty() {
+            return Err(crate::Error::Tls(
+                "no CA certificates found in the platform trust store; install the system \
+                 CA bundle, or use trust_cert_ca / trust_cert_ca_bundle / trust_webpki_roots"
+                    .into(),
+            ));
+        }
 
-        self.with_root_certificates(roots)
+        Ok(self.with_root_certificates(roots))
     }
 
     #[cfg(feature = "rustls-webpki-roots")]

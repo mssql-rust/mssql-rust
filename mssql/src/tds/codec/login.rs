@@ -130,7 +130,7 @@ pub(crate) const FEA_EXT_TERMINATOR: u8 = 0xFFu8;
 pub(crate) const FED_AUTH_LIBRARYSECURITYTOKEN: u8 = 0x01;
 
 /// https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/773a62b6-ee89-4c02-9e5e-344882630aac
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 struct FedAuthExt<'a> {
     fed_auth_echo: bool,
@@ -138,8 +138,18 @@ struct FedAuthExt<'a> {
     nonce: Option<[u8; 32]>,
 }
 
+impl std::fmt::Debug for FedAuthExt<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FedAuthExt")
+            .field("fed_auth_echo", &self.fed_auth_echo)
+            .field("fed_auth_token", &"<HIDDEN>")
+            .field("nonce", &self.nonce)
+            .finish()
+    }
+}
+
 /// the login packet
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct LoginMessage<'a> {
     /// the highest TDS version the client supports
@@ -169,6 +179,27 @@ pub struct LoginMessage<'a> {
     /// the default database to connect to
     db_name: Cow<'a, str>,
     fed_auth_ext: Option<FedAuthExt<'a>>,
+}
+
+// Hand-written so the password and AAD token are never printed.
+impl std::fmt::Debug for LoginMessage<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginMessage")
+            .field("tds_version", &self.tds_version)
+            .field("packet_size", &self.packet_size)
+            .field("option_flags_1", &self.option_flags_1)
+            .field("option_flags_2", &self.option_flags_2)
+            .field("type_flags", &self.type_flags)
+            .field("option_flags_3", &self.option_flags_3)
+            .field("hostname", &self.hostname)
+            .field("username", &self.username)
+            .field("password", &"<HIDDEN>")
+            .field("app_name", &self.app_name)
+            .field("server_name", &self.server_name)
+            .field("db_name", &self.db_name)
+            .field("fed_auth_ext", &self.fed_auth_ext)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'a> LoginMessage<'a> {
@@ -256,8 +287,44 @@ impl<'a> LoginMessage<'a> {
         self.packet_size = size;
     }
 
+    /// An upper bound on the encoded length. Every `&str` field encodes as
+    /// UTF-16, which never takes more than 2 bytes per UTF-8 byte; the fixed
+    /// part is 94 bytes and the FedAuth FeatureExt adds at most 51 bytes of
+    /// framing plus the token. Reserving this up front means the buffer that
+    /// holds the (obfuscated) password and the AAD token never reallocates,
+    /// so no unzeroized copy of a credential is left behind in freed heap.
+    /// Same goal as upstream Tiberius 35f2fe6/d290aea, which compute the exact
+    /// length instead.
+    fn encoded_len_upper_bound(&self) -> usize {
+        const FIXED_PART: usize = 94;
+        const FEATURE_EXT_FRAMING: usize = 64;
+
+        let strings = [
+            &self.hostname,
+            &self.username,
+            &self.password,
+            &self.app_name,
+            &self.server_name,
+            &self.db_name,
+        ]
+        .iter()
+        .map(|s| s.len() * 2)
+        .sum::<usize>();
+
+        let sspi = self.integrated_security.as_ref().map_or(0, Vec::len);
+
+        let fed_auth = self
+            .fed_auth_ext
+            .as_ref()
+            .map_or(0, |ext| FEATURE_EXT_FRAMING + ext.fed_auth_token.len() * 2);
+
+        FIXED_PART + strings + sspi + fed_auth
+    }
+
     pub(crate) fn encode_to_vec(self) -> crate::Result<Zeroizing<Vec<u8>>> {
-        let mut cursor = Cursor::new(Vec::with_capacity(512));
+        let reserved = self.encoded_len_upper_bound();
+        let mut cursor = Cursor::new(Vec::with_capacity(reserved));
+        let reserved = cursor.get_ref().capacity();
 
         // Space for the length
         cursor.write_u32::<LittleEndian>(0)?;
@@ -375,11 +442,13 @@ impl<'a> LoginMessage<'a> {
 
             cursor.write_u8(FEA_EXT_FEDAUTH)?;
 
-            let mut token = Cursor::new(Vec::new());
+            // Pre-sized for the same reason as the outer buffer: growing it
+            // would leave copies of the bearer token in freed memory.
+            let mut token =
+                Zeroizing::new(Vec::with_capacity(fed_auth_ext.fed_auth_token.len() * 2));
             for codepoint in fed_auth_ext.fed_auth_token.encode_utf16() {
-                token.write_u16::<LittleEndian>(codepoint)?;
+                token.extend_from_slice(&codepoint.to_le_bytes());
             }
-            let mut token = token.into_inner();
 
             // options (1) + TokenLength(4) + Token.length + nonce.length
             let feature_ext_length =
@@ -407,6 +476,12 @@ impl<'a> LoginMessage<'a> {
 
         cursor.set_position(0);
         cursor.write_u32::<LittleEndian>(cursor.get_ref().len() as u32)?;
+
+        debug_assert_eq!(
+            reserved,
+            cursor.get_ref().capacity(),
+            "LOGIN7 buffer reallocated; encoded_len_upper_bound is too small"
+        );
 
         Ok(Zeroizing::new(cursor.into_inner()))
     }
@@ -632,5 +707,34 @@ mod tests {
         let decoded = LoginMessage::decode(&mut payload).expect("decode should succeed");
 
         assert_eq!(login, decoded);
+    }
+
+    // The debug_assert in `encode_to_vec` fails if the buffer holding the
+    // credentials ever reallocates; exercise it with fields far larger than
+    // the old fixed 512-byte reservation, including multi-byte characters.
+    #[test]
+    fn large_credentials_do_not_reallocate_the_login_buffer() {
+        let big = "pässwörd-€-".repeat(200);
+        let mut login = LoginMessage::new();
+        login.user_name("user-".repeat(100));
+        login.password(big.clone());
+        login.db_name("db-".repeat(100));
+        let encoded = login.clone().encode_to_vec().unwrap();
+        assert!(encoded.len() > 4096);
+
+        let mut aad = LoginMessage::new();
+        aad.aad_token("t".repeat(20_000), true, Some([7u8; 32]));
+        let encoded = aad.encode_to_vec().unwrap();
+        assert!(encoded.len() > 40_000);
+    }
+
+    #[test]
+    fn login_debug_hides_password_and_token() {
+        let mut login = LoginMessage::new();
+        login.password("hunter2-secret");
+        login.aad_token("aad-secret-token", true, None);
+        let shown = format!("{login:?}");
+        assert!(!shown.contains("hunter2"), "{shown}");
+        assert!(!shown.contains("aad-secret"), "{shown}");
     }
 }
