@@ -256,31 +256,8 @@ impl<'a> QueryStream<'a> {
 
     /// Collects results from all queries in the stream into memory in the order
     /// of querying.
-    pub async fn into_results(mut self) -> crate::Result<Vec<Vec<Row>>> {
-        let mut results: Vec<Vec<Row>> = Vec::new();
-
-        // Every stream starts with metadata for the first result set (see
-        // this type's own doc comment), so this first item only tells us
-        // whether there's a result set at all; its content is otherwise
-        // irrelevant here.
-        let mut result: Vec<Row> = if self.try_next().await?.is_some() {
-            Vec::new()
-        } else {
-            return Ok(results);
-        };
-
-        while let Some(item) = self.try_next().await? {
-            if let QueryItem::Row(row) = item {
-                result.push(row);
-            } else {
-                results.push(result);
-                result = Vec::new();
-            }
-        }
-
-        results.push(result);
-
-        Ok(results)
+    pub async fn into_results(self) -> crate::Result<Vec<Vec<Row>>> {
+        collect_results(self).await
     }
 
     /// Collects the output of the first query, dropping any further
@@ -494,5 +471,128 @@ impl OutputParams {
             .ok_or_else(|| Error::Conversion(format!("no such output parameter: {name}").into()))?;
 
         T::from_sql(&found.value)
+    }
+}
+
+/// Groups a stream of query items into result sets: each `Metadata` item
+/// starts a new set, and rows go into the current one. An empty result set
+/// (metadata with no rows) is kept, which is the #385 fix (d346db2). A row
+/// with no preceding metadata isn't dropped, though `QueryStream` now
+/// rejects that case outright (68345bd). Ported from upstream Tiberius
+/// (tiberius-rs/tiberius 38896ba), which made this a standalone function so
+/// it can be unit-tested over a plain stream.
+async fn collect_results<S>(mut stream: S) -> crate::Result<Vec<Vec<Row>>>
+where
+    S: Stream<Item = crate::Result<QueryItem>> + Unpin,
+{
+    let mut results: Vec<Vec<Row>> = Vec::new();
+    let mut current: Option<Vec<Row>> = None;
+
+    while let Some(item) = stream.try_next().await? {
+        match item {
+            QueryItem::Metadata(_) => {
+                // A new result set begins. Flush the previous one (if any) and
+                // open a fresh, empty set so a zero-row result still produces an
+                // inner Vec at the correct position.
+                if let Some(previous) = current.take() {
+                    results.push(previous);
+                }
+                current = Some(Vec::new());
+            }
+            QueryItem::Row(row) => {
+                // Rows are always preceded by their metadata in a well-formed
+                // stream, so `current` is normally `Some`. Be defensive and open
+                // a result set on the fly rather than discard a leading row.
+                current.get_or_insert_with(Vec::new).push(row);
+            }
+        }
+    }
+
+    if let Some(last) = current.take() {
+        results.push(last);
+    }
+
+    Ok(results)
+}
+
+#[cfg(test)]
+mod collect_results_tests {
+    use super::*;
+    use crate::row::ColumnType;
+    use crate::tds::codec::TokenRow;
+    use crate::Column;
+    use futures_util::stream;
+
+    fn columns() -> Arc<Vec<Column>> {
+        Arc::new(vec![Column::new("c".to_string(), ColumnType::Int4)])
+    }
+
+    fn meta(cols: &Arc<Vec<Column>>, result_index: usize) -> QueryItem {
+        QueryItem::metadata(cols.clone(), result_index)
+    }
+
+    fn row(cols: &Arc<Vec<Column>>, result_index: usize) -> QueryItem {
+        QueryItem::Row(Row {
+            columns: cols.clone(),
+            data: TokenRow::new(),
+            result_index,
+        })
+    }
+
+    async fn collect(items: Vec<QueryItem>) -> Vec<Vec<Row>> {
+        let stream = stream::iter(items.into_iter().map(Ok::<_, crate::error::Error>));
+        collect_results(stream).await.expect("collect_results")
+    }
+
+    #[tokio::test]
+    async fn empty_stream_yields_no_result_sets() {
+        assert!(collect(vec![]).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn metadata_without_rows_yields_one_empty_result_set() {
+        let cols = columns();
+        let results = collect(vec![meta(&cols, 0)]).await;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_empty());
+    }
+
+    #[tokio::test]
+    async fn multiple_empty_result_sets_are_preserved() {
+        let cols = columns();
+        let results = collect(vec![meta(&cols, 0), meta(&cols, 1)]).await;
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_empty());
+        assert!(results[1].is_empty());
+    }
+
+    #[tokio::test]
+    async fn rows_are_grouped_by_result_set_in_order() {
+        let cols = columns();
+        let results = collect(vec![
+            meta(&cols, 0),
+            row(&cols, 0),
+            row(&cols, 0),
+            meta(&cols, 1),
+            row(&cols, 1),
+        ])
+        .await;
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].len(), 2);
+        assert_eq!(results[1].len(), 1);
+    }
+
+    #[tokio::test]
+    async fn leading_row_is_not_discarded() {
+        // The old implementation consumed and threw away the first stream item,
+        // assuming it was metadata. If a row led, it was silently lost. The
+        // robust implementation keeps every row: a stream of two leading rows
+        // must produce one result set containing BOTH rows (the old logic would
+        // have produced a single-row set).
+        let cols = columns();
+        let results = collect(vec![row(&cols, 0), row(&cols, 0)]).await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].len(), 2);
     }
 }
