@@ -246,6 +246,155 @@ where
     ))))
 }
 
+/// Encodes `value` as a sql_variant: a u32 total length, then the base
+/// type, property bytes and value, mirroring [`decode`]. Any NULL is a zero
+/// total length. Ported from upstream Tiberius (tiberius-rs/tiberius
+/// dd19eeb). Fork changes: an over-long value is an error rather than a
+/// wrapped length, and strings carry a real collation (see the String arm;
+/// upstream's zero collation is rejected by the server).
+pub(crate) fn encode(dst: &mut bytes::BytesMut, value: ColumnData<'_>) -> crate::Result<()> {
+    use bytes::BufMut;
+
+    let too_long = |what: &str, n: usize| {
+        Error::Conversion(
+            format!(
+                "sql_variant: {what} of {n} bytes exceeds the {MAX_VARIANT_PAYLOAD}-byte limit"
+            )
+            .into(),
+        )
+    };
+
+    let mut body = bytes::BytesMut::new();
+    let fixed = |body: &mut bytes::BytesMut, ty: FixedLenType| {
+        body.put_u8(ty as u8);
+        body.put_u8(0);
+    };
+
+    match value {
+        ColumnData::Bit(Some(v)) => {
+            fixed(&mut body, FixedLenType::Bit);
+            body.put_u8(v as u8);
+        }
+        ColumnData::U8(Some(v)) => {
+            fixed(&mut body, FixedLenType::Int1);
+            body.put_u8(v);
+        }
+        ColumnData::I16(Some(v)) => {
+            fixed(&mut body, FixedLenType::Int2);
+            body.put_i16_le(v);
+        }
+        ColumnData::I32(Some(v)) => {
+            fixed(&mut body, FixedLenType::Int4);
+            body.put_i32_le(v);
+        }
+        ColumnData::I64(Some(v)) => {
+            fixed(&mut body, FixedLenType::Int8);
+            body.put_i64_le(v);
+        }
+        ColumnData::F32(Some(v)) => {
+            fixed(&mut body, FixedLenType::Float4);
+            body.put_f32_le(v);
+        }
+        ColumnData::F64(Some(v)) => {
+            fixed(&mut body, FixedLenType::Float8);
+            body.put_f64_le(v);
+        }
+        ColumnData::DateTime(Some(dt)) => {
+            fixed(&mut body, FixedLenType::Datetime);
+            crate::tds::codec::Encode::encode(dt, &mut body)?;
+        }
+        ColumnData::SmallDateTime(Some(dt)) => {
+            fixed(&mut body, FixedLenType::Datetime4);
+            crate::tds::codec::Encode::encode(dt, &mut body)?;
+        }
+        ColumnData::Guid(Some(uuid)) => {
+            body.put_u8(VarLenType::Guid as u8);
+            body.put_u8(0);
+            let mut bytes = *uuid.as_bytes();
+            crate::tds::codec::guid::reorder_bytes(&mut bytes);
+            body.extend_from_slice(&bytes);
+        }
+        ColumnData::Numeric(Some(num)) => {
+            body.put_u8(VarLenType::Numericn as u8);
+            body.put_u8(2);
+            body.put_u8(num.precision());
+            body.put_u8(num.scale());
+            // Numeric's own encoding starts with a length byte, which a
+            // variant value doesn't have.
+            let mut tmp = bytes::BytesMut::new();
+            crate::tds::codec::Encode::encode(num, &mut tmp)?;
+            body.extend_from_slice(&tmp[1..]);
+        }
+        ColumnData::String(Some(s)) => {
+            let utf16: Vec<u8> = s.encode_utf16().flat_map(u16::to_le_bytes).collect();
+            if utf16.len() > MAX_VARIANT_PAYLOAD {
+                return Err(too_long("string", utf16.len()));
+            }
+            body.put_u8(VarLenType::NVarchar as u8);
+            body.put_u8(7);
+            // A real collation is required: SQL Server rejects upstream's
+            // all-zero one with error 8001 ("Meta-information is invalid
+            // for the Sql Variant parameter"), found by live testing. For
+            // nvarchar it only governs comparisons, not storage, so send
+            // SQL_Latin1_General_CP1_CI_AS (LCID 0x0409, flags 0xD0, sort
+            // ID 52), SQL Server's own default.
+            body.put_u32_le(0x00D0_0409);
+            body.put_u8(52);
+            body.put_u16_le(MAX_VARIANT_PAYLOAD as u16);
+            body.extend_from_slice(&utf16);
+        }
+        ColumnData::Binary(Some(b)) => {
+            if b.len() > MAX_VARIANT_PAYLOAD {
+                return Err(too_long("binary value", b.len()));
+            }
+            body.put_u8(VarLenType::BigVarBin as u8);
+            body.put_u8(2);
+            body.put_u16_le(MAX_VARIANT_PAYLOAD as u16);
+            body.extend_from_slice(&b);
+        }
+        #[cfg(feature = "tds73")]
+        ColumnData::Date(Some(date)) => {
+            body.put_u8(VarLenType::Daten as u8);
+            body.put_u8(0);
+            crate::tds::codec::Encode::encode(date, &mut body)?;
+        }
+        #[cfg(feature = "tds73")]
+        ColumnData::Time(Some(time)) => {
+            body.put_u8(VarLenType::Timen as u8);
+            body.put_u8(1);
+            body.put_u8(time.scale());
+            crate::tds::codec::Encode::encode(time, &mut body)?;
+        }
+        #[cfg(feature = "tds73")]
+        ColumnData::DateTime2(Some(dt)) => {
+            body.put_u8(VarLenType::Datetime2 as u8);
+            body.put_u8(1);
+            body.put_u8(dt.time().scale());
+            crate::tds::codec::Encode::encode(dt, &mut body)?;
+        }
+        #[cfg(feature = "tds73")]
+        ColumnData::DateTimeOffset(Some(dto)) => {
+            body.put_u8(VarLenType::DatetimeOffsetn as u8);
+            body.put_u8(1);
+            body.put_u8(dto.datetime2().time().scale());
+            crate::tds::codec::Encode::encode(dto, &mut body)?;
+        }
+        ColumnData::Xml(Some(_)) => {
+            return Err(Error::Conversion(
+                "sql_variant: xml is not a valid sql_variant base type".into(),
+            ))
+        }
+        _ => {
+            dst.put_u32_le(0); // a NULL variant
+            return Ok(());
+        }
+    }
+
+    dst.put_u32_le(body.len() as u32);
+    dst.extend_from_slice(&body);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::decode;
@@ -279,6 +428,34 @@ mod tests {
         assert_eq!(
             run(&variant(0xE7, &props, &text)).await.unwrap(),
             ColumnData::String(Some("hé".into()))
+        );
+    }
+
+    // Every encodable value decodes back to itself.
+    #[tokio::test]
+    async fn encode_decode_round_trip() {
+        use crate::tds::Numeric;
+        for value in [
+            ColumnData::I32(Some(-7)),
+            ColumnData::I64(Some(9_000_000_000)),
+            ColumnData::U8(Some(200)),
+            ColumnData::I16(Some(-300)),
+            ColumnData::Bit(Some(true)),
+            ColumnData::F64(Some(1.25)),
+            ColumnData::F32(Some(0.5)),
+            ColumnData::Numeric(Some(Numeric::new_with_scale(-12345, 2))),
+            ColumnData::String(Some("héllo".into())),
+            ColumnData::Binary(Some((&[1u8, 2, 3][..]).into())),
+            ColumnData::Guid(Some(uuid::Uuid::from_bytes([7; 16]))),
+            ColumnData::String(None),
+        ] {
+            let mut buf = BytesMut::new();
+            super::encode(&mut buf, value.clone()).unwrap();
+            assert_eq!(run(&buf).await.unwrap(), value, "{value:?}");
+        }
+        let mut buf = BytesMut::new();
+        assert!(
+            super::encode(&mut buf, ColumnData::String(Some("x".repeat(4001).into()))).is_err()
         );
     }
 

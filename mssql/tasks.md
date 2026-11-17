@@ -339,7 +339,8 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   - SQL_VARIANT decode/encode (`ee4450b`, `dd19eeb`, `b0cf775`). **Decode
     done** on `upstream/tiberius-0.13-decisions`, with the fixed-length size
     check and checked numeric magnitude. Encode (bulk insert into
-    sql_variant) is still open.
+    sql_variant) is **done** too. It needed a real collation: upstream's
+    all-zero one is rejected with error 8001.
   - CLR UDT columns as `Binary` (`7c1075c`). **Done** on
     `upstream/tiberius-0.13-decisions`, non-breaking (the UDT_INFO names are
     read and dropped; no `TypeInfo::Udt`). The live test is skipped on Azure

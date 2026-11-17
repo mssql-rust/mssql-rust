@@ -216,6 +216,11 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                     dst.put_u8(0);
                 }
             }
+            // Any value into a sql_variant column (bulk insert): written as a
+            // variant of the value's own base type.
+            (value, Some(TypeInfo::VarLenSized(vlc))) if vlc.r#type() == VarLenType::SSVariant => {
+                sql_variant::encode(dst, value)?;
+            }
             (ColumnData::Bit(Some(val)), Some(TypeInfo::FixedLen(FixedLenType::Bit))) => {
                 dst.put_u8(val as u8);
             }

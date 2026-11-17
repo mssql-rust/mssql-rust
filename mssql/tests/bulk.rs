@@ -1078,3 +1078,57 @@ where
 
     Ok(())
 }
+
+// Bulk-inserting into a sql_variant column (ported from upstream Tiberius
+// dd19eeb): each value goes in as a variant of its own base type.
+#[test_on_runtimes]
+async fn bulk_insert_into_sql_variant_column<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("##{}", random_table().await);
+    conn.simple_query(format!(
+        "CREATE TABLE {} (id INT NOT NULL, v sql_variant NULL)",
+        table
+    ))
+    .await?;
+
+    let values = [
+        ColumnData::I32(Some(42)),
+        ColumnData::String(Some("héllo".into())),
+        ColumnData::F64(Some(1.5)),
+        ColumnData::Binary(Some((&[0xDE, 0xAD][..]).into())),
+        ColumnData::I64(None),
+    ];
+    let mut req = conn.bulk_insert(&table).await?;
+    for (i, v) in values.iter().enumerate() {
+        let mut row = TokenRow::new();
+        row.push(ColumnData::I32(Some(i as i32)));
+        row.push(v.clone());
+        req.send(row).await?;
+    }
+    assert_eq!(req.finalize().await?.total(), 5);
+
+    let rows = conn
+        .query(
+            format!(
+                "SELECT v, CAST(SQL_VARIANT_PROPERTY(v, 'BaseType') AS NVARCHAR(30)) \
+                 FROM {} ORDER BY id",
+                table
+            ),
+            &[],
+        )
+        .await?
+        .into_first_result()
+        .await?;
+
+    assert_eq!(Some(42i32), rows[0].get(0));
+    assert_eq!(Some("int"), rows[0].get::<&str, _>(1));
+    assert_eq!(Some("héllo"), rows[1].get::<&str, _>(0));
+    assert_eq!(Some("nvarchar"), rows[1].get::<&str, _>(1));
+    assert_eq!(Some(1.5f64), rows[2].get(0));
+    assert_eq!(Some(&[0xDE, 0xAD][..]), rows[3].get::<&[u8], _>(0));
+    assert_eq!(None, rows[4].get::<&str, _>(1));
+
+    Ok(())
+}

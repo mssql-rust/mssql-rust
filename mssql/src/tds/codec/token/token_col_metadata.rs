@@ -95,6 +95,7 @@ impl<'a> Display for MetaDataColumn<'a> {
                 VarLenType::Text => write!(f, "text")?,
                 VarLenType::Image => write!(f, "image")?,
                 VarLenType::NText => write!(f, "ntext")?,
+                VarLenType::SSVariant => write!(f, "sql_variant")?,
                 VarLenType::Intn => match ctx.len() {
                     1 => write!(f, "tinyint")?,
                     2 => write!(f, "smallint")?,

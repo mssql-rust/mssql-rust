@@ -116,6 +116,11 @@ impl Encode<BytesMut> for VarLenContext {
             VarLenType::Image | VarLenType::Text | VarLenType::NText => {
                 dst.put_u32_le(self.len() as u32);
             }
+            // sql_variant's TYPE_INFO is a u32 max length (bulk insert
+            // COLMETADATA for a sql_variant column).
+            VarLenType::SSVariant => {
+                dst.put_u32_le(self.len() as u32);
+            }
             VarLenType::Xml => (),
             // Encode-side counterpart of the decode-side fix for SSVariant
             // and Udt (TypeInfo::decode, above): those are the only two
@@ -519,12 +524,16 @@ mod tests {
     // above, but still a client-triggerable `todo!()` worth not panicking
     // on either. An observation from review, not a reported finding.
     #[tokio::test]
-    async fn encode_rejects_ssvariant_instead_of_panicking() {
-        let cx = VarLenContext::new(VarLenType::SSVariant, 0, None);
+    async fn ssvariant_type_info_round_trips() {
+        let ti = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::SSVariant, 8016, None));
         let mut buf = BytesMut::new();
-
-        let result = TypeInfo::VarLenSized(cx).encode(&mut buf);
-        assert!(matches!(result, Err(Error::Protocol(_))));
+        ti.clone().encode(&mut buf).unwrap();
+        assert_eq!(
+            TypeInfo::decode(&mut buf.into_sql_read_bytes())
+                .await
+                .unwrap(),
+            ti
+        );
     }
 
     #[tokio::test]
