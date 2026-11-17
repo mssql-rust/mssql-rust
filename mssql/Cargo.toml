@@ -253,3 +253,10 @@ rustls-webpki-roots = ["dep:webpki-roots", "rustls"]
 # Column, ColumnType, ColumnData, TokenRow, Numeric, and the time/xml
 # types), so results can be shipped over the network as JSON.
 serde = ["dep:serde", "uuid/serde"]
+
+# cargo-mutants builds every mutant once in a throwaway copy of the tree: no debug information and no
+# incremental state make each build quicker and smaller. `.cargo/mutants.toml` selects it.
+[profile.mutants]
+inherits = "test"
+debug = "none"
+incremental = false
