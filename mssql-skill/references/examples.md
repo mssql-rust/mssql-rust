@@ -11,11 +11,9 @@ own doc comment).
 - **[`tokio.rs`](../../mssql/examples/tokio.rs)** — the baseline Tokio
   connection: `TcpStream` wrapped with `tokio_util::compat`, then
   `Client::connect`. Reach for this first if you're on Tokio.
-- **[`async-std.rs`](../../mssql/examples/async-std.rs)** — the async-std
-  equivalent; no compat wrapper needed since async-std's `TcpStream` already
-  implements the traits `mssql` expects.
-- **[`smol.rs`](../../mssql/examples/smol.rs)** — same shape as async-std,
-  on the smol runtime.
+- **[`smol.rs`](../../mssql/examples/smol.rs)** — the smol equivalent; no
+  compat wrapper needed since smol's `TcpStream` already implements the
+  traits `mssql` expects.
 
 ## Configuration
 

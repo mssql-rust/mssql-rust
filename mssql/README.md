@@ -39,8 +39,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-See the [`examples/`](examples) directory for more, including [async-std](examples/async-std.rs)
-and [smol](examples/smol.rs), the [`ConfigBuilder`](examples/config_builder.rs)
+See the [`examples/`](examples) directory for more, including
+[smol](examples/smol.rs), the [`ConfigBuilder`](examples/config_builder.rs)
 API, [`IN` lists](examples/in_list.rs), [bulk insert with options](examples/bulk_insert_with_options.rs),
 [calling a stored procedure with `OUTPUT` parameters](examples/call_procedure.rs),
 [TDS 8.0 Strict encryption](examples/strict_encryption.rs),
@@ -119,7 +119,6 @@ an intentional bump — please open an issue.
 | `time`                   | Read and write date and time values using `time` crate types.                                                                    | `disabled` |
 | `rust_decimal`           | Read and write `numeric`/`decimal` values using `rust_decimal`'s `Decimal`.                                                      | `disabled` |
 | `bigdecimal`             | Read and write `numeric`/`decimal` values using `bigdecimal`'s `BigDecimal`.                                                     | `disabled` |
-| `sql-browser-async-std`  | SQL Browser implementation for the `TcpStream` of async-std.                                                                     | `disabled` |
 | `sql-browser-tokio`      | SQL Browser implementation for the `TcpStream` of Tokio.                                                                         | `disabled` |
 | `sql-browser-smol`       | SQL Browser implementation for the `TcpStream` of smol.                                                                          | `disabled` |
 | `integrated-auth-gssapi` | Support for using Integrated Auth via a real Kerberos ticket cache (GSSAPI), Unix only.                                          | `disabled` |
@@ -131,7 +130,7 @@ an intentional bump — please open an issue.
 
 `mssql` does not rely on any protocol when connecting to an SQL Server instance. Instead the `Client` takes a socket that implements the `AsyncRead` and `AsyncWrite` traits from the [futures-rs](https://crates.io/crates/futures) crate.
 
-Currently there are good async implementations for TCP in the [async-std](https://crates.io/crates/async-std), [Tokio](https://crates.io/crates/tokio) and [Smol](https://crates.io/crates/smol) projects. See [`examples/tokio.rs`](examples/tokio.rs), [`examples/async-std.rs`](examples/async-std.rs), and [`examples/smol.rs`](examples/smol.rs).
+Currently there are good async implementations for TCP in the [Tokio](https://crates.io/crates/tokio) and [Smol](https://crates.io/crates/smol) projects. See [`examples/tokio.rs`](examples/tokio.rs) and [`examples/smol.rs`](examples/smol.rs). (async-std support was removed: async-std is discontinued, and its maintainers recommend smol.)
 
 To be able to use them together with `mssql` on Windows platforms with SQL Server, you should make sure that the TCP protocol is enabled, as depending on the edition, this may not be the case. Standard and Enterprise editions will have the setting enabled by default, whereas Developer, Express editions and the Windows Internal Database feature of the Windows Server OS don't.
 To enable the TCP/IP protocol you may want to use  the [server settings](https://docs.microsoft.com/en-us/sql/database-engine/configure-windows/enable-or-disable-a-server-network-protocol) the [command line](https://docs.microsoft.com/en-us/sql/powershell/how-to-enable-tcp-sqlps).

@@ -39,11 +39,6 @@ name = "tls_local"
 required-features = ["rustls"]
 
 [[test]]
-path = "tests/named-instance-async.rs"
-name = "named-instance-async"
-required-features = ["sql-browser-async-std"]
-
-[[test]]
 path = "tests/named-instance-tokio.rs"
 name = "named-instance-tokio"
 required-features = ["sql-browser-tokio"]
@@ -114,11 +109,6 @@ features = ["net", "time"]
 version = "0.7"
 features = ["compat"]
 optional = true
-
-[dependencies.async-std]
-version = "1"
-optional = true
-features = ["attributes"]
 
 [dependencies.jiff]
 version = "0.2.45"
@@ -202,10 +192,6 @@ features = [
 ]
 version = "1.54"
 
-[dev-dependencies.async-std]
-features = ["attributes"]
-version = "1"
-
 [dev-dependencies.runtimes-macro]
 path = "./runtimes-macro"
 
@@ -232,7 +218,6 @@ all = [
     "jiff",
     "time",
     "tds73",
-    "sql-browser-async-std",
     "sql-browser-tokio",
     "sql-browser-smol",
     "integrated-auth-gssapi",
@@ -245,7 +230,6 @@ all = [
 default = ["tds73", "winauth", "native-tls"]
 tds73 = []
 docs = []
-sql-browser-async-std = ["async-std"]
 sql-browser-tokio = ["tokio", "tokio-util"]
 sql-browser-smol = ["async-io", "async-net", "futures-lite"]
 integrated-auth-gssapi = ["libgssapi"]

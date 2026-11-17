@@ -75,10 +75,10 @@ transport. `Client::connect` takes any socket implementing the
 traits — the caller is responsible for creating and connecting that socket.
 In practice:
 
-- **async-std** and **smol**'s `TcpStream` already implement the right
-  traits directly — connect and hand it straight to `Client::connect` (see
-  [`examples/async-std.rs`](../../mssql/examples/async-std.rs) and
-  [`examples/smol.rs`](../../mssql/examples/smol.rs)).
+- **smol**'s `TcpStream` already implements the right traits directly —
+  connect and hand it straight to `Client::connect` (see
+  [`examples/smol.rs`](../../mssql/examples/smol.rs)). async-std support was
+  removed (async-std is discontinued; smol is its recommended successor).
 - **Tokio** uses its own `AsyncRead`/`AsyncWrite` traits, so its
   `TcpStream` needs wrapping with `tokio_util::compat`'s
   `TokioAsyncWriteCompatExt::compat_write()` first (see
@@ -86,8 +86,8 @@ In practice:
   [`README.md`](../../mssql/README.md) quickstart).
 
 This is also why SQL Browser support (resolving a named instance to a port)
-is split into three features — `sql-browser-async-std`,
-`sql-browser-tokio`, `sql-browser-smol` — one per runtime's own `TcpStream`.
+is split into two features — `sql-browser-tokio` and `sql-browser-smol` —
+one per runtime's own `TcpStream`.
 
 ## Choosing a TLS backend
 

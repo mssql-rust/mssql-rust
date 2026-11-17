@@ -280,7 +280,7 @@ jobs:
         database:
           - 2019
         features:
-          - "--no-default-features --features=rustls,jiff,time,tds73,sql-browser-async-std,sql-browser-tokio,sql-browser-smol,integrated-auth-gssapi,rust_decimal,bigdecimal"
+          - "--no-default-features --features=rustls,jiff,time,tds73,sql-browser-tokio,sql-browser-smol,integrated-auth-gssapi,rust_decimal,bigdecimal"
           - "--no-default-features --features=vendored-openssl"
 
     env:

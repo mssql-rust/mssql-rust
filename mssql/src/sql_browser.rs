@@ -1,9 +1,6 @@
 #[cfg(feature = "sql-browser-tokio")]
 mod tokio;
 
-#[cfg(feature = "sql-browser-async-std")]
-mod async_std;
-
 #[cfg(feature = "sql-browser-smol")]
 mod smol;
 
@@ -27,7 +24,6 @@ pub trait SqlBrowser {
 }
 
 #[cfg(any(
-    feature = "sql-browser-async-std",
     feature = "sql-browser-tokio",
     feature = "sql-browser-smol"
 ))]
@@ -73,7 +69,6 @@ fn get_port_from_sql_browser_reply(
 #[cfg(all(
     test,
     any(
-        feature = "sql-browser-async-std",
         feature = "sql-browser-tokio",
         feature = "sql-browser-smol"
     )

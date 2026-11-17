@@ -360,7 +360,8 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
     `upstream/tiberius-0.13-decisions` as `ProcParam::table`, with no macro
     and a validated, bracket-quoted type name instead of
     `format!("DECLARE @P AS {db_type}")` interpolation (#328's objection).
-- [ ] **Drop async-std** (`d1f7e18`): it is unmaintained, and Unreleased
+- [x] **Drop async-std** (`d1f7e18`): **decided 2026-11-17: dropped**, on
+  `upstream/tiberius-0.13-decisions`; smol replaces it, in the test harness too: it is unmaintained, and Unreleased
   is already a breaking window.
 
 ## Skip

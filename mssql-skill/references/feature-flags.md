@@ -16,7 +16,6 @@ trust `Cargo.toml` — it's the thing that actually governs what compiles.
 | `time` | Read/write date-time columns using the `time` crate's types (an alternative to `jiff`). | disabled |
 | `rust_decimal` | Read/write `numeric`/`decimal` columns using `rust_decimal`'s `Decimal`. | disabled |
 | `bigdecimal` | Read/write `numeric`/`decimal` columns using `bigdecimal`'s `BigDecimal`. | disabled |
-| `sql-browser-async-std` | SQL Browser (named-instance resolution) for async-std's `TcpStream`. | disabled |
 | `sql-browser-tokio` | SQL Browser for Tokio's `TcpStream`. | disabled |
 | `sql-browser-smol` | SQL Browser for smol's `TcpStream`. | disabled |
 | `integrated-auth-gssapi` | Integrated auth (log in as the current user) via a real Kerberos ticket cache (GSSAPI), Unix only. | disabled |

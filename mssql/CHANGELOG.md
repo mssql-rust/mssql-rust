@@ -145,6 +145,12 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Changed
 
+- BREAKING: async-std support is removed. async-std is discontinued
+  (RUSTSEC-2025-0052), and its maintainers recommend smol. The
+  `sql-browser-async-std` feature is gone: use `sql-browser-smol`, which has
+  the same `TcpStream::connect_named` API. `Client` itself still works over
+  any futures-rs `AsyncRead + AsyncWrite`. Upstream Tiberius 0.13 made the
+  same change.
 - BREAKING (rustls): `trust_cert_ca` / `trust_cert_ca_bundle` (and
   `TrustServerCertificateCA=`) now *add* the CA to the system trust store,
   as they already did on native-tls and vendored-openssl and as documented.

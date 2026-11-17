@@ -12,9 +12,8 @@ all-features = true
 # absent from Cargo.lock) and RUSTSEC-2026-0097 (rand 0.7.3 is outside its
 # affected range) aren't. Remove an entry as soon as a real fix is released.
 ignore = [
-  { id = "RUSTSEC-2025-0052", reason = "async-std is a deliberately supported optional runtime" },
   { id = "RUSTSEC-2023-0071", reason = "rsa via sspi/picky; sspi-rs only uses NTLM, which never touches RSA" },
-  { id = "RUSTSEC-2026-0441", reason = "pin-utils (unmaintained, not vulnerable) via async-std and sspi's async-dnssd; no maintained release of either drops it" },
+  { id = "RUSTSEC-2026-0441", reason = "pin-utils (unmaintained, not vulnerable) via sspi's async-dnssd; no maintained release drops it" },
 ]
 
 [licenses]

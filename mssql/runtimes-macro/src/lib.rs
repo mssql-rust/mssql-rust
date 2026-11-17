@@ -40,20 +40,22 @@ pub fn test_on_runtimes(
         proc_macro2::Ident::new(&conn_str_ident_str, proc_macro2::Span::call_site());
 
     let func_name = func.sig.ident.clone();
-    let async_std_test = quote::format_ident!("{}_{}", func_name, "async_std");
+    // The second runtime was async-std until it was dropped (discontinued,
+    // RUSTSEC-2025-0052); smol is its maintainers' recommended successor.
+    let smol_test = quote::format_ident!("{}_{}", func_name, "smol");
     let tokio_test = quote::format_ident!("{}_{}", func_name, "tokio");
 
     let tokens = quote::quote! {
         #func
 
         #[test]
-        fn #async_std_test()-> Result<()> {
+        fn #smol_test()-> Result<()> {
             LOGGER_SETUP.call_once(|| {
                 env_logger::init();
             });
-            async_std::task::block_on(async {
+            smol::block_on(async {
                 let config = mssql::Config::from_ado_string(&#conn_str_ident)?;
-                let tcp = async_std::net::TcpStream::connect(config.get_addr()).await?;
+                let tcp = smol::net::TcpStream::connect(config.get_addr()).await?;
                 tcp.set_nodelay(true)?;
                 let mut client = mssql::Client::connect(config, tcp).await?;
 
