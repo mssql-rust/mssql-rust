@@ -266,10 +266,10 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
 - [x] **Money hardening** (done on the backlog branch): NaN/inf/out-of-range money saturates silently;
   no Numeric→Money arm; NOT NULL money columns (`FixedLen`) can't be
   bulk-inserted (`302cfe4`, `e0a65d8`, `1d91e18`, `8510d35`).
-- [ ] **Token-body desync**: ERROR/INFO/LOGINACK parsed straight off the
+- [x] **Token-body desync** (done on the backlog branch): ERROR/INFO/LOGINACK parsed straight off the
   stream instead of within their declared Length; ORDER odd length
   (`bf96855`).
-- [ ] **RPC name lengths**: proc name `as u16` truncation (`acaa4a4`) and
+- [x] **RPC name lengths** (done on the backlog branch): proc name `as u16` truncation (`acaa4a4`) and
   the param-name `u8` counter, which overflows past 255 UTF-16 units. That
   second one is unfixed upstream too, and `ProcParam` names are
   caller-supplied.

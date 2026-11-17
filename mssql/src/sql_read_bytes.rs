@@ -219,7 +219,9 @@ pub(crate) trait SqlReadBytes: AsyncRead + Unpin {
         ReadU8::new(self)
     }
 
-    // Read a single big-endian u32 value.
+    // Read a single big-endian u32 value. (LOGINACK, its only user, now
+    // parses from a bounded `TokenBody` instead.)
+    #[allow(dead_code)]
     fn read_u32(&mut self) -> ReadU32Be<&mut Self>
     where
         Self: Unpin,
@@ -387,12 +389,18 @@ pub(crate) mod test_utils {
         type T = BytesMutReader;
 
         fn into_sql_read_bytes(self) -> Self::T {
-            BytesMutReader { buf: self }
+            BytesMutReader {
+                buf: self,
+                context: Context::new(),
+            }
         }
     }
 
     pub(crate) struct BytesMutReader {
         buf: BytesMut,
+        // A default context, so decoders that consult it (e.g. ERROR's
+        // version-dependent line width) can be unit-tested.
+        context: Context,
     }
 
     impl AsyncRead for BytesMutReader {
@@ -423,11 +431,11 @@ pub(crate) mod test_utils {
         }
 
         fn context(&self) -> &Context {
-            todo!()
+            &self.context
         }
 
         fn context_mut(&mut self) -> &mut Context {
-            todo!()
+            &mut self.context
         }
     }
 }

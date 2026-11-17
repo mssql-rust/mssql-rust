@@ -73,6 +73,12 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
   than a panic.
 - Reserved COLMETADATA flag bits and DONE status bits from newer servers
   no longer fail the result set.
+- ERROR, INFO and LOGINACK tokens are parsed within their declared length,
+  so a length that disagrees with the fields no longer desyncs every later
+  token. An odd-length ORDER token is an error.
+- An RPC parameter name longer than 255 UTF-16 code units, or a procedure
+  name longer than 65535, is an error. Before, the length wrapped or was
+  truncated and the request was malformed.
 - `examples/aad-auth.rs` requested the wrong token scope; Azure SQL needs
   `https://database.windows.net/.default`.
 

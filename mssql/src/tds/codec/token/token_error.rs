@@ -22,20 +22,21 @@ impl TokenError {
     where
         R: SqlReadBytes + Unpin,
     {
-        let _length = src.read_u16_le().await? as usize;
+        let wide_line = src.context().version() > FeatureLevel::SqlServer2005;
+        let mut body = super::TokenBody::read(src, "ERROR").await?;
 
-        let code = src.read_u32_le().await?;
-        let state = src.read_u8().await?;
-        let class = src.read_u8().await?;
+        let code = body.u32_le()?;
+        let state = body.u8()?;
+        let class = body.u8()?;
 
-        let message = src.read_us_varchar().await?;
-        let server = src.read_b_varchar().await?;
-        let procedure = src.read_b_varchar().await?;
+        let message = body.us_varchar()?;
+        let server = body.b_varchar()?;
+        let procedure = body.b_varchar()?;
 
-        let line = if src.context().version() > FeatureLevel::SqlServer2005 {
-            src.read_u32_le().await?
+        let line = if wide_line {
+            body.u32_le()?
         } else {
-            src.read_u16_le().await? as u32
+            body.u16_le()? as u32
         };
 
         let token = TokenError {

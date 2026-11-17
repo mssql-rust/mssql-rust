@@ -11,7 +11,16 @@ impl TokenOrder {
     where
         R: SqlReadBytes + Unpin,
     {
-        let len = src.read_u16_le().await? / 2;
+        // ORDER is a list of u16 column numbers; an odd byte length used to
+        // be silently rounded down, leaving a stray byte that desynced the
+        // stream (upstream Tiberius bf96855).
+        let byte_len = src.read_u16_le().await?;
+        if byte_len % 2 != 0 {
+            return Err(crate::Error::Protocol(
+                format!("ORDER: odd token length {byte_len}").into(),
+            ));
+        }
+        let len = byte_len / 2;
 
         let mut column_indexes = Vec::with_capacity(len as usize);
 
