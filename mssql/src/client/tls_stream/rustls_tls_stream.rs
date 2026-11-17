@@ -16,7 +16,7 @@ use tokio_rustls::{
             danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
             WantsClientCert,
         },
-        crypto::ring,
+        crypto::{ring, CryptoProvider},
         pki_types::{pem::PemObject, CertificateDer, ServerName, UnixTime},
         version, ClientConfig, ConfigBuilder, DigitallySignedStruct, Error as RustlsError,
         RootCertStore, SignatureScheme, WantsVerifier,
@@ -30,6 +30,42 @@ impl From<tokio_rustls::rustls::Error> for Error {
     fn from(e: tokio_rustls::rustls::Error) -> Self {
         crate::Error::Tls(e.to_string())
     }
+}
+
+/// Turns a certificate-validation failure during the TLS handshake into an
+/// `Error::Tls` that names the remedies (upstream issue #327). tokio-rustls
+/// wraps the `rustls::Error` in an `io::Error`, and its raw message ("invalid
+/// peer certificate ... UnsupportedCertVersion") never says what to do.
+/// Every other I/O error passes through unchanged. Ported from upstream
+/// Tiberius (tiberius-rs/tiberius 610154f).
+fn map_handshake_error(err: io::Error, trust: &TrustConfig) -> Error {
+    // Under TrustAll the verifier never rejects a certificate.
+    if !matches!(trust, TrustConfig::TrustAll) {
+        if let Some(RustlsError::InvalidCertificate(cert_err)) =
+            err.get_ref().and_then(|e| e.downcast_ref::<RustlsError>())
+        {
+            let hint = if cert_err.to_string().contains("UnsupportedCertVersion") {
+                " The server presented a certificate with an X.509 version rustls \
+                 doesn't accept, which often happens with the self-signed certificate \
+                 SQL Server generates for itself."
+            } else {
+                ""
+            };
+
+            return Error::Tls(format!(
+                "the server's certificate was rejected during the TLS handshake: \
+                 {cert_err}.{hint} To connect anyway: (1) trust its CA with \
+                 `Config::trust_cert_ca(path)` or `trust_cert_ca_bundle(bytes)`; \
+                 (2) skip validation with `Config::trust_cert()` (accepts any \
+                 certificate; only safe on a trusted network); or (3) build mssql \
+                 with the `native-tls` backend, which is more lenient with legacy \
+                 certificates. SQL Server performs a TLS handshake during login even \
+                 with `Encrypt=false`, so this can happen regardless of that setting."
+            ));
+        }
+    }
+
+    Error::from(err)
 }
 
 pub(crate) struct TlsStream<S: AsyncRead + AsyncWrite + Unpin + Send>(
@@ -105,7 +141,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
     pub(super) async fn new(config: &Config, stream: S) -> crate::Result<Self> {
         event!(Level::INFO, "Performing a TLS handshake");
 
-        let builder = ClientConfig::builder_with_provider(Arc::new(ring::default_provider()))
+        // Honor a process-wide CryptoProvider if the application installed one
+        // (`CryptoProvider::install_default`), e.g. aws-lc-rs or a FIPS
+        // provider; otherwise use this crate's default, ring. Ported from
+        // upstream Tiberius 7235f4c, with the fallback kept at ring.
+        let provider = CryptoProvider::get_default()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(ring::default_provider()));
+
+        let builder = ClientConfig::builder_with_provider(provider)
             .with_protocol_versions(&[&version::TLS12])
             .map_err(|e| crate::Error::Tls(e.to_string()))?;
 
@@ -219,7 +263,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
 
         let tls_stream = connector
             .connect(get_server_name(config)?, stream.compat())
-            .await?;
+            .await
+            .map_err(|e| map_handshake_error(e, &config.trust))?;
 
         Ok(TlsStream(tls_stream.compat()))
     }
@@ -317,5 +362,77 @@ impl ConfigBuilderExt for ConfigBuilder<ClientConfig, WantsVerifier> {
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
         self.with_root_certificates(roots)
+    }
+}
+
+#[cfg(test)]
+mod handshake_error_tests {
+    use super::*;
+    use tokio_rustls::rustls::{CertificateError, OtherError};
+
+    fn cert_io_error(cert_err: CertificateError) -> io::Error {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            RustlsError::InvalidCertificate(cert_err),
+        )
+    }
+
+    // webpki's UnsupportedCertVersion reaches rustls as
+    // `CertificateError::Other(..)` whose Debug text is that name.
+    #[derive(Debug)]
+    struct UnsupportedCertVersion;
+    impl std::fmt::Display for UnsupportedCertVersion {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("UnsupportedCertVersion")
+        }
+    }
+    impl std::error::Error for UnsupportedCertVersion {}
+
+    #[test]
+    fn certificate_failures_become_actionable_tls_errors() {
+        let other = CertificateError::Other(OtherError(Arc::new(UnsupportedCertVersion)));
+        let msg = map_handshake_error(cert_io_error(other), &TrustConfig::Default).to_string();
+        for needle in [
+            "trust_cert_ca",
+            "trust_cert()",
+            "native-tls",
+            "X.509 version",
+        ] {
+            assert!(msg.contains(needle), "{needle}: {msg}");
+        }
+
+        let err = map_handshake_error(
+            cert_io_error(CertificateError::UnknownIssuer),
+            &TrustConfig::Default,
+        );
+        assert!(matches!(err, Error::Tls(_)), "{err:?}");
+        assert!(!err.to_string().contains("X.509 version"));
+    }
+
+    #[test]
+    fn other_io_errors_pass_through() {
+        let err = map_handshake_error(
+            io::Error::new(io::ErrorKind::ConnectionReset, "reset"),
+            &TrustConfig::Default,
+        );
+        assert!(matches!(err, Error::Io { .. }), "{err:?}");
+
+        let err = map_handshake_error(
+            cert_io_error(CertificateError::UnknownIssuer),
+            &TrustConfig::TrustAll,
+        );
+        assert!(matches!(err, Error::Io { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn process_default_provider_is_honored_or_falls_back_to_ring() {
+        // Whatever is installed (nothing, in this test binary), building a
+        // config with the resolved provider must work.
+        let provider = CryptoProvider::get_default()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(ring::default_provider()));
+        assert!(ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&version::TLS12])
+            .is_ok());
     }
 }

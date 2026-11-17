@@ -23,17 +23,14 @@ where
     let text = match collation {
         // TEXT
         Some(collation) => {
-            let encoder = collation.encoding()?;
+            let codec = collation.codec()?;
             // `text_len` is an untrusted u32: read in bounded windows
             // instead of reserving up to 4 GiB up front.
             let text_len = src.read_u32_le().await? as usize;
             let mut buf = Vec::new();
             crate::sql_read_bytes::read_bytes_into(src, &mut buf, text_len).await?;
 
-            encoder
-                .decode_without_bom_handling_and_without_replacement(buf.as_ref())
-                .ok_or_else(|| Error::Encoding("invalid sequence".into()))?
-                .to_string()
+            codec.decode_with(buf.as_ref(), src.context().lossy_codepage_decoding())?
         }
         // NTEXT
         None => {

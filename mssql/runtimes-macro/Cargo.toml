@@ -4,6 +4,10 @@ version = "0.1.0"
 authors = ["Eric Sheppard <eric@eigenmo.de>"]
 edition = "2021"
 rust-version.workspace = true
+# Same dual license as the rest of this repository (LICENSE-MIT.txt,
+# LICENSE-APACHE.txt). Internal test-only proc-macro, never published.
+license = "MIT OR Apache-2.0"
+publish = false
 
 [lib]
 proc-macro = true

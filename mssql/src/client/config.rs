@@ -33,6 +33,7 @@ pub struct Config {
     pub(crate) auth: AuthMethod,
     pub(crate) readonly: bool,
     pub(crate) send_string_parameters_as_unicode: bool,
+    pub(crate) lossy_codepage_decoding: bool,
     pub(crate) multi_subnet_failover: bool,
     pub(crate) packet_size: Option<u32>,
 }
@@ -79,6 +80,7 @@ impl Default for Config {
             auth: AuthMethod::None,
             readonly: false,
             send_string_parameters_as_unicode: true,
+            lossy_codepage_decoding: false,
             multi_subnet_failover: false,
             packet_size: None,
         }
@@ -287,6 +289,25 @@ impl Config {
         self.send_string_parameters_as_unicode = enabled;
     }
 
+    /// Decode `char`/`varchar`/`text` values leniently: a byte sequence that
+    /// is invalid in the column's code page becomes U+FFFD instead of failing
+    /// the whole row with `Error::Encoding`. Useful for legacy data that was
+    /// stored through a mismatched code page. Encoding (bulk insert,
+    /// parameters) stays strict either way. `nvarchar`/`ntext` are already
+    /// decoded leniently.
+    ///
+    /// - Defaults to `false`.
+    ///
+    /// Ported from upstream Tiberius (tiberius-rs/tiberius 35605c9).
+    pub fn lossy_codepage_decoding(&mut self, enabled: bool) {
+        self.lossy_codepage_decoding = enabled;
+    }
+
+    /// Whether [`lossy_codepage_decoding`](Self::lossy_codepage_decoding) is on.
+    pub fn get_lossy_codepage_decoding(&self) -> bool {
+        self.lossy_codepage_decoding
+    }
+
     /// Sets the `MultiSubnetFailover` flag, hinting that the target is a SQL
     /// Server Always On availability group listener. When enabled, all of
     /// the listener's resolved IP addresses are connected to in parallel
@@ -371,15 +392,46 @@ impl Config {
     ///
     /// |Parameter|Allowed values|Description|
     /// |--------|--------|--------|
-    /// |`server`|`<string>`|The name or network address of the instance of SQL Server to which to connect. The port number can be specified after the server name. The correct form of this parameter is either `tcp:host,port` or `tcp:host\\instance`|
-    /// |`IntegratedSecurity`|`true`,`false`,`yes`,`no`|Toggle between Windows/Kerberos authentication and SQL authentication.|
+    /// |`server`, `data source`|`<string>`|The name or network address of the instance of SQL Server to which to connect. The port number can be specified after the server name. The correct form of this parameter is either `tcp:host,port` or `tcp:host\\instance`|
+    /// |`IntegratedSecurity`, `Integrated Security`|`true`,`false`,`yes`,`no`|Toggle between Windows/Kerberos authentication and SQL authentication.|
     /// |`uid`,`username`,`user`,`user id`|`<string>`|The SQL Server login account.|
-    /// |`password`,`pwd`|`<string>`|The password for the SQL Server account logging on.|
-    /// |`database`|`<string>`|The name of the database.|
-    /// |`TrustServerCertificate`|`true`,`false`,`yes`,`no`|Specifies whether the driver trusts the server certificate when connecting using TLS. Cannot be used toghether with `TrustServerCertificateCA`|
-    /// |`TrustServerCertificateCA`|`<path>`|Path to a `pem`, `crt` or `der` certificate file. Cannot be used together with `TrustServerCertificate`|
-    /// |`encrypt`|`true`,`false`,`yes`,`no`,`DANGER_PLAINTEXT`|Specifies whether the driver uses TLS to encrypt communication.|
+    /// |`password`,`pwd`|`<string>`|The password for the SQL Server account logging on. See *Special characters in values* below.|
+    /// |`database`, `initial catalog`, `databasename`|`<string>`|The name of the database.|
+    /// |`TrustServerCertificate`|`true`,`false`,`yes`,`no`|Specifies whether the driver trusts the server certificate when connecting using TLS. Cannot be used together with `TrustServerCertificateCA`.|
+    /// |`TrustServerCertificateCA`|`<path>`|Path to a `pem`, `crt` or `der` certificate file. Cannot be used together with `TrustServerCertificate`.|
+    /// |`HostNameInCertificate`, `HostName In Certificate`|`<string>`|The host name to validate the server certificate against, when it differs from `server`.|
+    /// |`encrypt`|`true`,`false`,`yes`,`no`,`strict`,`DANGER_PLAINTEXT`|Specifies whether the driver uses TLS to encrypt communication; `strict` is TDS 8.0. Without a TLS backend compiled in, any value requesting encryption is an error.|
     /// |`Application Name`, `ApplicationName`|`<string>`|Sets the application name for the connection.|
+    /// |`ApplicationIntent`|`ReadOnly`,`ReadWrite`|`ReadOnly` (any letter case) requests read-only intent, e.g. for Always On read-only routing.|
+    /// |`WorkstationID`, `Workstation ID`|`<string>`|The client/workstation name reported to the server.|
+    /// |`MultiSubnetFailover`|`true`,`false`,`yes`,`no`|Try every address the server name resolves to in parallel (named-instance connects only).|
+    ///
+    /// # Special characters in values
+    ///
+    /// Pairs are separated by `;`, and each pair is split on its **first**
+    /// `=`, so a value may itself contain `=`. A base64 or generated password
+    /// with `=` padding (`password=Zm9vYmFy==`) needs no quoting.
+    ///
+    /// A value that contains `;`, starts with a quote or `{`, or has leading or
+    /// trailing spaces you want to keep must be quoted. Use single quotes,
+    /// double quotes, or braces, and double the enclosing quote to embed it:
+    ///
+    /// - `password='p@ss;word'`
+    /// - `password="say ""hi"""` (the value is `say "hi"`)
+    /// - `password={p@ss;word}` (braces can't contain `}`; use quotes for that)
+    ///
+    /// Do **not** URL-encode the value: `%24` is sent to the server literally,
+    /// not decoded to `$`, which is a common cause of login failures (upstream
+    /// issue #333). Only ASCII connection strings are accepted. For a
+    /// non-ASCII password, or to avoid escaping altogether, build the `Config`
+    /// programmatically, which passes values through verbatim:
+    ///
+    /// ```
+    /// # use mssql::{AuthMethod, Config};
+    /// let mut config = Config::new();
+    /// config.host("localhost");
+    /// config.authentication(AuthMethod::sql_server("sa", "pässwörd;={}"));
+    /// ```
     ///
     /// [ADO.NET connection string]: https://docs.microsoft.com/en-us/dotnet/framework/data/adonet/connection-strings
     pub fn from_ado_string(s: &str) -> crate::Result<Self> {
@@ -587,6 +639,12 @@ impl ConfigBuilder {
     /// See [`Config::readonly`].
     pub fn readonly(&mut self, readonly: bool) -> &mut Self {
         self.inner.readonly(readonly);
+        self
+    }
+
+    /// See [`Config::lossy_codepage_decoding`].
+    pub fn lossy_codepage_decoding(&mut self, enabled: bool) -> &mut Self {
+        self.inner.lossy_codepage_decoding(enabled);
         self
     }
 
@@ -800,7 +858,9 @@ pub(crate) trait ConfigString {
     fn readonly(&self) -> bool {
         self.dict()
             .get("applicationintent")
-            .filter(|val| *val == "ReadOnly")
+            // ADO.NET treats the value case-insensitively (upstream Tiberius
+            // 97bbbfd); `applicationintent=readonly` used to be ignored.
+            .filter(|val| val.trim().eq_ignore_ascii_case("ReadOnly"))
             .is_some()
     }
 

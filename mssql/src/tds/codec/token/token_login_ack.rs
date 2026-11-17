@@ -20,15 +20,15 @@ impl TokenLoginAck {
     where
         R: SqlReadBytes + Unpin,
     {
-        let _length = src.read_u16_le().await?;
+        let mut body = super::TokenBody::read(src, "LOGINACK").await?;
 
-        let interface = src.read_u8().await?;
+        let interface = body.u8()?;
 
-        let tds_version = FeatureLevel::try_from(src.read_u32().await?)
+        let tds_version = FeatureLevel::try_from(body.u32_be()?)
             .map_err(|_| Error::Protocol("Login ACK: Invalid TDS version".into()))?;
 
-        let prog_name = src.read_b_varchar().await?;
-        let version = src.read_u32_le().await?;
+        let prog_name = body.b_varchar()?;
+        let version = body.u32_le()?;
 
         Ok(TokenLoginAck {
             interface,

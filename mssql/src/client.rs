@@ -464,6 +464,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         columns: &[&str],
         collations: bool,
     ) -> crate::Result<(Vec<MetaDataColumn<'static>>, Vec<(String, Option<String>)>)> {
+        // `table` and `columns` are interpolated into the batch below (T-SQL
+        // can't parameterize identifiers). Reject input that can't be a
+        // legitimate identifier before building any SQL. This is
+        // defense-in-depth, not a way to make untrusted input safe. Every
+        // bulk-insert entry point and `column_metadata` come through here.
+        validate_sql_identifier("table", table)?;
+        for column in columns {
+            validate_sql_identifier("column", column)?;
+        }
+
         self.connection.flush_stream().await?;
 
         let columns_list = columns.join(", ");
@@ -702,7 +712,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         let ts = TokenStream::new(&mut self.connection);
         ts.flush_done().await?;
 
-        BulkLoadRequest::new(&mut self.connection, columns)
+        BulkLoadRequest::new(&mut self.connection, columns, table)
     }
 
     /// Closes this database connection explicitly.
@@ -953,6 +963,170 @@ fn table_collations_sql(table: &str, version: codec::FeatureLevel) -> String {
         literal(schema),
         literal(table_name)
     )
+}
+
+/// Reject an obviously-malformed or dangerous SQL identifier that will be
+/// interpolated directly into a SQL batch because T-SQL does not allow
+/// identifiers or type names to be parameterized. `what` names the kind of
+/// identifier for the error message.
+///
+/// This is cheap defense-in-depth — it does NOT make untrusted input safe. It
+/// rejects input that cannot be a legitimate identifier:
+///
+/// - a NUL byte or any ASCII control character;
+/// - **outside** a `[...]` bracket-quoted segment, any character that is not
+///   identifier-safe. Only alphanumerics and the punctuation needed for real
+///   identifiers/type names are allowed — `_`, `.` (multi-part names like
+///   `dbo.MyType`), `@`/`#` (variable/temp-style names), `*` (a bulk column
+///   list may be `*`), and `(`, `)`, `,` (parameterized types such as
+///   `decimal(10,2)` / `varchar(max)`). Parens must be balanced — an unbalanced
+///   `)` *or* an unclosed `(` is rejected — and both a space and a comma are allowed only *inside*
+///   those parens (e.g. `decimal(18, 4)`); a top-level space or comma is
+///   rejected because it would let one identifier split into several SQL tokens
+///   (a top-level comma would splice a verbatim order hint `a,b` into two
+///   columns). This rejects statement-breaking characters such as `;`, quotes
+///   and `-`, so a value like `1; DROP TABLE Users--` cannot slip through; and
+/// - **inside** a `[...]` bracket-quoted segment anything is allowed except an
+///   unescaped `]` (per the T-SQL bracket-escaping rule a literal `]` must be
+///   doubled as `]]`). The segment must be terminated — an unclosed `[` running
+///   to the end of the string is rejected. A `]` seen outside any bracket is
+///   unbalanced and rejected. A closing `]`, and a top-level closing `)`, are themselves SQL
+///   token boundaries, so a segment may only be followed by `.` (the next part
+///   of a multi-part name) or the end of the string — this stops delimiter-
+///   adjacent splicing such as `[t]UNION(...)` or `foo(1)UNION(...)` that needs
+///   no space.
+///
+/// It deliberately does NOT try to quote or rewrite the identifier, so
+/// multi-part names (`schema.table`), already-bracketed names (`[my table]`,
+/// `[dbo].[my table]`, `[weird]]name]`) and temp tables (`##bulk_test`) keep
+/// working unchanged.
+///
+/// Ported from upstream Tiberius (tiberius-rs/tiberius 7a86677 / 3f47d87).
+/// Fork change: `$` is also allowed, since T-SQL identifiers may contain it
+/// (e.g. `t$1`).
+fn validate_sql_identifier(what: &str, ident: &str) -> crate::Result<()> {
+    if ident.chars().any(|c| c.is_ascii_control()) {
+        return Err(crate::Error::BulkInput(
+            format!("{what} identifier must not contain NUL or control characters").into(),
+        ));
+    }
+
+    // Apply the T-SQL bracket rule: inside a `[...]` quoted identifier a literal
+    // `]` must be doubled (`]]`); a single `]` closes the bracket. A `]` seen
+    // outside of any bracket is unbalanced and rejected. Tracking bracket state
+    // keeps legitimate names like `[dbo].[my table]` and `[weird]]name]`
+    // working while catching stray closing brackets such as `Foo]`.
+    let mut chars = ident.chars().peekable();
+    let mut in_bracket = false;
+    let mut paren_depth: u32 = 0;
+    while let Some(c) = chars.next() {
+        if in_bracket {
+            if c == ']' {
+                if chars.peek() == Some(&']') {
+                    chars.next(); // consume the doubled `]]` escape
+                } else {
+                    in_bracket = false;
+                    // A quoted-identifier segment may only be followed by `.`
+                    // (introducing the next part of a multi-part name) or the
+                    // end of the string. Anything else — e.g. `[t]UNION ...` —
+                    // splices a fresh SQL token directly onto the closing `]`
+                    // (which is itself a token boundary, needing no space), so
+                    // reject it.
+                    match chars.peek() {
+                        None | Some('.') => {}
+                        Some(_) => {
+                            return Err(crate::Error::BulkInput(
+                                format!("{what} identifier has trailing characters after a bracket-quoted segment").into(),
+                            ));
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        match c {
+            '[' => in_bracket = true,
+            ']' => {
+                return Err(crate::Error::BulkInput(
+                    format!("{what} identifier contains an unbalanced `]` bracket").into(),
+                ));
+            }
+            '(' => paren_depth += 1,
+            ')' => {
+                // A `)` with no matching `(` is unbalanced. Left unchecked
+                // (`saturating_sub`) it would sail through and, interpolated
+                // verbatim, could close a caller-supplied enclosing paren early
+                // — e.g. an order hint `col)` desyncing `ORDER(col) ...)`. Reject
+                // it exactly like an unbalanced `]`.
+                if paren_depth == 0 {
+                    return Err(crate::Error::BulkInput(
+                        format!("{what} identifier contains an unbalanced `)`").into(),
+                    ));
+                }
+                paren_depth -= 1;
+                // A parameterized type ends at its closing paren; nothing is a
+                // legitimate continuation after a top-level `)`. Rejecting it
+                // stops `)`-delimited token splicing such as `foo(1)UNION(...)`
+                // (the `)` is a token boundary, so no space is required).
+                if paren_depth == 0 && chars.peek().is_some() {
+                    return Err(crate::Error::BulkInput(
+                        format!("{what} identifier has trailing characters after a closing `)`")
+                            .into(),
+                    ));
+                }
+            }
+            // A space is only legitimate inside a parameterized type's parens
+            // (e.g. `decimal(18, 4)`) or inside a bracket-quoted name (handled
+            // above). A *top-level* space would let a single identifier split
+            // into several SQL tokens (`t UNION SELECT ...`, `t WHERE ...`)
+            // without using any otherwise-blocked character, so reject it.
+            ' ' if paren_depth == 0 => {
+                return Err(crate::Error::BulkInput(
+                    format!("{what} identifier contains a disallowed character").into(),
+                ));
+            }
+            // A comma is only legitimate inside a parameterized type's parens
+            // (`decimal(10,2)`). A *top-level* comma would splice a single
+            // identifier into two — e.g. a verbatim order hint `a,b` becoming
+            // two order columns `a` and `b` — so reject it like a top-level
+            // space.
+            ',' if paren_depth == 0 => {
+                return Err(crate::Error::BulkInput(
+                    format!("{what} identifier contains a disallowed character").into(),
+                ));
+            }
+            // Outside a bracket-quoted segment only identifier-safe characters
+            // are permitted (see the doc comment). Everything else — `;`,
+            // quotes, `-`, etc. — is rejected.
+            c if c.is_alphanumeric() => {}
+            '_' | '.' | '@' | '#' | '$' | ',' | ' ' | '*' => {}
+            _ => {
+                return Err(crate::Error::BulkInput(
+                    format!("{what} identifier contains a disallowed character").into(),
+                ));
+            }
+        }
+    }
+
+    // Reject unbalanced *openers* left dangling at end of input, mirroring the
+    // rejection of unbalanced closers above. An unterminated `[` would quote and
+    // swallow whatever follows when interpolated (e.g. an order hint `[abc`
+    // becoming `ORDER([abc ASC))`); an unclosed `(` leaves an enclosing paren
+    // open. A legitimate identifier/type name never ends mid-bracket or with an
+    // open paren.
+    if in_bracket {
+        return Err(crate::Error::BulkInput(
+            format!("{what} identifier has an unterminated `[` bracket-quoted segment").into(),
+        ));
+    }
+    if paren_depth != 0 {
+        return Err(crate::Error::BulkInput(
+            format!("{what} identifier contains an unbalanced `(`").into(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Bracket-quote `name`, doubling any `]` in it.
@@ -1223,5 +1397,53 @@ mod bulk_collation_tests {
             table_collations_sql("t", FeatureLevel::SqlServer2008),
             "EXEC ..sp_tablecollations_100 N'.[t]'"
         );
+    }
+}
+
+#[cfg(test)]
+mod identifier_tests {
+    use super::validate_sql_identifier;
+
+    #[test]
+    fn accepts_legitimate_identifiers() {
+        for ident in [
+            "Foo",
+            "dbo.Foo",
+            "db..Foo",
+            "##bulk_test",
+            "#temp",
+            "t$1",
+            "Ünïcode",
+            "*",
+            "[my table]",
+            "[dbo].[my table]",
+            "[weird]]name]",
+            "[a;b--c']",
+        ] {
+            assert!(validate_sql_identifier("x", ident).is_ok(), "{ident:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_identifiers_that_would_splice_sql() {
+        for ident in [
+            "Foo\0bar",
+            "Foo\nbar",
+            "Foo]",
+            "a]b",
+            "[my] table]",
+            "[unterminated",
+            "t; DROP TABLE x--",
+            "t UNION SELECT 1",
+            "a,b",
+            "[t]UNION(SELECT 1)",
+            "f(1)UNION(SELECT 1)",
+            "x)",
+            "x(",
+            "'quoted'",
+            "a-b",
+        ] {
+            assert!(validate_sql_identifier("x", ident).is_err(), "{ident:?}");
+        }
     }
 }

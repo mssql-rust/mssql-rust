@@ -220,17 +220,37 @@ where
 
     pub fn try_unfold(self) -> BoxStream<'a, crate::Result<ReceivedToken>> {
         let stream = futures_util::stream::try_unfold(self, |mut this| async move {
-            if this.conn.is_eof() {
-                match this.last_error {
-                    None => return Ok(None),
-                    Some(error) => return Err(error),
+            let ty = loop {
+                if this.conn.is_eof() {
+                    match this.last_error {
+                        None => return Ok(None),
+                        Some(error) => return Err(error),
+                    }
                 }
-            }
 
-            let ty_byte = this.conn.read_u8().await?;
+                let ty_byte = this.conn.read_u8().await?;
 
-            let ty = TokenType::try_from(ty_byte)
-                .map_err(|_| Error::Protocol(format!("invalid token type {:x}", ty_byte).into()))?;
+                let ty = TokenType::try_from(ty_byte).map_err(|_| {
+                    Error::Protocol(format!("invalid token type {:x}", ty_byte).into())
+                })?;
+
+                match ty {
+                    // Browse-mode metadata (`FOR BROWSE`, or a cursor/
+                    // `NO_BROWSETABLE` session) that this client has no use
+                    // for. Both are u16-length-prefixed, so skip them by
+                    // length instead of failing the whole result with
+                    // "unhandled token type". (Upstream Tiberius 8b6e080 and
+                    // 617dc43 decode them; that isn't needed here.)
+                    TokenType::ColInfo | TokenType::TabName => {
+                        let len = this.conn.read_u16_le().await? as usize;
+                        let mut skipped = vec![0u8; len];
+                        futures_util::io::AsyncReadExt::read_exact(&mut this.conn, &mut skipped)
+                            .await?;
+                        event!(Level::TRACE, "skipped {:?} token ({} bytes)", ty, len);
+                    }
+                    ty => break ty,
+                }
+            };
 
             let token = match ty {
                 TokenType::ReturnStatus => this.get_return_status().await?,

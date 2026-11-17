@@ -2,7 +2,6 @@ use super::{AllHeaderTy, Encode, ALL_HEADERS_LEN_TX};
 use crate::{tds::codec::ColumnData, BytesMutWithTypeInfo, Result, TypeInfo};
 use bytes::{BufMut, BytesMut};
 use enumflags2::{bitflags, BitFlags};
-use std::borrow::BorrowMut;
 use std::borrow::Cow;
 
 #[bitflags]
@@ -116,7 +115,14 @@ impl<'a> Encode<BytesMut> for TokenRpcRequest<'a> {
             // tiberius#328 flagged the RPC-by-name path this covers), not
             // just a completion for its own sake.
             RpcProcIdValue::Name(ref name) => {
-                dst.put_u16_le(name.encode_utf16().count() as u16);
+                // `as u16` used to truncate a name past 65535 UTF-16 units,
+                // desyncing the request (upstream Tiberius acaa4a4).
+                let units = u16::try_from(name.encode_utf16().count()).map_err(|_| {
+                    crate::Error::Conversion(
+                        "RPC procedure name is longer than 65535 UTF-16 code units".into(),
+                    )
+                })?;
+                dst.put_u16_le(units);
 
                 for codepoint in name.encode_utf16() {
                     dst.put_u16_le(codepoint);
@@ -136,13 +142,24 @@ impl<'a> Encode<BytesMut> for TokenRpcRequest<'a> {
 
 impl<'a> Encode<BytesMut> for RpcParam<'a> {
     fn encode(self, dst: &mut BytesMut) -> Result<()> {
-        let len_pos = dst.len();
-        let mut length = 0u8;
+        // ParamName is a B_VARCHAR: a u8 count of UTF-16 code units. The old
+        // `length += 1` on a u8 overflowed past 255 (a panic in debug builds,
+        // a wrapped count and a desynced request in release). `ProcParam`
+        // names are caller-supplied, so this is reachable. Unfixed upstream
+        // too; found while porting acaa4a4.
+        let length = u8::try_from(self.name.encode_utf16().count()).map_err(|_| {
+            crate::Error::Conversion(
+                format!(
+                    "RPC parameter name is longer than 255 UTF-16 code units: {:?}",
+                    self.name
+                )
+                .into(),
+            )
+        })?;
 
         dst.put_u8(length);
 
         for codepoint in self.name.encode_utf16() {
-            length += 1;
             dst.put_u16_le(codepoint);
         }
 
@@ -166,9 +183,41 @@ impl<'a> Encode<BytesMut> for RpcParam<'a> {
 
         self.value.encode(&mut dst_fi)?;
 
-        let dst: &mut [u8] = dst.borrow_mut();
-        dst[len_pos] = length;
-
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod name_length_tests {
+    use super::*;
+
+    fn param(name: String) -> RpcParam<'static> {
+        RpcParam {
+            name: name.into(),
+            flags: BitFlags::empty(),
+            value: ColumnData::I32(Some(1)),
+            type_info: None,
+        }
+    }
+
+    #[test]
+    fn over_long_param_name_errors_instead_of_wrapping() {
+        let mut buf = BytesMut::new();
+        assert!(param("p".repeat(256)).encode(&mut buf).is_err());
+
+        let mut buf = BytesMut::new();
+        param("p".repeat(255)).encode(&mut buf).unwrap();
+        assert_eq!(buf[0], 255);
+    }
+
+    #[test]
+    fn over_long_proc_name_errors_instead_of_truncating() {
+        let req = TokenRpcRequest::new(
+            RpcProcIdValue::Name("x".repeat(65_536).into()),
+            Vec::new(),
+            [0; 8],
+        );
+        let mut buf = BytesMut::new();
+        assert!(req.encode(&mut buf).is_err());
     }
 }

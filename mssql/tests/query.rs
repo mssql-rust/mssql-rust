@@ -3279,3 +3279,52 @@ async fn connect_with_custom_packet_size() -> Result<()> {
 
     Ok(())
 }
+
+// `FOR BROWSE` makes the server send COLINFO and TABNAME tokens, which used
+// to fail the whole query with "unhandled token type" / "invalid token type
+// a4". They are now skipped by length.
+#[test_on_runtimes]
+async fn for_browse_query_skips_colinfo_and_tabname<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("##{}", random_table().await);
+
+    conn.simple_query(format!(
+        "CREATE TABLE {} (id INT PRIMARY KEY, v VARCHAR(10), ts ROWVERSION)",
+        table
+    ))
+    .await?
+    .into_results()
+    .await?;
+    conn.simple_query(format!(
+        "INSERT INTO {} (id, v) VALUES (1, 'a'), (2, 'b')",
+        table
+    ))
+    .await?
+    .into_results()
+    .await?;
+
+    let rows = conn
+        .simple_query(format!(
+            "SELECT id, v FROM {} ORDER BY id FOR BROWSE",
+            table
+        ))
+        .await?
+        .into_first_result()
+        .await?;
+
+    assert_eq!(2, rows.len());
+    assert_eq!(Some("b"), rows[1].get::<&str, _>(1));
+
+    // The connection is still usable afterwards.
+    let row = conn
+        .query("SELECT 1", &[])
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+    assert_eq!(Some(1i32), row.get(0));
+
+    Ok(())
+}

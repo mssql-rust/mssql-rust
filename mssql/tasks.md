@@ -255,31 +255,37 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
 
 ## Build next: real value, small to medium, no API decisions needed
 
-- [ ] **Bulk TEXT/NTEXT (fork #352 / error 4804)**: upstream found the
+- [x] **Bulk TEXT/NTEXT (fork #352 / error 4804)**. Done on the backlog
+  branch; the table name is passed via `encode_bulk_col_metadata`, so no
+  public field change was needed.: upstream found the
   format: TableName as a bare US_VARCHAR, no NumParts (`103e044`, with
   `93837ef`, `74c5fa3`), plus the String→Text/NText encode arm from
   `97bbbfd`. Semver: `BaseMetaDataColumn` has pub fields, so carry the
   table name without a struct-literal break, or note it. Verify live. Then
   restore the TEXT column in `bulk_text_keeps_a_non_default_column_collation`.
-- [ ] **Money hardening**: NaN/inf/out-of-range money saturates silently;
+- [x] **Money hardening** (done on the backlog branch): NaN/inf/out-of-range money saturates silently;
   no Numeric→Money arm; NOT NULL money columns (`FixedLen`) can't be
   bulk-inserted (`302cfe4`, `e0a65d8`, `1d91e18`, `8510d35`).
-- [ ] **Token-body desync**: ERROR/INFO/LOGINACK parsed straight off the
+- [x] **Token-body desync** (done on the backlog branch): ERROR/INFO/LOGINACK parsed straight off the
   stream instead of within their declared Length; ORDER odd length
   (`bf96855`).
-- [ ] **RPC name lengths**: proc name `as u16` truncation (`acaa4a4`) and
+- [x] **RPC name lengths** (done on the backlog branch): proc name `as u16` truncation (`acaa4a4`) and
   the param-name `u8` counter, which overflows past 255 UTF-16 units. That
   second one is unfixed upstream too, and `ProcParam` names are
   caller-supplied.
-- [ ] **Poisoned connection after a cancelled multi-packet write**
+- [x] **Poisoned connection after a cancelled multi-packet write** (done on the
+  backlog branch; scoped to in-flight writes, since a bulk load dropped
+  between rows was verified to be recoverable)
   (`3e6afc3`/`3f47d87` `connection.rs`, `bulk_load.rs`): new field and
   plumbing. Complements this fork's Attention-on-drop (`60bde67`).
-- [ ] **Bulk identifier validation** (`7a86677`, `3f47d87`): reject
+- [x] **Bulk identifier validation** (done on the backlog branch; also allows `$`) (`7a86677`, `3f47d87`): reject
   control characters and unbalanced `]` in caller-supplied table/column
   names. Wire it into `fetch_column_metadata` once, not per entry point.
-- [ ] **Tolerate COLINFO / TABNAME tokens** (`FOR BROWSE`) by skipping by
+- [x] **Tolerate COLINFO / TABNAME tokens** (done on the backlog branch) (`FOR BROWSE`) by skipping by
   length. Don't port upstream's decoders (`8b6e080`, `617dc43`).
-- [ ] **CI, urgent**: this fork's Gitleaks job fails on every PR ("License
+- [ ] **CI, urgent**: (Gitleaks CLI, `apt-get update`, the Linux readiness wait
+  and cargo-deny: done on the backlog branch. Only the macOS lane is still
+  open.) This fork's Gitleaks job failed on every PR ("License
   key is required" for an organization). Run the gitleaks CLI directly
   with a verified SHA-256, and add `.gitleaks.toml` allowlisting
   `mssql/docker/certs/` (`47331db`, `1039eb0`, `b448f43`). Also:
@@ -287,20 +293,24 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   readiness wait (`169091d`), and a cargo-deny job using this fork's own
   ignore list (`f823a1b`). The macOS lane currently fails in
   `setup-docker-action`; colima (`b550fc8`) is a candidate.
-- [ ] **Legacy CP437/CP850 collations** (currently "unsupported
+- [x] **Legacy CP437/CP850 collations** (done on the backlog branch, including
+  the opt-in lossy code-page decoding) (currently "unsupported
   encoding") and opt-in lossy code-page decoding (`30f7b36`, `cbacb58`,
   `35605c9`). Then port upstream's CP437/CP850 bulk live test from
   `75d7afc`.
-- [ ] **Small items**: rustls handshake diagnostics for #327 (`610154f`);
-  connection-string docs and error hints for #333 (`0dec9cb`);
-  `Row::builder()` for #383 (`30b059c`); case-insensitive
+- [ ] **Small items**: ~~rustls handshake diagnostics for #327 (`610154f`)~~ (done);
+  ~~connection-string docs and error hints for #333 (`0dec9cb`)~~ (done; the hint
+  is in the ADO parser's error);
+  ~~`Row::builder()` for #383 (`30b059c`)~~ (done); ~~case-insensitive
   `ApplicationIntent` and non-null `I16`→`i32` widening (`97bbbfd`); exact
-  column match before the `r#` fallback (`bf25ac6`); native-tls ALPN
+  column match before the `r#` fallback (`bf25ac6`)~~ (done); ~~native-tls ALPN
   `tds/8.0` for Strict (`dd6d913`; async-native-tls 0.6 has
-  `request_alpns`); honour a process-installed rustls `CryptoProvider`
-  with a **ring** fallback (`7235f4c`); `rustls-webpki` floor (`4ab275b`);
-  unit tests for `PacketHeader` (`0fb4067`), `into_results` (`38896ba`)
-  and FeatureExtAck (`931223f`).
+  `request_alpns`)~~ (done); ~~honour a process-installed rustls `CryptoProvider`
+  with a **ring** fallback (`7235f4c`)~~ (done); `rustls-webpki` floor (`4ab275b`);
+  ~~unit tests for `PacketHeader` (`0fb4067`), `into_results` (`38896ba`)
+  and FeatureExtAck (`931223f`)~~ (done). Still open from this list: the
+  `rustls-webpki` floor (`4ab275b`), which is a dependency declaration, so
+  it belongs in a deliberate dependency-update commit.
 
 ## Needs a decision first: behaviour change or new API surface
 

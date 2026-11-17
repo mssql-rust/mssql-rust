@@ -672,4 +672,19 @@ mod tests {
         assert!("user=sa;password={a}b}".parse::<AdoNetConfig>().is_err());
         Ok(())
     }
+
+    #[test]
+    fn application_intent_readonly_is_case_insensitive() -> crate::Result<()> {
+        for (s, expected) in [
+            ("ApplicationIntent=ReadOnly", true),
+            ("applicationintent=readonly", true),
+            ("ApplicationIntent= READONLY ", true),
+            ("ApplicationIntent=ReadWrite", false),
+            ("server=x", false),
+        ] {
+            let ado: AdoNetConfig = s.parse()?;
+            assert_eq!(expected, ado.readonly(), "{s}");
+        }
+        Ok(())
+    }
 }

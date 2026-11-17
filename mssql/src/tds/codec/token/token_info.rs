@@ -20,15 +20,15 @@ impl TokenInfo {
     where
         R: SqlReadBytes + Unpin,
     {
-        let _length = src.read_u16_le().await?;
+        let mut body = super::TokenBody::read(src, "INFO").await?;
 
-        let number = src.read_u32_le().await?;
-        let state = src.read_u8().await?;
-        let class = src.read_u8().await?;
-        let message = src.read_us_varchar().await?;
-        let server = src.read_b_varchar().await?;
-        let procedure = src.read_b_varchar().await?;
-        let line = src.read_u32_le().await?;
+        let number = body.u32_le()?;
+        let state = body.u8()?;
+        let class = body.u8()?;
+        let message = body.us_varchar()?;
+        let server = body.b_varchar()?;
+        let procedure = body.b_varchar()?;
+        let line = body.u32_le()?;
 
         Ok(TokenInfo {
             number,

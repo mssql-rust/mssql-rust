@@ -7,8 +7,7 @@ use crate::{
 };
 
 use super::{
-    Encode, MetaDataColumn, PacketHeader, PacketStatus, TokenColMetaData, TokenDone, TokenRow,
-    HEADER_BYTES,
+    Encode, MetaDataColumn, PacketHeader, PacketStatus, TokenDone, TokenRow, HEADER_BYTES,
 };
 
 /// A handler for a bulk insert data flow.
@@ -30,15 +29,12 @@ where
     pub(crate) fn new(
         connection: &'a mut Connection<S>,
         columns: Vec<MetaDataColumn<'a>>,
+        table_name: &str,
     ) -> crate::Result<Self> {
         let packet_id = connection.context_mut().next_packet_id();
         let mut buf = BytesMut::new();
 
-        let cmd = TokenColMetaData {
-            columns: columns.clone(),
-        };
-
-        cmd.encode(&mut buf)?;
+        super::token::encode_bulk_col_metadata(&columns, table_name, &mut buf)?;
 
         let this = Self {
             connection,
@@ -97,14 +93,26 @@ where
             data.len() + HEADER_BYTES,
         );
 
+        // Mark the connection only while a write is in flight. Dropping a
+        // `BulkLoadRequest` between rows is recoverable (verified live: the
+        // server ends the abandoned load on the next request), but dropping
+        // it mid-write leaves a torn packet.
+        self.connection.poison();
         self.connection.write_to_wire(header, data).await?;
         self.connection.flush_sink().await?;
+        self.connection.unpoison();
 
         ExecuteResult::new(self.connection).await
     }
 
     async fn write_packets(&mut self) -> crate::Result<()> {
         let packet_size = (self.connection.context().packet_size() as usize) - HEADER_BYTES;
+
+        if self.buf.len() <= packet_size {
+            return Ok(());
+        }
+
+        self.connection.poison();
 
         while self.buf.len() > packet_size {
             let header = PacketHeader::bulk_load(self.packet_id);
@@ -118,6 +126,12 @@ where
 
             self.connection.write_to_wire(header, data).await?;
         }
+
+        // `write_to_wire` hands each packet to the framed sink; flush so a
+        // packet can't be left half-sent in the sink's buffer once the flag
+        // is cleared.
+        self.connection.flush_sink().await?;
+        self.connection.unpoison();
 
         Ok(())
     }

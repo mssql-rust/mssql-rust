@@ -25,6 +25,9 @@ uint_enum! {
         /// Describes the column information in browse mode.
         ColInfo = 0xA5,
 
+        /// The names of the tables that browse-mode columns come from.
+        TabName = 0xA4,
+
         /// Used to send the return value of an RPCto the client. When an RPC is
         /// executed, the associated parameters may be defined as input or
         /// output (or "return") parameters.

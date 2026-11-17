@@ -347,7 +347,7 @@ pub use from_sql::{FromSql, FromSqlOwned};
 pub use proc_param::ProcParam;
 pub use query::Query;
 pub use result::*;
-pub use row::{Column, ColumnType, QueryIdx, Row};
+pub use row::{Column, ColumnType, QueryIdx, Row, RowBuilder};
 pub use sql_browser::SqlBrowser;
 pub use tds::{
     codec::{

@@ -71,8 +71,10 @@ from_sql!(
 from_sql!(
     i32:
         ColumnData::I32(val) => (*val, val),
+        // Lossless widening of a `smallint` (upstream Tiberius 97bbbfd):
+        // reading one as `i32` used to be a conversion error.
+        ColumnData::I16(val) => (val.map(i32::from), val.map(i32::from)),
         ColumnData::U8(None) => (None, None),
-        ColumnData::I16(None) => (None, None),
         ColumnData::I64(None) => (None, None)
 );
 from_sql!(
@@ -152,5 +154,23 @@ impl<'a> FromSql<'a> for &'a [u8] {
                 format!("cannot interpret {:?} as a &[u8] value", v).into(),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod widening_tests {
+    use super::*;
+
+    #[test]
+    fn smallint_reads_as_i32() {
+        assert_eq!(
+            Some(8i32),
+            i32::from_sql(&ColumnData::I16(Some(8))).unwrap()
+        );
+        assert_eq!(
+            Some(-8i32),
+            i32::from_sql_owned(ColumnData::I16(Some(-8))).unwrap()
+        );
+        assert_eq!(None, i32::from_sql(&ColumnData::I16(None)).unwrap());
     }
 }

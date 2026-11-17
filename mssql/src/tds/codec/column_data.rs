@@ -327,37 +327,32 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 if vlc.r#type() == VarLenType::Money =>
             {
                 match opt {
-                    Some(val) => {
-                        // Both widths are a scaled-by-10000 fixed-point
-                        // integer; `money` (8 bytes) splits it into the
-                        // upper and lower 32 bits of an i64.
-                        let scaled = (val * 1e4).round() as i64;
-
-                        match vlc.len() {
-                            4 => {
-                                let scaled = i32::try_from(scaled).map_err(|_| {
-                                    crate::Error::BulkInput(
-                                        format!("value {} out of range for smallmoney", val).into(),
-                                    )
-                                })?;
-
-                                dst.put_u8(4);
-                                dst.put_i32_le(scaled);
-                            }
-                            8 => {
-                                dst.put_u8(8);
-                                dst.put_i32_le((scaled >> 32) as i32);
-                                dst.put_u32_le(scaled as u32);
-                            }
-                            len => {
-                                return Err(crate::Error::BulkInput(
-                                    format!("money: invalid column length {}", len).into(),
-                                ))
-                            }
-                        }
-                    }
+                    Some(val) => money::encode_f64(&mut **dst, vlc.len(), val, true)?,
                     None => dst.put_u8(0),
                 }
+            }
+            (ColumnData::Numeric(opt), Some(TypeInfo::VarLenSized(vlc)))
+                if vlc.r#type() == VarLenType::Money =>
+            {
+                match opt {
+                    Some(num) => money::encode_numeric(&mut **dst, vlc.len(), num, true)?,
+                    None => dst.put_u8(0),
+                }
+            }
+            // NOT NULL money/smallmoney columns arrive as FixedLen: raw bytes,
+            // no length prefix. These used to hit the "invalid data type"
+            // catch-all, so they couldn't be bulk-inserted at all.
+            (ColumnData::F64(Some(val)), Some(TypeInfo::FixedLen(ty)))
+                if matches!(ty, FixedLenType::Money | FixedLenType::Money4) =>
+            {
+                let len = if *ty == FixedLenType::Money { 8 } else { 4 };
+                money::encode_f64(&mut **dst, len, val, false)?;
+            }
+            (ColumnData::Numeric(Some(num)), Some(TypeInfo::FixedLen(ty)))
+                if matches!(ty, FixedLenType::Money | FixedLenType::Money4) =>
+            {
+                let len = if *ty == FixedLenType::Money { 8 } else { 4 };
+                money::encode_numeric(&mut **dst, len, num, false)?;
             }
             (ColumnData::Guid(opt), Some(TypeInfo::VarLenSized(vlc)))
                 if vlc.r#type() == VarLenType::Guid =>
@@ -385,21 +380,10 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                     || vlc.r#type() == VarLenType::BigVarChar =>
             {
                 if let Some(str) = opt {
-                    let mut encoder = vlc.collation().as_ref().unwrap().encoding()?.new_encoder();
-                    let len = encoder
-                        .max_buffer_length_from_utf8_without_replacement(str.len())
-                        .unwrap();
-                    let mut bytes = Vec::with_capacity(len);
-                    let (res, _) = encoder.encode_from_utf8_to_vec_without_replacement(
-                        str.as_ref(),
-                        &mut bytes,
-                        true,
-                    );
-                    if let encoding_rs::EncoderResult::Unmappable(c) = res {
-                        return Err(crate::Error::Encoding(
-                            format!("unrepresentable character: {c}").into(),
-                        ));
-                    }
+                    let collation = vlc.collation().ok_or_else(|| {
+                        crate::Error::BulkInput("char/varchar column without a collation".into())
+                    })?;
+                    let bytes = collation.codec()?.encode(str.as_ref())?;
 
                     // `vlc.len()` is a real column limit only for a bounded
                     // column; for a MAX column it's the wire's 0xffff "size
@@ -513,6 +497,59 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                     dst.put_u16_le(0xffff);
                 } else {
                     dst.put_u64_le(0xffffffffffffffff)
+                }
+            }
+            // TEXT/NTEXT bulk-load values (fork issue #352). Ported from
+            // upstream Tiberius 97bbbfd, with the collation `unwrap()` and
+            // unchecked u32 lengths turned into errors.
+            (ColumnData::String(opt), Some(TypeInfo::VarLenSized(vlc)))
+                if vlc.r#type() == VarLenType::Text || vlc.r#type() == VarLenType::NText =>
+            {
+                if let Some(str) = opt {
+                    // TEXT/NTEXT row values carry a text pointer and a
+                    // timestamp ahead of the payload. The server ignores the
+                    // values supplied on bulk load, so send a fixed-size dummy
+                    // pointer and timestamp.
+                    dst.put_u8(16); // text pointer length
+                    dst.extend_from_slice(&[0u8; 16]); // text pointer
+                    dst.extend_from_slice(&[0u8; 8]); // timestamp
+
+                    let bytes = if vlc.r#type() == VarLenType::Text {
+                        // Single-byte character data in the column's collation.
+                        let collation = vlc.collation().ok_or_else(|| {
+                            crate::Error::BulkInput("text column without a collation".into())
+                        })?;
+                        collation.codec()?.encode(str.as_ref())?
+                    } else {
+                        // NTEXT: UTF-16LE.
+                        str.encode_utf16().flat_map(u16::to_le_bytes).collect()
+                    };
+
+                    let len = u32::try_from(bytes.len()).map_err(|_| {
+                        crate::Error::BulkInput("text/ntext value exceeds 4 GiB".into())
+                    })?;
+                    dst.put_u32_le(len);
+                    dst.extend_from_slice(&bytes);
+                } else {
+                    // NULL: zero-length text pointer.
+                    dst.put_u8(0);
+                }
+            }
+            // IMAGE bulk-load values: same text-pointer framing as TEXT.
+            (ColumnData::Binary(opt), Some(TypeInfo::VarLenSized(vlc)))
+                if vlc.r#type() == VarLenType::Image =>
+            {
+                if let Some(bytes) = opt {
+                    dst.put_u8(16); // text pointer length
+                    dst.extend_from_slice(&[0u8; 16]); // text pointer
+                    dst.extend_from_slice(&[0u8; 8]); // timestamp
+
+                    let len = u32::try_from(bytes.len())
+                        .map_err(|_| crate::Error::BulkInput("image value exceeds 4 GiB".into()))?;
+                    dst.put_u32_le(len);
+                    dst.extend_from_slice(&bytes);
+                } else {
+                    dst.put_u8(0);
                 }
             }
             (ColumnData::String(Some(ref s)), None) if s.len() <= 4000 => {

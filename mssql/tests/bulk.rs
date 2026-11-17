@@ -717,6 +717,7 @@ where
         "CREATE TABLE {} (id INT NOT NULL, \
          v VARCHAR(20) COLLATE Cyrillic_General_CI_AS NOT NULL, \
          c CHAR(6) COLLATE Cyrillic_General_CI_AS NOT NULL, \
+         t TEXT COLLATE Cyrillic_General_CI_AS NOT NULL, \
          n NVARCHAR(20) COLLATE Cyrillic_General_CI_AS NOT NULL)",
         table
     ))
@@ -728,8 +729,7 @@ where
     let mut req = conn.bulk_insert(table).await?;
     let mut row = TokenRow::new();
     row.push(1i32.into_sql());
-    // No TEXT column here (upstream's version has one): bulk-inserting TEXT/
-    // NTEXT doesn't work in this fork yet (issues.md #352, error 4804).
+    row.push(expected.into_sql());
     row.push(expected.into_sql());
     row.push(expected.into_sql());
     row.push(expected.into_sql());
@@ -739,7 +739,8 @@ where
     let row = conn
         .query(
             &format!(
-                "SELECT v, c, n, CONVERT(VARBINARY(20), v), CONVERT(VARBINARY(20), c) FROM {}",
+                "SELECT v, c, t, n, CONVERT(VARBINARY(20), v), CONVERT(VARBINARY(20), c), \
+                 CONVERT(VARBINARY(20), CONVERT(VARCHAR(20), t)) FROM {}",
                 table
             ),
             &[],
@@ -753,8 +754,10 @@ where
     assert_eq!(Some(expected), row.get::<&str, _>(0));
     assert_eq!(Some(expected), row.get::<&str, _>(1));
     assert_eq!(Some(expected), row.get::<&str, _>(2));
-    assert_eq!(Some(cp1251), row.get::<&[u8], _>(3));
+    assert_eq!(Some(expected), row.get::<&str, _>(3));
     assert_eq!(Some(cp1251), row.get::<&[u8], _>(4));
+    assert_eq!(Some(cp1251), row.get::<&[u8], _>(5));
+    assert_eq!(Some(cp1251), row.get::<&[u8], _>(6));
 
     Ok(())
 }
@@ -801,4 +804,277 @@ where
     drop_table(&mut conn, &format!("N'tempdb..{table}'"), &table).await?;
 
     result
+}
+
+// Bulk-inserting into TEXT/NTEXT columns used to fail with "premature end of
+// message" (error 4804) because the bulk COLMETADATA omitted the table name
+// those types carry (fork issue #352). Ported from upstream Tiberius
+// (6eed8df, d10c7bb, 931223f).
+#[test_on_runtimes]
+async fn bulk_insert_text_and_ntext_round_trip<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let table = format!("##{}", random_table().await);
+
+    conn.simple_query(format!(
+        "CREATE TABLE {} (id INT NOT NULL, t TEXT NULL, nt NTEXT NULL, img IMAGE NULL)",
+        table
+    ))
+    .await?;
+
+    let long = "x".repeat(20_000);
+    let mut req = conn.bulk_insert(&table).await?;
+    for (id, t, nt, img) in [
+        (
+            1,
+            Some("hello"),
+            Some("héllo wörld ✓"),
+            Some(&[1u8, 2, 3][..]),
+        ),
+        (2, None, None, None),
+        (
+            3,
+            Some(long.as_str()),
+            Some(long.as_str()),
+            Some(long.as_bytes()),
+        ),
+    ] {
+        let mut row = TokenRow::new();
+        row.push(ColumnData::I32(Some(id)));
+        row.push(t.into_sql());
+        row.push(nt.into_sql());
+        row.push(img.into_sql());
+        req.send(row).await?;
+    }
+    assert_eq!(req.finalize().await?.total(), 3);
+
+    let rows = conn
+        .query(
+            format!(
+                "SELECT CAST(t AS VARCHAR(MAX)), CAST(nt AS NVARCHAR(MAX)), \
+                 CAST(img AS VARBINARY(MAX)) FROM {} ORDER BY id",
+                table
+            ),
+            &[],
+        )
+        .await?
+        .into_first_result()
+        .await?;
+
+    assert_eq!(Some("hello"), rows[0].get::<&str, _>(0));
+    assert_eq!(Some("héllo wörld ✓"), rows[0].get::<&str, _>(1));
+    assert_eq!(None, rows[1].get::<&str, _>(0));
+    assert_eq!(None, rows[1].get::<&str, _>(1));
+    assert_eq!(Some(long.as_str()), rows[2].get::<&str, _>(0));
+    assert_eq!(Some(long.as_str()), rows[2].get::<&str, _>(1));
+    assert_eq!(Some(&[1u8, 2, 3][..]), rows[0].get::<&[u8], _>(2));
+    assert_eq!(None, rows[1].get::<&[u8], _>(2));
+    assert_eq!(Some(long.as_bytes()), rows[2].get::<&[u8], _>(2));
+
+    Ok(())
+}
+
+// NOT NULL money/smallmoney columns (FixedLen on the wire) couldn't be
+// bulk-inserted at all; Numeric values had no money encoding; and NaN or
+// out-of-range f64 values were silently saturated. Ported from upstream
+// Tiberius (302cfe4, e0a65d8, 1d91e18, 8510d35).
+#[test_on_runtimes]
+async fn bulk_insert_money_not_null_numeric_and_rejects_nan<S>(
+    mut conn: mssql::Client<S>,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    use mssql::numeric::Numeric;
+
+    let table = format!("##{}", random_table().await);
+
+    conn.simple_query(format!(
+        "CREATE TABLE {} (id INT NOT NULL, m MONEY NOT NULL, sm SMALLMONEY NOT NULL, mn MONEY NULL)",
+        table
+    ))
+    .await?;
+
+    let mut req = conn.bulk_insert(&table).await?;
+
+    let mut nan = TokenRow::new();
+    nan.push(ColumnData::I32(Some(0)));
+    nan.push(ColumnData::F64(Some(f64::NAN)));
+    nan.push(ColumnData::F64(Some(0.0)));
+    nan.push(ColumnData::F64(None));
+    assert!(req.send(nan).await.is_err());
+
+    let mut row = TokenRow::new();
+    row.push(ColumnData::I32(Some(1)));
+    row.push(ColumnData::F64(Some(-12.3456)));
+    row.push(ColumnData::F64(Some(214748.3647)));
+    // Money's maximum, exact only through the Numeric path.
+    row.push(ColumnData::Numeric(Some(Numeric::new_with_scale(
+        9_223_372_036_854_775_807,
+        4,
+    ))));
+    req.send(row).await?;
+
+    let mut row = TokenRow::new();
+    row.push(ColumnData::I32(Some(2)));
+    row.push(ColumnData::Numeric(Some(Numeric::new_with_scale(
+        123_456_789,
+        5,
+    ))));
+    row.push(ColumnData::Numeric(Some(Numeric::new_with_scale(-1, 0))));
+    row.push(ColumnData::F64(None));
+    req.send(row).await?;
+
+    assert_eq!(req.finalize().await?.total(), 2);
+
+    let rows = conn
+        .query(
+            format!(
+                "SELECT CAST(m AS VARCHAR(40)), CAST(sm AS VARCHAR(40)), CAST(mn AS VARCHAR(40)) \
+                 FROM {} ORDER BY id",
+                table
+            ),
+            &[],
+        )
+        .await?
+        .into_first_result()
+        .await?;
+
+    assert_eq!(Some("-12.35"), rows[0].get::<&str, _>(0)); // VARCHAR shows 2 places
+    assert_eq!(Some("214748.36"), rows[0].get::<&str, _>(1));
+    assert_eq!(Some("922337203685477.58"), rows[0].get::<&str, _>(2));
+    assert_eq!(Some("1234.57"), rows[1].get::<&str, _>(0));
+    assert_eq!(Some("-1.00"), rows[1].get::<&str, _>(1));
+    assert_eq!(None, rows[1].get::<&str, _>(2));
+
+    let exact = conn
+        .query(
+            format!(
+                "SELECT CAST(mn AS DECIMAL(19,4)), CAST(m AS DECIMAL(19,4)) FROM {} ORDER BY id",
+                table
+            ),
+            &[],
+        )
+        .await?
+        .into_first_result()
+        .await?;
+    let max: Numeric = exact[0].get(0).unwrap();
+    assert_eq!(max.value(), 9_223_372_036_854_775_807);
+    let rounded: Numeric = exact[1].get(1).unwrap();
+    assert_eq!(rounded.value(), 12_345_679); // 1234.56789 -> 1234.5679
+
+    Ok(())
+}
+
+// CP437/CP850 collations used to fail with "unsupported encoding" in both
+// directions. Ported from upstream Tiberius (75d7afc, 30f7b36).
+/// Bulk-insert every byte 0x80..=0xFF of the code page of `collation`, as
+/// text decoded by the client, into char, varchar, varchar(max) and text
+/// columns of the # temp table `table` and check the stored bytes.
+async fn bulk_every_high_byte_roundtrip<S>(
+    conn: &mut mssql::Client<S>,
+    table: &str,
+    collation: &str,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    let bytes: Vec<u8> = (0x80..=0xFF).collect();
+    let hex: String = bytes.iter().map(|b| format!("{b:02X}")).collect();
+
+    conn.simple_query(format!(
+        "CREATE TABLE {table} (c CHAR(128) COLLATE {collation} NOT NULL, \
+         v VARCHAR(128) COLLATE {collation} NOT NULL, \
+         m VARCHAR(MAX) COLLATE {collation} NOT NULL, \
+         t TEXT COLLATE {collation} NOT NULL)"
+    ))
+    .await?
+    .into_results()
+    .await?;
+
+    // The text of the 128 bytes: a varchar value of the collation (a binary
+    // value converts to it byte for byte), decoded by the client, and the
+    // server's own decoding of it for comparison.
+    let row = conn
+        .simple_query(format!(
+            "DECLARE @t TABLE (v VARCHAR(128) COLLATE {collation}); \
+             INSERT INTO @t VALUES (0x{hex}); \
+             SELECT v, CONVERT(NVARCHAR(128), v), CONVERT(VARBINARY(128), v) FROM @t"
+        ))
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+    assert_eq!(
+        Some(bytes.as_slice()),
+        row.get::<&[u8], _>(2),
+        "{collation}"
+    );
+    let text = row.get::<&str, _>(0).unwrap().to_owned();
+    assert_eq!(Some(text.as_str()), row.get::<&str, _>(1), "{collation}");
+    assert_eq!(128, text.chars().count(), "{collation}");
+
+    let mut req = conn.bulk_insert(table).await?;
+    let mut row = TokenRow::new();
+    for _ in 0..4 {
+        row.push(text.clone().into_sql());
+    }
+    req.send(row).await?;
+    assert_eq!(1, req.finalize().await?.total());
+
+    let row = conn
+        .simple_query(format!(
+            "SELECT CONVERT(VARBINARY(MAX), c), CONVERT(VARBINARY(MAX), v), \
+             CONVERT(VARBINARY(MAX), m), \
+             CONVERT(VARBINARY(MAX), CONVERT(VARCHAR(MAX), t)) FROM {table}"
+        ))
+        .await?
+        .into_row()
+        .await?
+        .unwrap();
+
+    for (i, column) in ["c", "v", "m", "t"].into_iter().enumerate() {
+        assert_eq!(
+            Some(bytes.as_slice()),
+            row.get::<&[u8], _>(i),
+            "{collation} column {column}"
+        );
+    }
+
+    Ok(())
+}
+
+#[test_on_runtimes]
+async fn bulk_legacy_code_pages_store_every_high_byte<S>(mut conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    // Detecting a missing `COLLATE` in `INSERT BULK` needs a database default
+    // code page other than the columns'.
+    let default_code_page = conn
+        .query(
+            "SELECT CONVERT(INT, COLLATIONPROPERTY(CONVERT(NVARCHAR(128), \
+             DATABASEPROPERTYEX(DB_NAME(), 'Collation')), 'CodePage'))",
+            &[],
+        )
+        .await?
+        .into_row()
+        .await?
+        .unwrap()
+        .get::<i32, _>(0);
+
+    for (collation, code_page) in [
+        ("SQL_Latin1_General_CP437_BIN", 437),
+        ("SQL_1xCompat_CP850_CI_AS", 850),
+    ] {
+        assert_ne!(Some(code_page), default_code_page);
+
+        let table = format!("#{}", random_table().await);
+        let result = bulk_every_high_byte_roundtrip(&mut conn, &table, collation).await;
+        drop_table(&mut conn, &format!("N'tempdb..{table}'"), &table).await?;
+        result?;
+    }
+
+    Ok(())
 }

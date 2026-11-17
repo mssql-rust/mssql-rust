@@ -60,17 +60,70 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
   default is no longer stored corrupted.
 - Bulk insert: a row that failed to encode partway no longer desyncs the
   stream, and `]` in an ORDER-hint column name is now escaped.
+- Bulk insert of money/smallmoney: a NaN, infinite or out-of-range `f64`
+  is an error instead of being silently saturated (NaN was stored as 0).
+  `Numeric` values are encoded exactly. NOT NULL money columns can now be
+  bulk-inserted at all.
+- Bulk insert into `text`/`ntext`/`image` columns works. Before, it failed
+  with error 4804, and so did any bulk insert into a table that merely had
+  such a column.
 - No panic when the OS trust store is empty or one platform certificate
   fails to load (rustls). Setting both `TrustServerCertificate=true` and
   `TrustServerCertificateCA` in a connection string is now an error rather
   than a panic.
 - Reserved COLMETADATA flag bits and DONE status bits from newer servers
   no longer fail the result set.
+- A request cancelled mid-write (a dropped `query`/`execute` future, a
+  `select!` or `timeout` firing during a large send) used to leave a torn
+  message on the wire. The next use then appended to it, and the server
+  dropped the connection. That next use now fails immediately with a clear
+  "partly written request" error; open a new connection.
+- `char`/`varchar`/`text` data in legacy CP437 and CP850 collations (e.g.
+  `SQL_Latin1_General_CP437_BIN`, `SQL_1xCompat_CP850_CI_AS`) can now be read
+  and bulk-inserted. Before, both failed with "unsupported encoding".
+- native-tls now requests the `tds/8.0` ALPN protocol for
+  `EncryptionLevel::Strict`, as rustls already did, instead of logging a
+  warning that it couldn't.
+- rustls: a rejected server certificate is now an `Error::Tls` explaining
+  the remedies (`trust_cert_ca`, `trust_cert`, native-tls) instead of an
+  opaque I/O error (upstream #327).
+- `ApplicationIntent=readonly` (any letter case, as ADO.NET accepts) now
+  requests read-only intent. Before, only the exact spelling `ReadOnly` did.
+- A `smallint` column can be read as `i32` (lossless widening).
+- `row.get("r#name")` now prefers a column literally named `r#name` before
+  falling back to `name`.
+- `FOR BROWSE` queries (and other browse-mode results) no longer fail with
+  "invalid token type a4": COLINFO and TABNAME tokens are skipped.
+- ERROR, INFO and LOGINACK tokens are parsed within their declared length,
+  so a length that disagrees with the fields no longer desyncs every later
+  token. An odd-length ORDER token is an error.
+- An RPC parameter name longer than 255 UTF-16 code units, or a procedure
+  name longer than 65535, is an error. Before, the length wrapped or was
+  truncated and the request was malformed.
 - `examples/aad-auth.rs` requested the wrong token scope; Azure SQL needs
   `https://database.windows.net/.default`.
 
+### Added
+
+- `Config::lossy_codepage_decoding` / `ConfigBuilder::lossy_codepage_decoding`
+  (default `false`): decode `char`/`varchar`/`text` leniently, so invalid
+  sequences become U+FFFD instead of returning `Error::Encoding`. Encoding
+  stays strict either way.
+- `Row::builder()` / `RowBuilder`, which adds each column's name, type and
+  value together, for building `Row` fixtures in tests (upstream #383).
+  Complements the existing `Row::new`.
+
 ### Changed
 
+- rustls: a `CryptoProvider` installed process-wide by the application
+  (`CryptoProvider::install_default`, e.g. aws-lc-rs or a FIPS provider) is
+  now used. ring remains the default when none is installed.
+- `bulk_insert*` and `column_metadata` now reject a table or column name
+  that can't be a legitimate identifier before building SQL from it:
+  control characters, an unbalanced `]` or `)`, an unterminated `[`, a
+  top-level space, comma or `;`, or text spliced after a closing `]`/`)`.
+  Normal, bracket-quoted, multi-part and `#`/`##` temp names are unaffected.
+  This is defense-in-depth only. Don't pass untrusted names.
 - BREAKING: `AuthMethod::AADToken` now holds `zeroize::Zeroizing<String>`
   instead of `String`, and its `Debug` shows `<HIDDEN>`. Construct it with
   `AuthMethod::aad_token(..)`, which is unchanged.

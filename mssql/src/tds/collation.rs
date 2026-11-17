@@ -5,6 +5,12 @@
 //!
 //! [1] <https://github.com/Microsoft/mssql-jdbc/blob/eb14f63077c47ef1fc1c690deb8cfab602baeb85/src/main/java/com/microsoft/sqlserver/jdbc/SQLCollation.java>
 //! [2] <https://github.com/lifthrasiir/rust-encoding/blob/496823171f15d9b9446b2ec3fb7765f22346256b/src/label.rs#L282>
+//!
+//! The CP437/CP850 high-byte tables follow the Unicode Consortium mappings
+//! <https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/PC/CP437.TXT> and
+//! <https://www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/PC/CP850.TXT>
+//! (checked byte for byte against those files). Ported from upstream Tiberius
+//! (tiberius-rs/tiberius 30f7b36, by t8y2). Thanks to the Tiberius team.
 
 use encoding_rs::Encoding;
 use std::fmt;
@@ -58,13 +64,160 @@ impl Collation {
     }
 }
 
+impl Collation {
+    /// The codec used for `char`/`varchar`/`text` data in this collation.
+    /// Unlike [`encoding`](Self::encoding), it also covers the legacy DOS
+    /// code pages CP437 (sort IDs 30–35) and CP850 (40–45, 49, 55–61), which
+    /// `encoding_rs` doesn't implement. Those collations used to fail every
+    /// read and write with "unsupported encoding".
+    pub(crate) fn codec(&self) -> crate::Result<CollationCodec> {
+        match self.sort_id {
+            30..=35 => Ok(CollationCodec::Cp437),
+            40..=45 | 49 | 55..=61 => Ok(CollationCodec::Cp850),
+            _ => self.encoding().map(CollationCodec::BuiltIn),
+        }
+    }
+}
+
 impl fmt::Display for Collation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.encoding() {
-            Ok(encoding) => write!(f, "{}", encoding.name()),
+        match self.codec() {
+            Ok(codec) => write!(f, "{}", codec.name()),
             _ => write!(f, "None"),
         }
     }
+}
+
+const CP437_HIGH: [char; 128] = [
+    '\u{c7}', '\u{fc}', '\u{e9}', '\u{e2}', '\u{e4}', '\u{e0}', '\u{e5}', '\u{e7}', '\u{ea}',
+    '\u{eb}', '\u{e8}', '\u{ef}', '\u{ee}', '\u{ec}', '\u{c4}', '\u{c5}', '\u{c9}', '\u{e6}',
+    '\u{c6}', '\u{f4}', '\u{f6}', '\u{f2}', '\u{fb}', '\u{f9}', '\u{ff}', '\u{d6}', '\u{dc}',
+    '\u{a2}', '\u{a3}', '\u{a5}', '\u{20a7}', '\u{192}', '\u{e1}', '\u{ed}', '\u{f3}', '\u{fa}',
+    '\u{f1}', '\u{d1}', '\u{aa}', '\u{ba}', '\u{bf}', '\u{2310}', '\u{ac}', '\u{bd}', '\u{bc}',
+    '\u{a1}', '\u{ab}', '\u{bb}', '\u{2591}', '\u{2592}', '\u{2593}', '\u{2502}', '\u{2524}',
+    '\u{2561}', '\u{2562}', '\u{2556}', '\u{2555}', '\u{2563}', '\u{2551}', '\u{2557}', '\u{255d}',
+    '\u{255c}', '\u{255b}', '\u{2510}', '\u{2514}', '\u{2534}', '\u{252c}', '\u{251c}', '\u{2500}',
+    '\u{253c}', '\u{255e}', '\u{255f}', '\u{255a}', '\u{2554}', '\u{2569}', '\u{2566}', '\u{2560}',
+    '\u{2550}', '\u{256c}', '\u{2567}', '\u{2568}', '\u{2564}', '\u{2565}', '\u{2559}', '\u{2558}',
+    '\u{2552}', '\u{2553}', '\u{256b}', '\u{256a}', '\u{2518}', '\u{250c}', '\u{2588}', '\u{2584}',
+    '\u{258c}', '\u{2590}', '\u{2580}', '\u{3b1}', '\u{df}', '\u{393}', '\u{3c0}', '\u{3a3}',
+    '\u{3c3}', '\u{b5}', '\u{3c4}', '\u{3a6}', '\u{398}', '\u{3a9}', '\u{3b4}', '\u{221e}',
+    '\u{3c6}', '\u{3b5}', '\u{2229}', '\u{2261}', '\u{b1}', '\u{2265}', '\u{2264}', '\u{2320}',
+    '\u{2321}', '\u{f7}', '\u{2248}', '\u{b0}', '\u{2219}', '\u{b7}', '\u{221a}', '\u{207f}',
+    '\u{b2}', '\u{25a0}', '\u{a0}',
+];
+
+const CP850_HIGH: [char; 128] = [
+    '\u{c7}', '\u{fc}', '\u{e9}', '\u{e2}', '\u{e4}', '\u{e0}', '\u{e5}', '\u{e7}', '\u{ea}',
+    '\u{eb}', '\u{e8}', '\u{ef}', '\u{ee}', '\u{ec}', '\u{c4}', '\u{c5}', '\u{c9}', '\u{e6}',
+    '\u{c6}', '\u{f4}', '\u{f6}', '\u{f2}', '\u{fb}', '\u{f9}', '\u{ff}', '\u{d6}', '\u{dc}',
+    '\u{f8}', '\u{a3}', '\u{d8}', '\u{d7}', '\u{192}', '\u{e1}', '\u{ed}', '\u{f3}', '\u{fa}',
+    '\u{f1}', '\u{d1}', '\u{aa}', '\u{ba}', '\u{bf}', '\u{ae}', '\u{ac}', '\u{bd}', '\u{bc}',
+    '\u{a1}', '\u{ab}', '\u{bb}', '\u{2591}', '\u{2592}', '\u{2593}', '\u{2502}', '\u{2524}',
+    '\u{c1}', '\u{c2}', '\u{c0}', '\u{a9}', '\u{2563}', '\u{2551}', '\u{2557}', '\u{255d}',
+    '\u{a2}', '\u{a5}', '\u{2510}', '\u{2514}', '\u{2534}', '\u{252c}', '\u{251c}', '\u{2500}',
+    '\u{253c}', '\u{e3}', '\u{c3}', '\u{255a}', '\u{2554}', '\u{2569}', '\u{2566}', '\u{2560}',
+    '\u{2550}', '\u{256c}', '\u{a4}', '\u{f0}', '\u{d0}', '\u{ca}', '\u{cb}', '\u{c8}', '\u{131}',
+    '\u{cd}', '\u{ce}', '\u{cf}', '\u{2518}', '\u{250c}', '\u{2588}', '\u{2584}', '\u{a6}',
+    '\u{cc}', '\u{2580}', '\u{d3}', '\u{df}', '\u{d4}', '\u{d2}', '\u{f5}', '\u{d5}', '\u{b5}',
+    '\u{fe}', '\u{de}', '\u{da}', '\u{db}', '\u{d9}', '\u{fd}', '\u{dd}', '\u{af}', '\u{b4}',
+    '\u{ad}', '\u{b1}', '\u{2017}', '\u{be}', '\u{b6}', '\u{a7}', '\u{f7}', '\u{b8}', '\u{b0}',
+    '\u{a8}', '\u{b7}', '\u{b9}', '\u{b3}', '\u{b2}', '\u{25a0}', '\u{a0}',
+];
+
+pub(crate) enum CollationCodec {
+    BuiltIn(&'static Encoding),
+    Cp437,
+    Cp850,
+}
+
+impl CollationCodec {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::BuiltIn(encoding) => encoding.name(),
+            Self::Cp437 => "CP437",
+            Self::Cp850 => "CP850",
+        }
+    }
+
+    /// Strict decode: an invalid sequence is an error. (CP437/CP850 map
+    /// every byte, so only built-in encodings can fail.)
+    pub(crate) fn decode(&self, bytes: &[u8]) -> crate::Result<String> {
+        match self {
+            Self::BuiltIn(encoding) => encoding
+                .decode_without_bom_handling_and_without_replacement(bytes)
+                .map(|s| s.into_owned())
+                .ok_or_else(|| Error::Encoding("invalid sequence".into())),
+            Self::Cp437 => Ok(decode_single_byte(bytes, &CP437_HIGH)),
+            Self::Cp850 => Ok(decode_single_byte(bytes, &CP850_HIGH)),
+        }
+    }
+
+    /// Lenient decode: invalid sequences become U+FFFD. With `lossy`
+    /// false this is [`decode`](Self::decode).
+    pub(crate) fn decode_with(&self, bytes: &[u8], lossy: bool) -> crate::Result<String> {
+        match (self, lossy) {
+            (Self::BuiltIn(encoding), true) => {
+                Ok(encoding.decode_without_bom_handling(bytes).0.into_owned())
+            }
+            _ => self.decode(bytes),
+        }
+    }
+
+    /// Strict encode: a character the code page can't represent is an error
+    /// naming it.
+    pub(crate) fn encode(&self, text: &str) -> crate::Result<Vec<u8>> {
+        let unrepresentable =
+            |c: char| Error::Encoding(format!("unrepresentable character: {c}").into());
+
+        match self {
+            Self::BuiltIn(encoding) => {
+                let mut encoder = encoding.new_encoder();
+                let capacity = encoder
+                    .max_buffer_length_from_utf8_without_replacement(text.len())
+                    .ok_or_else(|| Error::Encoding("string too long to encode".into()))?;
+                let mut bytes = Vec::with_capacity(capacity);
+                let (result, _) =
+                    encoder.encode_from_utf8_to_vec_without_replacement(text, &mut bytes, true);
+                match result {
+                    encoding_rs::EncoderResult::InputEmpty => Ok(bytes),
+                    encoding_rs::EncoderResult::Unmappable(c) => Err(unrepresentable(c)),
+                    encoding_rs::EncoderResult::OutputFull => {
+                        Err(Error::Encoding("encoder output buffer full".into()))
+                    }
+                }
+            }
+            Self::Cp437 => encode_single_byte(text, &CP437_HIGH).map_err(unrepresentable),
+            Self::Cp850 => encode_single_byte(text, &CP850_HIGH).map_err(unrepresentable),
+        }
+    }
+}
+
+fn decode_single_byte(bytes: &[u8], high: &[char; 128]) -> String {
+    bytes
+        .iter()
+        .map(|&byte| match byte {
+            0..=0x7f => char::from(byte),
+            _ => high[usize::from(byte) - 0x80],
+        })
+        .collect()
+}
+
+fn encode_single_byte(text: &str, high: &[char; 128]) -> Result<Vec<u8>, char> {
+    let mut bytes = Vec::with_capacity(text.len());
+    for character in text.chars() {
+        let byte = match character {
+            '\0'..='\u{7f}' => character as u8,
+            _ => {
+                high.iter()
+                    .position(|&mapped| mapped == character)
+                    .ok_or(character)? as u8
+                    + 0x80
+            }
+        };
+        bytes.push(byte);
+    }
+    Ok(bytes)
 }
 
 /// https://github.com/Microsoft/mssql-jdbc/blob/eb14f63077c47ef1fc1c690deb8cfab602baeb85/src/main/java/com/microsoft/sqlserver/jdbc/SQLCollation.java#L102-L310
@@ -416,3 +569,61 @@ mod tests {
     }
 }
 */
+
+#[cfg(test)]
+mod codec_tests {
+    use super::*;
+
+    #[test]
+    fn cp437_and_cp850_sort_ids_have_a_codec() {
+        for (sort_id, name) in [
+            (30, "CP437"),
+            (35, "CP437"),
+            (40, "CP850"),
+            (49, "CP850"),
+            (61, "CP850"),
+        ] {
+            let c = Collation::new(0x0409, sort_id);
+            assert!(c.encoding().is_err(), "encoding_rs has no {name}");
+            assert_eq!(c.codec().unwrap().name(), name);
+        }
+        assert_eq!(
+            Collation::new(0x0409, 52).codec().unwrap().name(),
+            "windows-1252"
+        );
+    }
+
+    #[test]
+    fn every_high_byte_round_trips() {
+        for codec in [CollationCodec::Cp437, CollationCodec::Cp850] {
+            let bytes: Vec<u8> = (0u8..=255).collect();
+            let text = codec.decode(&bytes).unwrap();
+            assert_eq!(text.chars().count(), 256);
+            assert_eq!(codec.encode(&text).unwrap(), bytes);
+        }
+        // Spot checks against the Unicode tables.
+        assert_eq!(CollationCodec::Cp437.decode(&[0x82, 0xe1]).unwrap(), "éß");
+        assert_eq!(CollationCodec::Cp850.decode(&[0x9b, 0xd5]).unwrap(), "øı");
+    }
+
+    #[test]
+    fn unrepresentable_characters_are_errors() {
+        let err = CollationCodec::Cp437.encode("a€").unwrap_err();
+        assert!(err.to_string().contains('€'), "{err}");
+    }
+
+    #[test]
+    fn lossy_decode_replaces_invalid_sequences_only_when_asked() {
+        // Japanese (LCID 0x0411) is Shift_JIS, where a lone lead byte 0x81
+        // at the end is an invalid sequence. (encoding_rs maps every byte of
+        // the single-byte windows-125x pages, so those can't fail.)
+        let codec = Collation::new(0x0411, 0).codec().unwrap();
+        assert!(codec.decode_with(&[b'a', 0x81], false).is_err());
+        assert_eq!(codec.decode_with(&[b'a', 0x81], true).unwrap(), "a\u{fffd}");
+        // Single-byte DOS code pages map every byte, so nothing changes.
+        assert_eq!(
+            CollationCodec::Cp437.decode_with(&[0x82], true).unwrap(),
+            CollationCodec::Cp437.decode(&[0x82]).unwrap()
+        );
+    }
+}

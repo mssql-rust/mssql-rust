@@ -56,3 +56,59 @@ impl TokenFeatureExtAck {
         Ok(TokenFeatureExtAck { features })
     }
 }
+
+// Error-path tests ported from upstream Tiberius (tiberius-rs/tiberius
+// 931223f); the success cases are fork additions.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+    use bytes::BytesMut;
+
+    async fn decode(bytes: &[u8]) -> crate::Result<TokenFeatureExtAck> {
+        TokenFeatureExtAck::decode(&mut BytesMut::from(bytes).into_sql_read_bytes()).await
+    }
+
+    #[tokio::test]
+    async fn fedauth_ack_with_and_without_nonce() {
+        let mut bytes = vec![FEA_EXT_FEDAUTH];
+        bytes.extend_from_slice(&32u32.to_le_bytes());
+        bytes.extend_from_slice(&[7u8; 32]);
+        bytes.push(FEA_EXT_FEDAUTH);
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.push(FEA_EXT_TERMINATOR);
+
+        let ack = decode(&bytes).await.unwrap();
+        assert_eq!(ack.features.len(), 2);
+        let FeatureAck::FedAuth(FedAuthAck::SecurityToken { nonce }) = &ack.features[0];
+        assert_eq!(*nonce, Some([7u8; 32]));
+        let FeatureAck::FedAuth(FedAuthAck::SecurityToken { nonce }) = &ack.features[1];
+        assert_eq!(*nonce, None);
+
+        assert!(decode(&[FEA_EXT_TERMINATOR])
+            .await
+            .unwrap()
+            .features
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn invalid_fedauth_data_length_is_protocol_error() {
+        let mut bytes = vec![FEA_EXT_FEDAUTH];
+        bytes.extend_from_slice(&5u32.to_le_bytes());
+        match decode(&bytes).await.unwrap_err() {
+            Error::Protocol(msg) => assert!(msg.contains("invalid FEDAUTH data length"), "{msg}"),
+            other => panic!("expected Error::Protocol, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn unsupported_feature_id_is_protocol_error() {
+        match decode(&[0x01]).await.unwrap_err() {
+            Error::Protocol(msg) => {
+                assert!(msg.contains("unsupported FEATUREEXTACK feature"), "{msg}")
+            }
+            other => panic!("expected Error::Protocol, got {other:?}"),
+        }
+    }
+}
