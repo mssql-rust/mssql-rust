@@ -6,6 +6,41 @@ use std::io::ErrorKind::UnexpectedEof;
 use std::{future::Future, io, mem::size_of, pin::Pin, task};
 use task::Poll;
 
+/// Largest up-front reservation (and per-step growth window) used when
+/// reading a value whose length comes from the server. An untrusted length
+/// can then never force a large allocation before the bytes actually arrive.
+pub(crate) const MAX_PREALLOC: usize = 64 * 1024;
+
+/// Appends exactly `len` bytes from `src` to `dst`, growing `dst` at most
+/// [`MAX_PREALLOC`] bytes at a time so that a lying, server-supplied `len`
+/// (up to 4 GiB for a u32, or u64::MAX for PLP) cannot reserve or zero-fill
+/// memory for data that never arrives. A genuine long value still reads in
+/// full. Adapted from upstream Tiberius's `read_bytes_into`
+/// (tiberius-rs/tiberius 8255d35 / 3e6afc3).
+pub(crate) async fn read_bytes_into<R>(src: &mut R, dst: &mut Vec<u8>, len: usize) -> io::Result<()>
+where
+    R: AsyncRead + Unpin,
+{
+    use futures_util::io::AsyncReadExt;
+
+    let mut remaining = len;
+
+    while remaining > 0 {
+        let want = remaining.min(MAX_PREALLOC);
+        let start = dst.len();
+        dst.resize(start + want, 0);
+
+        if let Err(e) = src.read_exact(&mut dst[start..]).await {
+            dst.truncate(start);
+            return Err(e);
+        }
+
+        remaining -= want;
+    }
+
+    Ok(())
+}
+
 macro_rules! varchar_reader {
     ($name:ident, $length_reader:ident) => {
         pin_project! {

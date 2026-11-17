@@ -36,6 +36,13 @@ use uuid::Uuid;
 
 const MAX_NVARCHAR_SIZE: usize = 1 << 30;
 
+/// Upper bound on one PLP (`(max)`) value. SQL Server's own limit for
+/// `varchar(max)`/`varbinary(max)` is 2^31 - 1 bytes; an "unknown length" PLP
+/// value has no chunk-count limit on the wire, so without this cap a hostile
+/// server could stream chunks until the client runs out of memory. Ported
+/// from upstream Tiberius 3e6afc3.
+pub(crate) const MAX_PLP_SIZE: usize = i32::MAX as usize;
+
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// A container of a value that can be represented as a TDS value.

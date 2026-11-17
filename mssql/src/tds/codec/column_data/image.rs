@@ -17,12 +17,11 @@ where
     src.read_i32_le().await?; // days
     src.read_u32_le().await?; // second fractions
 
+    // `len` is an untrusted u32: read in bounded windows instead of
+    // reserving up to 4 GiB up front (and one byte per poll).
     let len = src.read_u32_le().await? as usize;
-    let mut buf = Vec::with_capacity(len);
-
-    for _ in 0..len {
-        buf.push(src.read_u8().await?);
-    }
+    let mut buf = Vec::new();
+    crate::sql_read_bytes::read_bytes_into(src, &mut buf, len).await?;
 
     Ok(ColumnData::Binary(Some(buf.into())))
 }
