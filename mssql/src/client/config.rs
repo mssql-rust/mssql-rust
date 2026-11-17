@@ -424,11 +424,25 @@ impl Config {
             builder.application_name(name);
         }
 
-        if s.trust_cert()? {
+        // `trust_cert` and `trust_cert_ca` panic if both are set, so a
+        // connection string naming both used to panic the caller. Reject it
+        // as a conversion error instead (ported from upstream Tiberius a1abc80).
+        let trust_cert = s.trust_cert()?;
+        let trust_cert_ca = s.trust_cert_ca();
+
+        if trust_cert && trust_cert_ca.is_some() {
+            return Err(crate::Error::Conversion(
+                "Connection string: TrustServerCertificate=true and TrustServerCertificateCA \
+                 are mutually exclusive"
+                    .into(),
+            ));
+        }
+
+        if trust_cert {
             builder.trust_cert();
         }
 
-        if let Some(ca) = s.trust_cert_ca() {
+        if let Some(ca) = trust_cert_ca {
             builder.trust_cert_ca(ca);
         }
 
@@ -800,6 +814,14 @@ pub(crate) trait ConfigString {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conflicting_trust_settings_in_connection_string_error_instead_of_panicking() {
+        let s = "server=tcp:localhost,1433;TrustServerCertificate=true;\
+                 TrustServerCertificateCA=/tmp/ca.pem";
+        let err = Config::from_ado_string(s).unwrap_err();
+        assert!(matches!(err, crate::Error::Conversion(_)), "{err:?}");
+    }
 
     #[test]
     fn client_name_defaults_to_none() {
