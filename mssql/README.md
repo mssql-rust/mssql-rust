@@ -277,6 +277,10 @@ types, and `Uuid`). Other NULLs (e.g. `&None::<&str>`) are sent untyped,
 which SQL Server rejects as `OUTPUT`; `call_procedure` checks for this
 client-side before sending anything. See [`examples/call_procedure.rs`](examples/call_procedure.rs).
 
+A table-valued parameter is `ProcParam::table("@rows", "dbo.MyTableType", rows)`,
+where `rows` is a `Vec<TokenRow>` with one value per column of the table
+type, in its column order. The procedure must declare it `READONLY`.
+
 ## Transactions
 
 Plain T-SQL (`BEGIN TRAN` / `COMMIT` via `simple_query`) works, and so do

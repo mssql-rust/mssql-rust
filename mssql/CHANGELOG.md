@@ -105,6 +105,12 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Added
 
+- Table-valued parameters for `call_procedure`:
+  `ProcParam::table("@rows", "dbo.MyType", rows)`, with rows as `TokenRow`s
+  in the table type's column order. The client fetches the type's columns
+  from the server first. Unlike upstream's version there's no derive macro,
+  and the type name is validated and bracket-quoted rather than interpolated
+  into SQL.
 - Transaction Manager requests: `Client::begin_transaction`,
   `begin_transaction_with_isolation(IsolationLevel)`, `commit_transaction`,
   `rollback_transaction`, `save_transaction(name)` and (fork addition)

@@ -26,7 +26,7 @@
     "error": "`pub mod error`; `error::Error` is the crate's single error type, covering I/O, TDS protocol, and server errors.",
     "ExecuteResult": "Row-count(s) affected, returned by `Query::execute` / `Client::execute`.",
     "QueryStream": "The streaming result of a query; `.into_row()`, `.into_first_result()`, `.into_output_params()`, etc. consume it.",
-    "ProcParam": "One parameter to `Client::call_procedure`: `ProcParam::input(name, value)` or `ProcParam::output(name, value)` (the latter's placeholder value establishes its SQL type: a concrete value, or a typed NULL such as `&None::<i32>` for bool/integer/float/Uuid; other NULLs are rejected).",
+    "ProcParam": "One parameter to `Client::call_procedure`: `ProcParam::input(name, value)` or `ProcParam::output(name, value)` (the latter's placeholder value establishes its SQL type: a concrete value, or a typed NULL such as `&None::<i32>` for bool/integer/float/Uuid; other NULLs are rejected). `ProcParam::table(name, type_name, rows)` passes a table-valued parameter.",
     "OutputParams": "OUTPUT parameters and RETURN status from a stored-procedure call, read via `QueryStream::into_output_params`; `.get::<T>(name)` and `.return_status()`.",
     "SqlBulkCopyOption": "One option controlling `Client::bulk_insert` (e.g. keep identity, table lock).",
     "SqlBulkCopyOptions": "A set of SqlBulkCopyOption values.",

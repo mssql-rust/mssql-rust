@@ -1,4 +1,4 @@
-use crate::{tds::codec::ColumnData, ToSql};
+use crate::{tds::codec::ColumnData, ToSql, TokenRow};
 use std::borrow::Cow;
 
 /// A single parameter to [`Client::call_procedure`](crate::Client::call_procedure),
@@ -12,6 +12,14 @@ pub struct ProcParam<'a> {
     pub(crate) name: Cow<'a, str>,
     pub(crate) value: ColumnData<'a>,
     pub(crate) output: bool,
+    pub(crate) table: Option<TableParam<'a>>,
+}
+
+/// The rows and table type of a [`ProcParam::table`] argument.
+#[derive(Debug, Clone)]
+pub(crate) struct TableParam<'a> {
+    pub(crate) type_name: Cow<'a, str>,
+    pub(crate) rows: Vec<TokenRow<'a>>,
 }
 
 impl<'a> ProcParam<'a> {
@@ -23,6 +31,7 @@ impl<'a> ProcParam<'a> {
             name: name.into(),
             value: value.to_sql(),
             output: false,
+            table: None,
         }
     }
 
@@ -42,6 +51,35 @@ impl<'a> ProcParam<'a> {
             name: name.into(),
             value: value.to_sql(),
             output: true,
+            table: None,
+        }
+    }
+
+    /// A table-valued parameter: `rows` sent as a value of the user-defined
+    /// table type `type_name` (`"MyType"` or `"schema.MyType"`; brackets
+    /// such as `"[my schema].[My Type]"` work too). Each row must have one
+    /// value per column of the type, in the type's column order. The
+    /// procedure must declare the parameter `READONLY`.
+    ///
+    /// `call_procedure` asks the server for the type's columns first, using
+    /// one extra round trip per table parameter.
+    ///
+    /// Ported and reworked from upstream Tiberius (tiberius-rs/tiberius
+    /// 73e79d4), without its derive macro and with the type name quoted
+    /// rather than interpolated.
+    pub fn table(
+        name: impl Into<Cow<'a, str>>,
+        type_name: impl Into<Cow<'a, str>>,
+        rows: Vec<TokenRow<'a>>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            value: ColumnData::I32(None),
+            output: false,
+            table: Some(TableParam {
+                type_name: type_name.into(),
+                rows,
+            }),
         }
     }
 }

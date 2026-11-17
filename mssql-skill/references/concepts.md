@@ -35,6 +35,8 @@ before treating it as final.
   sets its type: a concrete value (`&0i32`) or a typed NULL (`&None::<i32>`;
   bool/integer/float/Uuid only, since other NULLs are sent untyped) — see
   [`examples/call_procedure.rs`](../../mssql/examples/call_procedure.rs).
+- **Table-valued parameters** — `ProcParam::table(name, "schema.Type", rows)`
+  with `TokenRow` rows, for `call_procedure` only.
 - **Transactions** — `BEGIN TRAN`/`COMMIT` batches work, or use
   `Client::begin_transaction[_with_isolation]`, `commit_transaction`,
   `rollback_transaction`, `save_transaction` and `rollback_to_savepoint`

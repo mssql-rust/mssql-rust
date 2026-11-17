@@ -350,9 +350,10 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   - Transaction Manager requests (`8338bb8`). **Done** on
     `upstream/tiberius-0.13-decisions`, with a name-length fix upstream
     lacks (sent in bytes) and `rollback_to_savepoint`.
-  - Table-valued parameters (`73e79d4`): only without the ungated macro and
-    without `format!("DECLARE @P AS {db_type}")` interpolation. Same
-    objection as #328.
+  - Table-valued parameters (`73e79d4`): **Done** on
+    `upstream/tiberius-0.13-decisions` as `ProcParam::table`, with no macro
+    and a validated, bracket-quoted type name instead of
+    `format!("DECLARE @P AS {db_type}")` interpolation (#328's objection).
 - [ ] **Drop async-std** (`d1f7e18`): it is unmaintained, and Unreleased
   is already a breaking window.
 

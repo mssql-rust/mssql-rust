@@ -12,6 +12,7 @@ mod pre_login;
 mod rpc_request;
 mod token;
 mod transaction_manager;
+mod tvp;
 mod type_info;
 
 pub use batch_request::*;
@@ -30,6 +31,7 @@ pub use rpc_request::*;
 pub use token::*;
 pub use transaction_manager::IsolationLevel;
 pub(crate) use transaction_manager::TransactionManagerRequest;
+pub(crate) use tvp::{tvp_column_type, TableValue};
 pub use type_info::*;
 
 const HEADER_BYTES: usize = 8;

@@ -346,9 +346,20 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
                     flags,
                     value: p.value.clone(),
                     type_info: None,
+                    table: None,
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        // Table-valued parameters need their table type's column layout,
+        // which the server reports for a `DECLARE @t AS <type>` table
+        // variable. Fetched before the RPC is sent.
+        let mut rpc_params = rpc_params;
+        for (param, rpc) in params.iter().zip(rpc_params.iter_mut()) {
+            if let Some(table) = &param.table {
+                rpc.table = Some(self.table_value(table).await?);
+            }
+        }
 
         let req = TokenRpcRequest::new(
             name,
@@ -365,6 +376,83 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         result.forward_to_metadata().await?;
 
         Ok(result)
+    }
+
+    /// Resolves a `ProcParam::table` argument into an encodable TVP by asking
+    /// the server for the table type's columns. The type name is a
+    /// caller-supplied identifier interpolated into SQL, so it is validated
+    /// and each part bracket-quoted. This replaces upstream Tiberius's
+    /// unquoted `DECLARE @P AS {db_type}` (73e79d4), which was
+    /// SQL-injection-shaped.
+    async fn table_value<'p>(
+        &mut self,
+        table: &crate::proc_param::TableParam<'p>,
+    ) -> crate::Result<codec::TableValue<'p>> {
+        validate_sql_identifier("table type", &table.type_name)?;
+        let parts = split_multipart_identifier(&table.type_name);
+        let (schema, type_name) = match parts.as_slice() {
+            [t] => (String::new(), t.clone()),
+            [s, t] => (s.clone(), t.clone()),
+            _ => {
+                return Err(crate::Error::Conversion(
+                    format!(
+                        "table type {:?} must be `type` or `schema.type`",
+                        table.type_name
+                    )
+                    .into(),
+                ))
+            }
+        };
+        if type_name.is_empty() {
+            return Err(crate::Error::Conversion("empty table type name".into()));
+        }
+
+        let qualified = if schema.is_empty() {
+            quote_identifier(&type_name)
+        } else {
+            format!(
+                "{}.{}",
+                quote_identifier(&schema),
+                quote_identifier(&type_name)
+            )
+        };
+
+        self.connection.flush_stream().await?;
+        let query = format!("DECLARE @tvp AS {qualified}; SELECT TOP 0 * FROM @tvp");
+        let req = BatchRequest::new(query, self.connection.context().transaction_descriptor());
+        let id = self.connection.context_mut().next_packet_id();
+        self.connection.send(PacketHeader::batch(id), req).await?;
+
+        let columns = TokenStream::new(&mut self.connection)
+            .try_unfold()
+            .try_fold(None, |columns, token| async move {
+                Ok(match token {
+                    ReceivedToken::NewResultset(meta) if columns.is_none() => {
+                        Some(meta.columns.clone())
+                    }
+                    _ => columns,
+                })
+            })
+            .await?
+            .ok_or_else(|| {
+                crate::Error::Protocol("no column metadata for the table type".into())
+            })?;
+
+        let columns = columns
+            .into_iter()
+            .map(|c| {
+                let mut base = c.base;
+                base.ty = codec::tvp_column_type(base.ty);
+                base
+            })
+            .collect();
+
+        Ok(codec::TableValue {
+            schema,
+            type_name,
+            columns,
+            rows: table.rows.clone(),
+        })
     }
 
     /// Execute a `BULK INSERT` statement, efficiently storing a large number of
@@ -837,12 +925,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
                 flags: BitFlags::empty(),
                 value: ColumnData::String(Some(query.into())),
                 type_info: None,
+                table: None,
             },
             RpcParam {
                 name: Cow::Borrowed("params"),
                 flags: BitFlags::empty(),
                 value: ColumnData::I32(Some(0)),
                 type_info: None,
+                table: None,
             },
         ]
     }
@@ -920,6 +1010,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
                 flags: BitFlags::empty(),
                 value: param,
                 type_info,
+                table: None,
             });
         }
 
