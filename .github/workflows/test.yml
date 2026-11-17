@@ -143,13 +143,20 @@ jobs:
       # log line, as the macOS job and docker/test-server.sh already do.
       # Idea from upstream Tiberius 169091d, which gates on a sqlcmd SELECT 1
       # from the legacy mssql-tools image instead.
+      # Captures the logs and matches with `case` rather than piping into
+      # `grep -q`: under `pipefail` (which `shell: bash` turns on), `grep -q`
+      # exiting on the first match makes the writer die of SIGPIPE and the
+      # pipeline report failure. This is the same trap the macOS job and
+      # docker/test-server.sh document.
       - name: Wait for SQL Server ${{matrix.database}}
         run: |
           for _ in $(seq 1 90); do
-            if docker compose -f docker-compose.yml logs mssql-${{matrix.database}} 2>&1 \
-                | grep -q "SQL Server is now ready for client connections"; then
-              echo "SQL Server ready"; exit 0
-            fi
+            logs="$(docker compose -f docker-compose.yml logs mssql-${{matrix.database}} 2>&1 || true)"
+            case "$logs" in
+              *"SQL Server is now ready for client connections"*)
+                echo "SQL Server ready"; exit 0
+                ;;
+            esac
             sleep 2
           done
           echo "SQL Server did not become ready in time; logs:" >&2
@@ -307,7 +314,26 @@ jobs:
           shared-key: ${{ env.RUST_CACHE_KEY }}
           workspaces: "mssql -> target"
 
-      - uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5  # v5.6.0
+      # setup-docker-action boots a Lima VM, and that first downloads an
+      # Ubuntu cloud image. On these runners the download intermittently
+      # fails on DNS ("lookup cloud-images.ubuntu.com: i/o timeout", run
+      # 44092502525), a transient network failure rather than a setup
+      # problem. Try once more before failing the job. The failed attempt
+      # leaves a stopped Lima instance behind, so remove it first.
+      - name: Set up Docker
+        id: setup-docker
+        continue-on-error: true
+        uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5  # v5.6.0
+
+      - name: Clean up the failed Docker VM before retrying
+        if: steps.setup-docker.outcome == 'failure'
+        run: |
+          limactl delete --force docker-actions-toolkit || true
+          sleep 30
+
+      - name: Set up Docker (retry)
+        if: steps.setup-docker.outcome == 'failure'
+        uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5  # v5.6.0
 
       - name: Install docker compose plugin
         run: brew install docker-compose
