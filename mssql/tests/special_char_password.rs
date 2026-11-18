@@ -58,9 +58,12 @@ async fn assert_login_roundtrip(
     // Built by appending overrides to the admin string: duplicate keys are
     // last-wins, so this swaps the user/password and forces a plaintext login
     // so the test runs identically in the TLS and no-TLS CI lanes (and also
-    // exercises last-wins end-to-end).
+    // exercises last-wins end-to-end). `IntegratedSecurity=false` matters on
+    // the Windows lane: its admin string has `IntegratedSecurity=true`, and
+    // with `winauth` that plus a user/password means Windows (NTLM) auth as
+    // that user, which the server refuses for a SQL login (error 18452).
     let conn_str = format!(
-        "{};user={login};password={ado_password};encrypt=DANGER_PLAINTEXT",
+        "{};IntegratedSecurity=false;user={login};password={ado_password};encrypt=DANGER_PLAINTEXT",
         *ADMIN_CONN_STR
     );
     let result: anyhow::Result<()> = async {
