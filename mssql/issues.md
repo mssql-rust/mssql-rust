@@ -401,3 +401,18 @@ recorded in place under "Build with modifications", not left in Defer.
 #300/#79 similarly moved from Defer to "Build with modifications" once
 scoped out and built. What's left to build, if wanted: the rest of the
 "Defer" list.
+
+## native-tls fails the TLS handshake on macOS (local only)
+
+Found 2026-11-18 while verifying 2.0.0. On this Mac (Darwin 27), every
+encrypted connection through the `native-tls` backend (Security.framework)
+fails with `Tls("connection closed via error")`. This happens against Azure
+SQL Edge and against SQL Server 2025 with a modern RSA-2048/SHA-256
+certificate, so `--features=all` and the default features fail locally
+across the live suite. It is **not a regression**: released v1.1.0 fails the
+same way (70/70 bulk tests). rustls and vendored-openssl pass the full live
+suite on the same machine. native-tls is verified in CI on Linux (OpenSSL)
+and Windows (SChannel); no macOS CI job uses native-tls. Not yet root-caused.
+It may be Security.framework and TLS-inside-PRELOGIN framing, or the
+platform's TLS policy. Worth a macOS native-tls CI lane, or a documented
+"use rustls on macOS" note, if users report it.

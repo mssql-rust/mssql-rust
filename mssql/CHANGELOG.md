@@ -14,6 +14,14 @@ forward.
 
 ## Unreleased
 
+## Version 2.0.0
+
+A major release: see the BREAKING entries under "Changed" (async-std
+removed, `encrypt` defaults to Required, default timeouts, additive CA trust
+on rustls, `AADToken` holds `Zeroizing<String>`, MSRV 1.98, `chrono`
+replaced by `jiff`). Much of it is ported from upstream Tiberius 0.13 work;
+many thanks to the Tiberius team.
+
 ### Added (tooling)
 
 - Benchmarks with criterion: `benches/offline.rs` (no server needed) and
