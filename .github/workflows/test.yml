@@ -338,11 +338,12 @@ jobs:
           # IntegratedSecurity, but tests/special_char_password.rs creates SQL
           # logins and signs in as them. A Windows-only server refuses those
           # with error 18452 ("login is from an untrusted domain"). Takes
-          # effect on the restart below.
+          # effect on the restart below and is checked after it. (An SMO
+          # `$srv.Alter()` doesn't save `Settings.LoginMode`, and PowerShell
+          # doesn't fail the step on that, so use sqlcmd with -b.)
           echo "Enabling mixed-mode authentication"
-          $srv = New-Object ($smo + 'Server') $serverName
-          $srv.Settings.LoginMode = [Microsoft.SqlServer.Management.Smo.ServerLoginMode]::Mixed
-          $srv.Alter()
+          sqlcmd -S . -E -b -Q "EXEC xp_instance_regwrite N'HKEY_LOCAL_MACHINE', N'Software\Microsoft\MSSQLServer\MSSQLServer', N'LoginMode', REG_DWORD, 2"
+          if ($LASTEXITCODE -ne 0) { throw "could not set LoginMode" }
 
           # Start services
           echo "Starting services"
@@ -350,6 +351,16 @@ jobs:
           Start-Service SQLBrowser
           net stop MSSQLSERVER
           net start MSSQLSERVER
+
+          # Fail here, not in the tests, if mixed mode didn't take.
+          $mode = ""
+          foreach ($i in 1..30) {
+            $mode = (sqlcmd -S . -E -h -1 -W -Q "SET NOCOUNT ON; SELECT SERVERPROPERTY('IsIntegratedSecurityOnly')" 2>$null | Select-Object -First 1)
+            if ($LASTEXITCODE -eq 0 -and $mode) { break }
+            Start-Sleep -Seconds 2
+          }
+          echo "IsIntegratedSecurityOnly = $mode"
+          if ("$mode".Trim() -ne "0") { throw "SQL Server is not in mixed-mode authentication" }
 
       - name: Run normal tests
         shell: powershell
