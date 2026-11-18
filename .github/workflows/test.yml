@@ -169,6 +169,73 @@ jobs:
       - name: Run tests
         run: cargo test ${{matrix.features}}
 
+  # Line coverage of the unit tests plus the whole live suite, against SQL
+  # Server 2022 (mssql/tarpaulin-live.toml has the feature set). It reports a
+  # number and doesn't gate on one: the percentage goes to the job summary,
+  # and the HTML and lcov reports are uploaded as an artifact. The same
+  # tests already gate in cargo-test-linux, so a failure here means the
+  # instrumented build, not the code.
+  coverage:
+    runs-on: ubuntu-latest
+    env:
+      MSSQL_TEST_CONNECTION_STRING: "server=tcp:localhost,1433;user=SA;password=<YourStrong@Passw0rd>;TrustServerCertificate=true"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8  # v1
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          shared-key: coverage
+          workspaces: "mssql -> target"
+
+      - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68  # v2.88.1
+        with:
+          tool: cargo-tarpaulin
+
+      - name: Start SQL Server 2022
+        run: DOCKER_BUILDKIT=1 docker compose -f docker-compose.yml up -d mssql-2022
+
+      # Same capture-and-match wait as cargo-test-linux (see the comment there).
+      - name: Wait for SQL Server 2022
+        run: |
+          for _ in $(seq 1 90); do
+            logs="$(docker compose -f docker-compose.yml logs mssql-2022 2>&1 || true)"
+            case "$logs" in
+              *"SQL Server is now ready for client connections"*)
+                echo "SQL Server ready"; exit 0
+                ;;
+            esac
+            sleep 2
+          done
+          echo "SQL Server did not become ready in time; logs:" >&2
+          docker compose -f docker-compose.yml logs mssql-2022 || true
+          exit 1
+
+      - name: Run coverage
+        # pipefail: the default `bash -e` would let `tee` hide a failing run.
+        run: |
+          set -o pipefail
+          cargo tarpaulin --config tarpaulin-live.toml 2>&1 | tee tarpaulin.log
+          line="$(grep -E '^[0-9.]+% coverage' tarpaulin.log | tail -n 1)"
+          echo "### Coverage (SQL Server 2022, live suite)" >> "$GITHUB_STEP_SUMMARY"
+          echo "${line:-no coverage line found}" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: always()
+        with:
+          name: coverage-report
+          path: |
+            mssql/target/tarpaulin-live/tarpaulin-report.html
+            mssql/target/tarpaulin-live/lcov.info
+          if-no-files-found: warn
+
   cargo-test-windows:
     runs-on: windows-latest
 

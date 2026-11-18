@@ -25,7 +25,7 @@ cargo clippy --features=all -- -D warnings
 Clippy warnings are errors in CI — fix them or add a commented `#[allow]`,
 don't leave them for review.
 
-## Benchmarks and coverage (not in CI; run by hand when relevant)
+## Benchmarks and coverage (benches by hand; coverage also in CI's `coverage` job)
 
 ```sh
 cd mssql

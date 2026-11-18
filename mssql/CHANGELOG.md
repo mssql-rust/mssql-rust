@@ -23,6 +23,9 @@ forward.
   `tarpaulin-live.toml` (with the live suite). Baseline with
   rustls + tds73 + decimal/time/jiff/sql-browser/serde: 46.6% of lines
   offline and 71.9% with the live suite against Azure SQL Edge.
+- CI `coverage` job: the live coverage run against SQL Server 2022, with the
+  percentage in the job summary and the reports uploaded as an artifact.
+  It doesn't gate on a threshold.
 
 Much of this cycle ports hardening and fixes from upstream Tiberius 0.13.0
 ([tiberius-rs/tiberius](https://github.com/tiberius-rs/tiberius), released

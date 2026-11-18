@@ -111,6 +111,11 @@ Reports (HTML and `lcov.info`) go to `target/tarpaulin/` and
 excluded paths. `target/*` is among them, so the `target/package/` copies
 left by `cargo publish` don't count as uncovered code.
 
+CI's `coverage` job runs the live config against SQL Server 2022. It writes
+the percentage to the job summary and uploads the HTML and `lcov.info` as
+the `coverage-report` artifact. It reports the number but doesn't gate on a
+threshold.
+
 ## Code style and checks
 
 Before opening a PR, run what CI runs:
