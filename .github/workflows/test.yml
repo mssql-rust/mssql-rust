@@ -353,14 +353,21 @@ jobs:
           net start MSSQLSERVER
 
           # Fail here, not in the tests, if mixed mode didn't take.
+          # Capture sqlcmd's output before filtering it: piping it straight
+          # into `Select-Object -First 1` stops sqlcmd early, which leaves a
+          # nonzero $LASTEXITCODE, and the runner exits the step with that.
           $mode = ""
           foreach ($i in 1..30) {
-            $mode = (sqlcmd -S . -E -h -1 -W -Q "SET NOCOUNT ON; SELECT SERVERPROPERTY('IsIntegratedSecurityOnly')" 2>$null | Select-Object -First 1)
-            if ($LASTEXITCODE -eq 0 -and $mode) { break }
+            $out = sqlcmd -S . -E -b -h -1 -W -Q "SET NOCOUNT ON; SELECT SERVERPROPERTY('IsIntegratedSecurityOnly')" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              $mode = @($out | Where-Object { "$_".Trim() }) | Select-Object -First 1
+              if ($mode) { break }
+            }
             Start-Sleep -Seconds 2
           }
           echo "IsIntegratedSecurityOnly = $mode"
           if ("$mode".Trim() -ne "0") { throw "SQL Server is not in mixed-mode authentication" }
+          exit 0
 
       - name: Run normal tests
         shell: powershell
