@@ -277,6 +277,9 @@ fn connect_with_strict_encryption_fails_cleanly_against_a_non_tds80_server() -> 
         config.encryption(EncryptionLevel::Strict);
         config.trust_cert();
         config.authentication(AuthMethod::sql_server("sa", "<YourStrong@Passw0rd>"));
+        // A pre-TDS-8.0 server waits for a PRELOGIN that a raw-TLS Strict
+        // client never sends, so this fails by handshake timeout. Keep it short.
+        config.handshake_timeout(Some(std::time::Duration::from_secs(3)));
 
         let tcp = TcpStream::connect(config.get_addr()).await?;
 

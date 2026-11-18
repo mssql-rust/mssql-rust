@@ -34,6 +34,8 @@ use libgssapi::{
 use pretty_hex::*;
 #[cfg(all(unix, feature = "integrated-auth-gssapi"))]
 use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::{cmp, fmt::Debug, io, pin::Pin, task};
 use task::Poll;
 use tracing::{event, Level};
@@ -69,6 +71,12 @@ where
     /// desyncs the server or hangs waiting on it. Ported from upstream
     /// Tiberius (3e6afc3, 3f47d87).
     poisoned: bool,
+    /// Set by the token stream when `Config::command_timeout` fires
+    /// mid-response: the rest of that response is still unread on the wire,
+    /// so the connection is out of sync and must not be reused. Shared with
+    /// `TokenStream`'s `RoundTripTimeout`, which can't reach `self`.
+    /// (Upstream Tiberius 2c63330.)
+    command_desync: Arc<AtomicBool>,
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send> Debug for Connection<S> {
@@ -83,8 +91,19 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Debug for Connection<S> {
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
-    /// Creates a new connection
+    /// Creates a new connection. The handshake (PRELOGIN, TLS and login) is
+    /// bounded by [`Config::handshake_timeout`].
     pub(crate) async fn connect(config: Config, tcp_stream: S) -> crate::Result<Connection<S>> {
+        let handshake_timeout = config.handshake_timeout;
+        with_optional_timeout(handshake_timeout, Self::establish(config, tcp_stream)).await
+    }
+
+    async fn establish(config: Config, tcp_stream: S) -> crate::Result<Connection<S>> {
+        // Armed only once the handshake is done (below): the login drain goes
+        // through the same token stream, and the handshake is governed by
+        // `handshake_timeout` alone.
+        let command_timeout = config.command_timeout;
+
         let context = {
             let mut context = Context::new();
             context.set_spn(config.get_host(), config.get_port());
@@ -109,9 +128,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         let transport = if config.encryption == EncryptionLevel::Strict {
             event!(Level::DEBUG, "Performing a TLS handshake");
 
-            let mut stream =
-                create_tls_stream(&config, TlsPreloginWrapper::new(tcp_stream)).await?;
-            stream.get_mut().handshake_complete();
+            // TDS 8.0 Strict: the TLS handshake is raw TLS on the TCP stream,
+            // with no TDS PRELOGIN framing (that framing is only for the
+            // legacy in-band handshake in `tls_handshake`). So mark the
+            // wrapper's handshake "complete" *before* handshaking, as
+            // upstream Tiberius does. The reverse order, used until now,
+            // wrapped every handshake record in a PRELOGIN packet, which a
+            // real TDS 8.0 server can't parse.
+            let mut wrapper = TlsPreloginWrapper::new(tcp_stream);
+            wrapper.handshake_complete();
+            let stream = create_tls_stream(&config, wrapper).await?;
 
             event!(Level::DEBUG, "TLS handshake successful");
 
@@ -141,17 +167,26 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
             flushed: false,
             buf: BytesMut::new(),
             poisoned: false,
+            command_desync: Arc::new(AtomicBool::new(false)),
         };
 
         let fed_auth_required = matches!(config.auth, AuthMethod::AADToken(_));
 
+        event!(Level::DEBUG, "Handshake stage: sending PRELOGIN");
         let prelogin = connection
             .prelogin(config.encryption, fed_auth_required)
             .await?;
 
         let encryption = prelogin.negotiated_encryption(config.encryption)?;
+        event!(
+            Level::DEBUG,
+            "Handshake stage: PRELOGIN complete, negotiated encryption = {:?}",
+            encryption
+        );
 
         let connection = connection.tls_handshake(&config, encryption).await?;
+
+        event!(Level::DEBUG, "Handshake stage: sending login");
 
         let mut connection = connection
             .login(
@@ -168,6 +203,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
             .await?;
 
         connection.flush_done().await?;
+        event!(Level::DEBUG, "Handshake stage: login complete");
+
+        connection.context.set_command_timeout(command_timeout);
 
         Ok(connection)
     }
@@ -197,6 +235,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
     /// Fails if a previous request was left partly written (see the
     /// `poisoned` field). Such a connection can't be reused; open a new one.
     pub(crate) fn ensure_not_poisoned(&self) -> crate::Result<()> {
+        if self.command_desync.load(Ordering::Acquire) {
+            return Err(crate::Error::Protocol(
+                "connection was left out of sync with the server by a command timeout (the \
+                 rest of that response is still unread) and can no longer be used; open a \
+                 new connection"
+                    .into(),
+            ));
+        }
         if self.poisoned {
             return Err(crate::Error::Protocol(
                 "connection was left with a partly written request (a write was cancelled \
@@ -205,6 +251,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
             ));
         }
         Ok(())
+    }
+
+    /// The shared command-timeout desync flag; see the `command_desync` field.
+    pub(crate) fn command_desync_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.command_desync)
     }
 
     /// Marks a request as partly on the wire. See the `poisoned` field.
@@ -766,7 +817,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
                 event!(Level::DEBUG, "Performing a TLS handshake");
 
                 let Self {
-                    transport, context, ..
+                    transport,
+                    context,
+                    command_desync,
+                    ..
                 } = self;
                 let mut stream = match transport.into_inner() {
                     MaybeTlsStream::Raw(tcp) => {
@@ -786,6 +840,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
                     flushed: false,
                     buf: BytesMut::new(),
                     poisoned: false,
+                    command_desync,
                 })
             }
         }
@@ -940,5 +995,71 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> SqlReadBytes for Connection<S> {
     /// A mutable reference to the current execution context.
     fn context_mut(&mut self) -> &mut Context {
         &mut self.context
+    }
+}
+
+/// Runs `fut`, failing with an `Io` error of kind `TimedOut` if it doesn't
+/// finish within `timeout` (`None` runs it unbounded). `futures-timer`'s
+/// `Delay` is runtime-agnostic. Ported from upstream Tiberius 2c63330.
+async fn with_optional_timeout<F, T>(
+    timeout: Option<std::time::Duration>,
+    fut: F,
+) -> crate::Result<T>
+where
+    F: std::future::Future<Output = crate::Result<T>>,
+{
+    let Some(timeout) = timeout else {
+        return fut.await;
+    };
+
+    let fut = std::pin::pin!(fut);
+    match futures_util::future::select(fut, futures_timer::Delay::new(timeout)).await {
+        futures_util::future::Either::Left((res, _)) => res,
+        futures_util::future::Either::Right(((), _)) => Err(crate::Error::Io {
+            kind: io::ErrorKind::TimedOut,
+            message: format!(
+                "the connection handshake (PRELOGIN, TLS negotiation and login) did not \
+                 complete within {timeout:?}: the server accepted the TCP connection but \
+                 stalled or answered too slowly. Enable `tracing` at DEBUG to see the last \
+                 stage reached, or change the bound with `Config::handshake_timeout`."
+            ),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::with_optional_timeout;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn a_stalled_future_times_out() {
+        let err = with_optional_timeout(
+            Some(Duration::from_millis(20)),
+            std::future::pending::<crate::Result<()>>(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                crate::Error::Io {
+                    kind: std::io::ErrorKind::TimedOut,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn results_pass_through_and_none_is_unbounded() {
+        let ok = with_optional_timeout(Some(Duration::from_secs(5)), async { Ok(7) }).await;
+        assert_eq!(ok.unwrap(), 7);
+        let err = with_optional_timeout(None, async {
+            Err::<(), _>(crate::Error::Protocol("x".into()))
+        })
+        .await;
+        assert!(matches!(err, Err(crate::Error::Protocol(_))));
     }
 }

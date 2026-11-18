@@ -27,14 +27,26 @@ members = ["runtimes-macro"]
 # via `rust-version.workspace = true` instead of declaring its own value.
 rust-version = "1.98"
 
+# Benchmarks (criterion; `cargo bench`). `offline` needs no server; `live`
+# is skipped unless MSSQL_TEST_CONNECTION_STRING is set.
+[[bench]]
+name = "offline"
+harness = false
+
+[[bench]]
+name = "live"
+harness = false
+
 [[test]]
 path = "tests/query.rs"
 name = "query"
 
+# Runs against a local rustls *server* (tokio-rustls is only a dependency
+# with the rustls feature), so it can't build without it.
 [[test]]
-path = "tests/named-instance-async.rs"
-name = "named-instance-async"
-required-features = ["sql-browser-async-std"]
+path = "tests/tls_local.rs"
+name = "tls_local"
+required-features = ["rustls"]
 
 [[test]]
 path = "tests/named-instance-tokio.rs"
@@ -108,11 +120,6 @@ version = "0.7"
 features = ["compat"]
 optional = true
 
-[dependencies.async-std]
-version = "1"
-optional = true
-features = ["attributes"]
-
 [dependencies.jiff]
 version = "0.2.45"
 optional = true
@@ -122,6 +129,13 @@ features = ["std"]
 [dependencies.time]
 version = "0.3"
 optional = true
+
+# Runtime-agnostic timer behind `Config::handshake_timeout` and
+# `Config::command_timeout`: its `Delay` works under any executor, so the
+# generic `Client::connect` path can bound waits without tying itself to
+# tokio's or smol's timers. (Ported from upstream Tiberius 2c63330.)
+[dependencies.futures-timer]
+version = "3"
 
 [dependencies.futures-util]
 version = "0.3"
@@ -188,14 +202,11 @@ features = [
 ]
 version = "1.54"
 
-[dev-dependencies.async-std]
-features = ["attributes"]
-version = "1"
-
 [dev-dependencies.runtimes-macro]
 path = "./runtimes-macro"
 
 [dev-dependencies]
+criterion = "0.8.2"
 anyhow = "1"
 env_logger = "0.11"
 azure_identity = { version = "1.0.0", default-features = false }
@@ -218,7 +229,6 @@ all = [
     "jiff",
     "time",
     "tds73",
-    "sql-browser-async-std",
     "sql-browser-tokio",
     "sql-browser-smol",
     "integrated-auth-gssapi",
@@ -231,7 +241,6 @@ all = [
 default = ["tds73", "winauth", "native-tls"]
 tds73 = []
 docs = []
-sql-browser-async-std = ["async-std"]
 sql-browser-tokio = ["tokio", "tokio-util"]
 sql-browser-smol = ["async-io", "async-net", "futures-lite"]
 integrated-auth-gssapi = ["libgssapi"]

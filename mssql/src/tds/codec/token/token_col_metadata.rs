@@ -95,6 +95,7 @@ impl<'a> Display for MetaDataColumn<'a> {
                 VarLenType::Text => write!(f, "text")?,
                 VarLenType::Image => write!(f, "image")?,
                 VarLenType::NText => write!(f, "ntext")?,
+                VarLenType::SSVariant => write!(f, "sql_variant")?,
                 VarLenType::Intn => match ctx.len() {
                     1 => write!(f, "tinyint")?,
                     2 => write!(f, "smallint")?,
@@ -191,19 +192,11 @@ impl BaseMetaDataColumn {
                 VarLenType::NVarchar => ColumnData::String(None),
                 VarLenType::NChar => ColumnData::String(None),
                 VarLenType::Xml => ColumnData::Xml(None),
-                // Unreachable, not just unsupported: TypeInfo::decode
-                // (type_info.rs) already rejects a COLMETADATA type byte of
-                // Udt or SSVariant with Error::Protocol before constructing
-                // a TypeInfo::VarLenSized/VarLenSizedPrecision at all, so no
-                // `ty` reaching this match can ever be one of these two —
-                // confirmed panicking otherwise (`todo!()`/`unimplemented!()`
-                // on a value a conforming server can send), same class as
-                // prisma/tiberius#424.
-                VarLenType::Udt => unreachable!("Udt is rejected in TypeInfo::decode"),
+                VarLenType::Udt => ColumnData::Binary(None),
                 VarLenType::Text => ColumnData::String(None),
                 VarLenType::Image => ColumnData::Binary(None),
                 VarLenType::NText => ColumnData::String(None),
-                VarLenType::SSVariant => unreachable!("SSVariant is rejected in TypeInfo::decode"),
+                VarLenType::SSVariant => ColumnData::String(None),
             },
             TypeInfo::VarLenSizedPrecision { ty, .. } => match ty {
                 VarLenType::Guid => ColumnData::Guid(None),
@@ -229,19 +222,11 @@ impl BaseMetaDataColumn {
                 VarLenType::NVarchar => ColumnData::String(None),
                 VarLenType::NChar => ColumnData::String(None),
                 VarLenType::Xml => ColumnData::Xml(None),
-                // Unreachable, not just unsupported: TypeInfo::decode
-                // (type_info.rs) already rejects a COLMETADATA type byte of
-                // Udt or SSVariant with Error::Protocol before constructing
-                // a TypeInfo::VarLenSized/VarLenSizedPrecision at all, so no
-                // `ty` reaching this match can ever be one of these two —
-                // confirmed panicking otherwise (`todo!()`/`unimplemented!()`
-                // on a value a conforming server can send), same class as
-                // prisma/tiberius#424.
-                VarLenType::Udt => unreachable!("Udt is rejected in TypeInfo::decode"),
+                VarLenType::Udt => ColumnData::Binary(None),
                 VarLenType::Text => ColumnData::String(None),
                 VarLenType::Image => ColumnData::Binary(None),
                 VarLenType::NText => ColumnData::String(None),
-                VarLenType::SSVariant => unreachable!("SSVariant is rejected in TypeInfo::decode"),
+                VarLenType::SSVariant => ColumnData::String(None),
             },
             TypeInfo::Xml { .. } => ColumnData::Xml(None),
         }

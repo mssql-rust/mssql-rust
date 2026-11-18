@@ -314,37 +314,59 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
 
 ## Needs a decision first: behaviour change or new API surface
 
-- [ ] **`handshake_timeout` / `command_timeout`** (#375/#360, `2c63330`).
+- [x] **`handshake_timeout` / `command_timeout`** (#375/#360, `2c63330`).
+  **Decided 2026-11-17: use upstream's design and defaults** (15s/30s,
+  poison-on-timeout). Done on branch `upstream/tiberius-0.13-decisions`.
   Upstream defaults them to 15s/30s (BREAKING) and poisons the connection
   on timeout. Here: take the handshake timeout (`None` default, or 15s with
   a CHANGELOG note), and implement a command timeout through the existing
   Attention path rather than poisoning. **Decide** the defaults.
-- [ ] **TLS trust semantics** (`2f3c4a9`, `5885e11`). The rustls
+- [x] **TLS trust semantics** (`2f3c4a9`, `5885e11`). **Decided 2026-11-17:
+  additive everywhere, plus a rustls `trust_cert_ca_only` for pinning.** Done on
+  `upstream/tiberius-0.13-decisions`, along with multi-cert files and empty-file errors. The rustls
   `trust_cert_ca` rejects multi-cert files and *replaces* the roots, while
   native-tls/openssl *add* to them, and the docs claim "in addition to"
   for all three. An empty bundle silently adds nothing on
   native-tls/openssl. **Decide**: additive everywhere (widens trust) or
   replace everywhere and fix the docs. Port multi-cert and empty-bundle
   errors either way. Skip upstream's 1380-line rewrite.
-- [ ] **Connection-string `encrypt` default `Required`** (`3e6afc3`), which
+- [x] **Connection-string `encrypt` default `Required`** (`3e6afc3`).
+  **Decided 2026-11-17: yes.** Done on `upstream/tiberius-0.13-decisions`. It
   matches modern ADO.NET. BREAKING; this fork defaults to `Off`.
-- [ ] **Lift the rustls TLS 1.2-only pin**: it matters for TDS 8.0 Strict.
+- [x] **Lift the rustls TLS 1.2-only pin** (decided 2026-11-17: yes; done on
+  `upstream/tiberius-0.13-decisions`).
+  **Live result (SQL Server 2022 and 2025, Docker Desktop + Rosetta):** TLS 1.3
+  must be Strict-only. The TDS 7.x path breaks with InvalidContentType when 1.3
+  is offered, so it stays on 1.2. Strict negotiates TLS 1.3 + TDS 8.0 on 2025.
+  2022 on Linux refuses Strict with error 17821, even with a certificate that
+  2025 accepts. It matters for TDS 8.0 Strict.
   The pin exists for macOS CI KeyUpdate EOFs, so re-test there first.
 - [ ] **Larger additive features**, each to be built from this fork's
   source with its own review:
-  - SQL_VARIANT decode/encode (`ee4450b`, `dd19eeb`, `b0cf775`). Fix the
-    unchecked fixed-length size and the 16-byte numeric overflow found in
-    review.
-  - CLR UDT columns as `Binary` (`7c1075c`). Adding `TypeInfo::Udt` is
-    breaking.
-  - Typed NULL scalar parameters (`73e79d4`). Changes wire bytes; verify
-    live.
-  - Client-certificate (mTLS) auth (`4a212e7`).
-  - Transaction Manager requests (`8338bb8`).
-  - Table-valued parameters (`73e79d4`): only without the ungated macro and
-    without `format!("DECLARE @P AS {db_type}")` interpolation. Same
-    objection as #328.
-- [ ] **Drop async-std** (`d1f7e18`): it is unmaintained, and Unreleased
+  - SQL_VARIANT decode/encode (`ee4450b`, `dd19eeb`, `b0cf775`). **Decode
+    done** on `upstream/tiberius-0.13-decisions`, with the fixed-length size
+    check and checked numeric magnitude. Encode (bulk insert into
+    sql_variant) is **done** too. It needed a real collation: upstream's
+    all-zero one is rejected with error 8001.
+  - CLR UDT columns as `Binary` (`7c1075c`). **Done** on
+    `upstream/tiberius-0.13-decisions`, non-breaking (the UDT_INFO names are
+    read and dropped; no `TypeInfo::Udt`). The live test is skipped on Azure
+    SQL Edge (no CLR) and runs on the full SQL Server images in CI.
+  - Typed NULL scalar parameters (`73e79d4`). **Done** on
+    `upstream/tiberius-0.13-decisions`, verified live.
+  - Client-certificate (mTLS) auth (`4a212e7`). **Done** on
+    `upstream/tiberius-0.13-decisions`, verified against a local rustls server
+    requiring client certificates. Building that server also exposed and fixed
+    a Strict-mode framing bug (raw TLS, not PRELOGIN-wrapped).
+  - Transaction Manager requests (`8338bb8`). **Done** on
+    `upstream/tiberius-0.13-decisions`, with a name-length fix upstream
+    lacks (sent in bytes) and `rollback_to_savepoint`.
+  - Table-valued parameters (`73e79d4`): **Done** on
+    `upstream/tiberius-0.13-decisions` as `ProcParam::table`, with no macro
+    and a validated, bracket-quoted type name instead of
+    `format!("DECLARE @P AS {db_type}")` interpolation (#328's objection).
+- [x] **Drop async-std** (`d1f7e18`): **decided 2026-11-17: dropped**, on
+  `upstream/tiberius-0.13-decisions`; smol replaces it, in the test harness too: it is unmaintained, and Unreleased
   is already a breaking window.
 
 ## Skip

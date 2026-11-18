@@ -17,15 +17,6 @@ ignore = [
   # release that bumps its own rkyv requirement.
   "RUSTSEC-2026-0235",
 
-  # async-std is a direct, optional runtime backend (the sql-browser-async-std
-  # and async-std features) alongside Tokio and smol -- supporting a choice of
-  # async runtime is a stated goal of this crate, not something to drop
-  # silently. async-std's discontinuation announcement doesn't affect the
-  # already-published, still-functional 1.13.x line. Revisit if/when a
-  # maintained fork emerges, or as part of a deliberate breaking-change
-  # decision to drop the runtime.
-  "RUSTSEC-2025-0052",
-
   # rand 0.7.3, pulled in via winauth (Windows-only, cfg(windows), part of
   # the default feature set). winauth 0.0.5 is its latest release and still
   # pins rand 0.7; there has been no release addressing this. The advisory

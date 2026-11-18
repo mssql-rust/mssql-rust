@@ -22,12 +22,12 @@ use crate::{
         stream::{QueryStream, TokenStream},
         Collation,
     },
-    BulkLoadRequest, ColumnFlag, ColumnOrderHint, MetaDataColumn, ProcParam, SortOrder,
-    SqlBulkCopyOption, SqlBulkCopyOptions, SqlReadBytes, ToSql,
+    BulkLoadRequest, ColumnFlag, ColumnOrderHint, IsolationLevel, MetaDataColumn, ProcParam,
+    SortOrder, SqlBulkCopyOption, SqlBulkCopyOptions, SqlReadBytes, ToSql,
 };
 use codec::{
     BatchRequest, ColumnData, PacketHeader, RpcParam, RpcProcId, RpcStatus, TokenRpcRequest,
-    TypeInfo, VarLenContext, VarLenType,
+    TransactionManagerRequest, TypeInfo, VarLenContext, VarLenType,
 };
 use enumflags2::BitFlags;
 use futures_util::io::{AsyncRead, AsyncWrite};
@@ -262,12 +262,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     /// with `query` - read those first if you need both.
     ///
     /// An `OUTPUT` parameter's placeholder value (see
-    /// [`ProcParam::output`]) must be a concrete, non-`NULL` value of the
-    /// right type, not e.g. `&None::<i32>` - unlike `execute`/`query`,
-    /// there's no separate type-declaration string here for the server to
-    /// learn the type from otherwise, and SQL Server rejects an untyped
-    /// `NULL` bound as `OUTPUT` outright. Checked client-side with a clear
-    /// error before anything is sent.
+    /// [`ProcParam::output`]) establishes its type. It can be a concrete
+    /// value (`&0i32`), or a NULL of a type that is sent typed: `bool`, the
+    /// integer and float types, and `Uuid` (`&None::<i32>`). Other NULLs
+    /// (e.g. `&None::<&str>`) are sent untyped, which SQL Server rejects as
+    /// `OUTPUT`. Unlike `execute`/`query`, there is no separate
+    /// type-declaration string here for the server to learn the type from.
+    /// This is checked client-side, with a clear error, before anything is
+    /// sent.
     ///
     /// # Example
     ///
@@ -313,12 +315,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     where
         'a: 'b,
     {
-        if let Some(p) = params.iter().find(|p| p.output && p.value.is_null()) {
+        if let Some(p) = params
+            .iter()
+            .find(|p| p.output && p.value.is_untyped_null())
+        {
             return Err(crate::Error::Conversion(
                 format!(
-                    "OUTPUT parameter {} has no type: pass a concrete, non-NULL placeholder \
-                     value (e.g. &0i32) instead of a NULL one - SQL Server rejects an untyped \
-                     NULL bound as OUTPUT",
+                    "OUTPUT parameter {} has no type: pass a concrete placeholder value \
+                     (e.g. &0i32, or a typed NULL like &None::<i32>) - a NULL of this type is \
+                     sent untyped, and SQL Server rejects an untyped NULL bound as OUTPUT",
                     p.name
                 )
                 .into(),
@@ -341,9 +346,20 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
                     flags,
                     value: p.value.clone(),
                     type_info: None,
+                    table: None,
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        // Table-valued parameters need their table type's column layout,
+        // which the server reports for a `DECLARE @t AS <type>` table
+        // variable. Fetched before the RPC is sent.
+        let mut rpc_params = rpc_params;
+        for (param, rpc) in params.iter().zip(rpc_params.iter_mut()) {
+            if let Some(table) = &param.table {
+                rpc.table = Some(self.table_value(table).await?);
+            }
+        }
 
         let req = TokenRpcRequest::new(
             name,
@@ -360,6 +376,83 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         result.forward_to_metadata().await?;
 
         Ok(result)
+    }
+
+    /// Resolves a `ProcParam::table` argument into an encodable TVP by asking
+    /// the server for the table type's columns. The type name is a
+    /// caller-supplied identifier interpolated into SQL, so it is validated
+    /// and each part bracket-quoted. This replaces upstream Tiberius's
+    /// unquoted `DECLARE @P AS {db_type}` (73e79d4), which was
+    /// SQL-injection-shaped.
+    async fn table_value<'p>(
+        &mut self,
+        table: &crate::proc_param::TableParam<'p>,
+    ) -> crate::Result<codec::TableValue<'p>> {
+        validate_sql_identifier("table type", &table.type_name)?;
+        let parts = split_multipart_identifier(&table.type_name);
+        let (schema, type_name) = match parts.as_slice() {
+            [t] => (String::new(), t.clone()),
+            [s, t] => (s.clone(), t.clone()),
+            _ => {
+                return Err(crate::Error::Conversion(
+                    format!(
+                        "table type {:?} must be `type` or `schema.type`",
+                        table.type_name
+                    )
+                    .into(),
+                ))
+            }
+        };
+        if type_name.is_empty() {
+            return Err(crate::Error::Conversion("empty table type name".into()));
+        }
+
+        let qualified = if schema.is_empty() {
+            quote_identifier(&type_name)
+        } else {
+            format!(
+                "{}.{}",
+                quote_identifier(&schema),
+                quote_identifier(&type_name)
+            )
+        };
+
+        self.connection.flush_stream().await?;
+        let query = format!("DECLARE @tvp AS {qualified}; SELECT TOP 0 * FROM @tvp");
+        let req = BatchRequest::new(query, self.connection.context().transaction_descriptor());
+        let id = self.connection.context_mut().next_packet_id();
+        self.connection.send(PacketHeader::batch(id), req).await?;
+
+        let columns = TokenStream::new(&mut self.connection)
+            .try_unfold()
+            .try_fold(None, |columns, token| async move {
+                Ok(match token {
+                    ReceivedToken::NewResultset(meta) if columns.is_none() => {
+                        Some(meta.columns.clone())
+                    }
+                    _ => columns,
+                })
+            })
+            .await?
+            .ok_or_else(|| {
+                crate::Error::Protocol("no column metadata for the table type".into())
+            })?;
+
+        let columns = columns
+            .into_iter()
+            .map(|c| {
+                let mut base = c.base;
+                base.ty = codec::tvp_column_type(base.ty);
+                base
+            })
+            .collect();
+
+        Ok(codec::TableValue {
+            schema,
+            type_name,
+            columns,
+            rows: table.rows.clone(),
+        })
     }
 
     /// Execute a `BULK INSERT` statement, efficiently storing a large number of
@@ -720,6 +813,111 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         self.connection.close().await
     }
 
+    /// Begins a transaction with a TDS Transaction Manager request
+    /// (`TM_BEGIN_XACT`, MS-TDS 2.2.6.9) instead of a `BEGIN TRAN` batch.
+    /// The server's transaction descriptor (from its ENVCHANGE reply) is
+    /// attached to every following request until
+    /// [`commit_transaction`](Self::commit_transaction) or
+    /// [`rollback_transaction`](Self::rollback_transaction). Uses the
+    /// session's isolation level; see
+    /// [`begin_transaction_with_isolation`](Self::begin_transaction_with_isolation).
+    ///
+    /// ```
+    /// # use mssql::{Config, IsolationLevel};
+    /// # use tokio_util::compat::TokioAsyncWriteCompatExt;
+    /// # use std::env;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let c_str = env::var("MSSQL_TEST_CONNECTION_STRING").unwrap_or(
+    /// #     "server=tcp:localhost,1433;integratedSecurity=true;TrustServerCertificate=true".to_owned(),
+    /// # );
+    /// # let config = Config::from_ado_string(&c_str)?;
+    /// # let tcp = tokio::net::TcpStream::connect(config.get_addr()).await?;
+    /// # let mut client = mssql::Client::connect(config, tcp.compat_write()).await?;
+    /// client.begin_transaction_with_isolation(IsolationLevel::Serializable).await?;
+    /// client.execute("SELECT 1", &[]).await?;
+    /// client.commit_transaction().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Ported from upstream Tiberius (tiberius-rs/tiberius 8338bb8).
+    pub async fn begin_transaction(&mut self) -> crate::Result<()> {
+        self.begin_transaction_with_isolation(IsolationLevel::Unspecified)
+            .await
+    }
+
+    /// [`begin_transaction`](Self::begin_transaction) with an explicit
+    /// isolation level.
+    pub async fn begin_transaction_with_isolation(
+        &mut self,
+        isolation_level: IsolationLevel,
+    ) -> crate::Result<()> {
+        let desc = self.connection.context().transaction_descriptor();
+        self.send_transaction_manager_request(TransactionManagerRequest::begin(
+            desc,
+            isolation_level,
+            "".into(),
+        ))
+        .await
+    }
+
+    /// Commits the active transaction (`TM_COMMIT_XACT`).
+    pub async fn commit_transaction(&mut self) -> crate::Result<()> {
+        let desc = self.connection.context().transaction_descriptor();
+        self.send_transaction_manager_request(TransactionManagerRequest::commit(desc, "".into()))
+            .await
+    }
+
+    /// Rolls back the active transaction (`TM_ROLLBACK_XACT`).
+    pub async fn rollback_transaction(&mut self) -> crate::Result<()> {
+        let desc = self.connection.context().transaction_descriptor();
+        self.send_transaction_manager_request(TransactionManagerRequest::rollback(desc, "".into()))
+            .await
+    }
+
+    /// Rolls back to a savepoint created with
+    /// [`save_transaction`](Self::save_transaction), keeping the outer
+    /// transaction open (`TM_ROLLBACK_XACT` with a name).
+    pub async fn rollback_to_savepoint<'n>(
+        &mut self,
+        name: impl Into<Cow<'n, str>>,
+    ) -> crate::Result<()> {
+        let desc = self.connection.context().transaction_descriptor();
+        self.send_transaction_manager_request(TransactionManagerRequest::rollback(
+            desc,
+            name.into(),
+        ))
+        .await
+    }
+
+    /// Creates a named savepoint in the active transaction (`TM_SAVE_XACT`).
+    pub async fn save_transaction<'n>(
+        &mut self,
+        name: impl Into<Cow<'n, str>>,
+    ) -> crate::Result<()> {
+        let desc = self.connection.context().transaction_descriptor();
+        self.send_transaction_manager_request(TransactionManagerRequest::save(desc, name.into()))
+            .await
+    }
+
+    async fn send_transaction_manager_request(
+        &mut self,
+        req: TransactionManagerRequest<'_>,
+    ) -> crate::Result<()> {
+        self.connection.flush_stream().await?;
+
+        let id = self.connection.context_mut().next_packet_id();
+        self.connection
+            .send(PacketHeader::transaction_manager(id), req)
+            .await?;
+
+        // DONE, plus an ENVCHANGE that the token stream applies to the
+        // context's transaction descriptor.
+        TokenStream::new(&mut self.connection).flush_done().await?;
+        Ok(())
+    }
+
     pub(crate) fn rpc_params<'a>(query: impl Into<Cow<'a, str>>) -> Vec<RpcParam<'a>> {
         vec![
             RpcParam {
@@ -727,12 +925,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
                 flags: BitFlags::empty(),
                 value: ColumnData::String(Some(query.into())),
                 type_info: None,
+                table: None,
             },
             RpcParam {
                 name: Cow::Borrowed("params"),
                 flags: BitFlags::empty(),
                 value: ColumnData::I32(Some(0)),
                 type_info: None,
+                table: None,
             },
         ]
     }
@@ -810,6 +1010,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
                 flags: BitFlags::empty(),
                 value: param,
                 type_info,
+                table: None,
             });
         }
 

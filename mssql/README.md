@@ -39,8 +39,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-See the [`examples/`](examples) directory for more, including [async-std](examples/async-std.rs)
-and [smol](examples/smol.rs), the [`ConfigBuilder`](examples/config_builder.rs)
+See the [`examples/`](examples) directory for more, including
+[smol](examples/smol.rs), the [`ConfigBuilder`](examples/config_builder.rs)
 API, [`IN` lists](examples/in_list.rs), [bulk insert with options](examples/bulk_insert_with_options.rs),
 [calling a stored procedure with `OUTPUT` parameters](examples/call_procedure.rs),
 [TDS 8.0 Strict encryption](examples/strict_encryption.rs),
@@ -119,7 +119,6 @@ an intentional bump — please open an issue.
 | `time`                   | Read and write date and time values using `time` crate types.                                                                    | `disabled` |
 | `rust_decimal`           | Read and write `numeric`/`decimal` values using `rust_decimal`'s `Decimal`.                                                      | `disabled` |
 | `bigdecimal`             | Read and write `numeric`/`decimal` values using `bigdecimal`'s `BigDecimal`.                                                     | `disabled` |
-| `sql-browser-async-std`  | SQL Browser implementation for the `TcpStream` of async-std.                                                                     | `disabled` |
 | `sql-browser-tokio`      | SQL Browser implementation for the `TcpStream` of Tokio.                                                                         | `disabled` |
 | `sql-browser-smol`       | SQL Browser implementation for the `TcpStream` of smol.                                                                          | `disabled` |
 | `integrated-auth-gssapi` | Support for using Integrated Auth via a real Kerberos ticket cache (GSSAPI), Unix only.                                          | `disabled` |
@@ -131,7 +130,7 @@ an intentional bump — please open an issue.
 
 `mssql` does not rely on any protocol when connecting to an SQL Server instance. Instead the `Client` takes a socket that implements the `AsyncRead` and `AsyncWrite` traits from the [futures-rs](https://crates.io/crates/futures) crate.
 
-Currently there are good async implementations for TCP in the [async-std](https://crates.io/crates/async-std), [Tokio](https://crates.io/crates/tokio) and [Smol](https://crates.io/crates/smol) projects. See [`examples/tokio.rs`](examples/tokio.rs), [`examples/async-std.rs`](examples/async-std.rs), and [`examples/smol.rs`](examples/smol.rs).
+Currently there are good async implementations for TCP in the [Tokio](https://crates.io/crates/tokio) and [Smol](https://crates.io/crates/smol) projects. See [`examples/tokio.rs`](examples/tokio.rs) and [`examples/smol.rs`](examples/smol.rs). (async-std support was removed: async-std is discontinued, and its maintainers recommend smol.)
 
 To be able to use them together with `mssql` on Windows platforms with SQL Server, you should make sure that the TCP protocol is enabled, as depending on the edition, this may not be the case. Standard and Enterprise editions will have the setting enabled by default, whereas Developer, Express editions and the Windows Internal Database feature of the Windows Server OS don't.
 To enable the TCP/IP protocol you may want to use  the [server settings](https://docs.microsoft.com/en-us/sql/database-engine/configure-windows/enable-or-disable-a-server-network-protocol) the [command line](https://docs.microsoft.com/en-us/sql/powershell/how-to-enable-tcp-sqlps).
@@ -153,7 +152,17 @@ settings through an environment variable or a configuration file.
 
 Beyond host/port/credentials, `Config` also covers:
 
+- `handshake_timeout` (default 15s) and `command_timeout` (default 30s,
+  per server round-trip): a stalled server becomes an `Io` `TimedOut` error
+  instead of a hang. Raise `command_timeout`, or set it to `None`, for
+  statements that legitimately run longer than 30s before the server
+  responds. A connection whose command timed out is out of sync; open a
+  new one.
 - `client_name` — the workstation name sent in the login packet.
+- `client_certificate(cert, key)` / `client_certificate_pkcs12(path, password)`
+  — present a client certificate (mutual TLS), e.g. to a TLS-terminating
+  proxy that requires one. rustls takes PEM/DER files, native-tls PEM files
+  or PKCS#12, and vendored-openssl PKCS#12 only.
 - `host_name_in_certificate` — validate a TLS certificate issued for a name
   other than the connection address (proxies, load balancers).
 - `packet_size` — request a non-default TDS packet size (512–32767), which
@@ -192,9 +201,10 @@ add `mssql = { version = "*", features = ["rustls"] }` to your `Cargo.toml`.
 Server certificate trust defaults to the operating system's certificate
 store. `Config::trust_cert()` disables validation entirely (development
 only), while `Config::trust_cert_ca()` and `Config::trust_cert_ca_bundle()`
-trust one specific CA certificate — from a file or from bytes already in
+trust specific CA certificates — from a file or from bytes already in
 memory (see [`examples/ca_certificate_bundle.rs`](examples/ca_certificate_bundle.rs))
-— in addition to the system store. With the `rustls-webpki-roots` feature,
+— in addition to the system store, on every TLS backend. To trust *only* a
+given CA (certificate pinning), use `Config::trust_cert_ca_only()` (rustls). With the `rustls-webpki-roots` feature,
 `Config::trust_webpki_roots()` validates against Mozilla's bundled root CA
 list instead (see [`examples/webpki_roots.rs`](examples/webpki_roots.rs)),
 which is useful in minimal containers that don't ship one.
@@ -265,10 +275,24 @@ Build the parameter list with `ProcParam::input`/`ProcParam::output`, then
 once the returned `QueryStream` has been read (or if there's no result set
 to read), call `QueryStream::into_output_params` to get an `OutputParams`
 with the `OUTPUT` values and `return_status()`. An `OUTPUT` parameter's
-placeholder value must be a concrete, non-`NULL` value of the right type
-(e.g. `&0i32`, not `&None::<i32>`) — SQL Server rejects an untyped `NULL`
-bound as `OUTPUT`, and `call_procedure` checks for this client-side before
-sending anything. See [`examples/call_procedure.rs`](examples/call_procedure.rs).
+placeholder value establishes its type: a concrete value (`&0i32`) or a
+typed NULL (`&None::<i32>`, which works for `bool`, the integer and float
+types, and `Uuid`). Other NULLs (e.g. `&None::<&str>`) are sent untyped,
+which SQL Server rejects as `OUTPUT`; `call_procedure` checks for this
+client-side before sending anything. See [`examples/call_procedure.rs`](examples/call_procedure.rs).
+
+A table-valued parameter is `ProcParam::table("@rows", "dbo.MyTableType", rows)`,
+where `rows` is a `Vec<TokenRow>` with one value per column of the table
+type, in its column order. The procedure must declare it `READONLY`.
+
+## Transactions
+
+Plain T-SQL (`BEGIN TRAN` / `COMMIT` via `simple_query`) works, and so do
+protocol-level Transaction Manager requests:
+`Client::begin_transaction` (or `begin_transaction_with_isolation(IsolationLevel::..)`),
+`commit_transaction`, `rollback_transaction`, `save_transaction(name)` and
+`rollback_to_savepoint(name)`. Either way, the server's transaction
+descriptor is attached to every request until the transaction ends.
 
 ## Redirects
 

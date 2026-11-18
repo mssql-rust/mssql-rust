@@ -9,8 +9,11 @@ before treating it as final.
 
 - **`Config`** — everything needed to open a connection: host, port,
   authentication, encryption/trust settings, and a handful of tuning knobs
-  (`client_name`, `host_name_in_certificate`, `packet_size`,
-  `multi_subnet_failover`, `readonly`). Build it with `Config::new()` plus
+  (`client_name`, `host_name_in_certificate`, `client_certificate` /
+  `client_certificate_pkcs12` for mutual TLS, `packet_size`,
+  `multi_subnet_failover`, `readonly`, `handshake_timeout` (15s) and
+  `command_timeout` (30s per server round-trip; a timed-out connection
+  must be discarded)). Build it with `Config::new()` plus
   setters, or the equivalent chainable `Config::builder()` — both produce the
   same `Config` and are fully supported (see
   [`examples/config_builder.rs`](../../mssql/examples/config_builder.rs)).
@@ -30,9 +33,15 @@ before treating it as final.
   `OUTPUT` parameters (built with `ProcParam::input`/`ProcParam::output`)
   and the procedure's `RETURN` value — call `QueryStream::into_output_params`
   on the result to get an `OutputParams`. An `OUTPUT` parameter's placeholder
-  must be a concrete, non-`NULL` value of the right type (e.g. `&0i32`, not
-  `&None::<i32>`) — see
+  sets its type: a concrete value (`&0i32`) or a typed NULL (`&None::<i32>`;
+  bool/integer/float/Uuid only, since other NULLs are sent untyped) — see
   [`examples/call_procedure.rs`](../../mssql/examples/call_procedure.rs).
+- **Table-valued parameters** — `ProcParam::table(name, "schema.Type", rows)`
+  with `TokenRow` rows, for `call_procedure` only.
+- **Transactions** — `BEGIN TRAN`/`COMMIT` batches work, or use
+  `Client::begin_transaction[_with_isolation]`, `commit_transaction`,
+  `rollback_transaction`, `save_transaction` and `rollback_to_savepoint`
+  (TDS Transaction Manager requests; `IsolationLevel` picks the level).
 - **`Query`** — an alternative to the `Client` convenience methods for when
   parameters come from a dynamic collection or need to be bound by value:
   `Query::new("SELECT @P1")`, then `.bind(value)` or `.bind_iter(values)`,
@@ -66,10 +75,10 @@ transport. `Client::connect` takes any socket implementing the
 traits — the caller is responsible for creating and connecting that socket.
 In practice:
 
-- **async-std** and **smol**'s `TcpStream` already implement the right
-  traits directly — connect and hand it straight to `Client::connect` (see
-  [`examples/async-std.rs`](../../mssql/examples/async-std.rs) and
-  [`examples/smol.rs`](../../mssql/examples/smol.rs)).
+- **smol**'s `TcpStream` already implements the right traits directly —
+  connect and hand it straight to `Client::connect` (see
+  [`examples/smol.rs`](../../mssql/examples/smol.rs)). async-std support was
+  removed (async-std is discontinued; smol is its recommended successor).
 - **Tokio** uses its own `AsyncRead`/`AsyncWrite` traits, so its
   `TcpStream` needs wrapping with `tokio_util::compat`'s
   `TokioAsyncWriteCompatExt::compat_write()` first (see
@@ -77,8 +86,8 @@ In practice:
   [`README.md`](../../mssql/README.md) quickstart).
 
 This is also why SQL Browser support (resolving a named instance to a port)
-is split into three features — `sql-browser-async-std`,
-`sql-browser-tokio`, `sql-browser-smol` — one per runtime's own `TcpStream`.
+is split into two features — `sql-browser-tokio` and `sql-browser-smol` —
+one per runtime's own `TcpStream`.
 
 ## Choosing a TLS backend
 
@@ -96,8 +105,9 @@ conflicting `TlsStream` implementations.
 
 Certificate trust defaults to the OS certificate store. `Config::trust_cert()`
 disables validation entirely (development only); `Config::trust_cert_ca()` /
-`Config::trust_cert_ca_bundle()` trust one additional CA (from a file or from
-in-memory bytes) alongside the system store. With `rustls-webpki-roots`
+`Config::trust_cert_ca_bundle()` trust additional CAs (from a file or from
+in-memory bytes) alongside the system store, on every backend;
+`Config::trust_cert_ca_only()` (rustls) trusts only the given CA (pinning). With `rustls-webpki-roots`
 (implies `rustls`), `Config::trust_webpki_roots()` validates against
 Mozilla's bundled root list instead — useful in minimal containers with no
 system trust store (see

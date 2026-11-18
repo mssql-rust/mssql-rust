@@ -1,5 +1,8 @@
 use crate::{
-    client::{config::Config, TrustConfig},
+    client::{
+        config::{ClientCertSource, Config},
+        TrustConfig,
+    },
     error::IoErrorKind,
     Error,
 };
@@ -17,9 +20,9 @@ use tokio_rustls::{
             WantsClientCert,
         },
         crypto::{ring, CryptoProvider},
-        pki_types::{pem::PemObject, CertificateDer, ServerName, UnixTime},
-        version, ClientConfig, ConfigBuilder, DigitallySignedStruct, Error as RustlsError,
-        RootCertStore, SignatureScheme, WantsVerifier,
+        pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, ServerName, UnixTime},
+        ClientConfig, ConfigBuilder, DigitallySignedStruct, Error as RustlsError, RootCertStore,
+        SignatureScheme, WantsVerifier,
     },
     TlsConnector,
 };
@@ -30,6 +33,164 @@ impl From<tokio_rustls::rustls::Error> for Error {
     fn from(e: tokio_rustls::rustls::Error) -> Self {
         crate::Error::Tls(e.to_string())
     }
+}
+
+/// The platform trust store, tolerating individual load/parse errors (they
+/// are logged). May be empty, e.g. in a container without a CA bundle.
+fn native_root_store() -> RootCertStore {
+    let mut roots = RootCertStore::empty();
+    let mut valid_count = 0;
+    let mut invalid_count = 0;
+
+    let loaded = rustls_native_certs::load_native_certs();
+    for err in &loaded.errors {
+        event!(Level::WARN, "error loading a platform certificate: {}", err);
+    }
+
+    for cert in loaded.certs {
+        match roots.add(cert) {
+            Ok(_) => valid_count += 1,
+            Err(err) => {
+                event!(Level::DEBUG, "certificate parsing failed: {:?}", err);
+                invalid_count += 1
+            }
+        }
+    }
+    event!(
+        Level::TRACE,
+        "native roots: {} valid and {} invalid certs",
+        valid_count,
+        invalid_count
+    );
+    roots
+}
+
+/// The CA certificate(s) in a `.pem`/`.crt` (every certificate in it; this
+/// used to reject a file with more than one) or `.der` file.
+fn read_ca_file(path: &std::path::Path) -> crate::Result<Vec<CertificateDer<'static>>> {
+    let buf = fs::read(path).map_err(|e| Error::Io {
+        kind: IoErrorKind::InvalidData,
+        message: format!("Could not read CA certificate {}: {e}", path.display()),
+    })?;
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let certs: Vec<CertificateDer<'static>> = match ext.as_str() {
+        "pem" | "crt" => CertificateDer::pem_slice_iter(&buf)
+            .collect::<Result<_, _>>()
+            .map_err(|e| Error::Io {
+                kind: IoErrorKind::InvalidData,
+                message: format!("Failed to parse PEM certificate: {e}"),
+            })?,
+        "der" => vec![CertificateDer::from(buf)],
+        _ => {
+            return Err(Error::Io {
+                kind: IoErrorKind::InvalidInput,
+                message: "Provided CA certificate with unsupported file-extension! Supported types are pem, crt and der.".to_string(),
+            })
+        }
+    };
+    if certs.is_empty() {
+        return Err(Error::Io {
+            kind: IoErrorKind::InvalidInput,
+            message: format!(
+                "CA certificate file {} contains no certificates",
+                path.display()
+            ),
+        });
+    }
+    Ok(certs)
+}
+
+/// `certs`, on top of the platform roots when `with_native_roots` (the
+/// additive `trust_cert_ca`/`trust_cert_ca_bundle`), or alone (the pinning
+/// `trust_cert_ca_only`).
+fn ca_root_store(
+    certs: Vec<CertificateDer<'static>>,
+    with_native_roots: bool,
+) -> crate::Result<RootCertStore> {
+    let mut roots = if with_native_roots {
+        native_root_store()
+    } else {
+        RootCertStore::empty()
+    };
+    for cert in certs {
+        roots.add(cert)?;
+    }
+    Ok(roots)
+}
+
+/// Reads the client certificate chain and private key for mutual TLS
+/// (`Config::client_certificate`). Ported from upstream Tiberius 4a212e7.
+fn load_client_auth(
+    source: &ClientCertSource,
+) -> crate::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+    let (cert, key) = match source {
+        ClientCertSource::CertAndKey { cert, key } => (cert, key),
+        #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
+        ClientCertSource::Pkcs12 { .. } => {
+            return Err(Error::Tls(
+                "the rustls backend doesn't support PKCS#12 client certificates; pass \
+                 separate certificate and key files to `Config::client_certificate`"
+                    .into(),
+            ))
+        }
+    };
+
+    let read = |path: &std::path::Path, what: &str| {
+        fs::read(path).map_err(|e| Error::Io {
+            kind: IoErrorKind::InvalidData,
+            message: format!("Could not read client {what} {}: {e}", path.display()),
+        })
+    };
+    let ext = |path: &std::path::Path| {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default()
+    };
+    let invalid = |message: String| Error::Io {
+        kind: IoErrorKind::InvalidData,
+        message,
+    };
+
+    let cert_buf = read(cert, "certificate")?;
+    let chain: Vec<CertificateDer<'static>> = match ext(cert).as_str() {
+        "pem" | "crt" => CertificateDer::pem_slice_iter(&cert_buf)
+            .collect::<Result<_, _>>()
+            .map_err(|e| invalid(format!("Failed to parse PEM client certificate: {e}")))?,
+        "der" => vec![CertificateDer::from(cert_buf)],
+        _ => {
+            return Err(Error::Io {
+                kind: IoErrorKind::InvalidInput,
+                message: "Client certificate must be a .pem, .crt or .der file".into(),
+            })
+        }
+    };
+    if chain.is_empty() {
+        return Err(invalid(format!(
+            "Client certificate file {} contains no certificates",
+            cert.display()
+        )));
+    }
+
+    let key_buf = read(key, "private key")?;
+    let key = match ext(key).as_str() {
+        "pem" | "key" => PrivateKeyDer::from_pem_slice(&key_buf)
+            .map_err(|e| invalid(format!("Failed to parse PEM private key: {e}")))?,
+        "der" => PrivateKeyDer::try_from(key_buf)
+            .map_err(|e| invalid(format!("Failed to parse DER private key: {e}")))?,
+        _ => {
+            return Err(Error::Io {
+                kind: IoErrorKind::InvalidInput,
+                message: "Client private key must be a .pem, .key or .der file".into(),
+            })
+        }
+    };
+
+    Ok((chain, key))
 }
 
 /// Turns a certificate-validation failure during the TLS handshake into an
@@ -149,63 +310,33 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
             .cloned()
             .unwrap_or_else(|| Arc::new(ring::default_provider()));
 
+        // TDS 8.0 Strict (TLS directly on TCP) may negotiate TLS 1.2 or 1.3.
+        // The older TDS 7.x handshake (TLS records wrapped in PRELOGIN
+        // packets, for every other encryption level) supports TLS only up to
+        // 1.2, per Microsoft's TDS 8.0 compatibility table. Verified live: a
+        // SQL Server 2022 allowing TLS 1.3 negotiates it on the TDS 7.x path
+        // and the connection then breaks with "received corrupt message of
+        // type InvalidContentType". So offer 1.3 only for Strict.
+        let versions: &[&'static tokio_rustls::rustls::SupportedProtocolVersion] =
+            if config.encryption == crate::EncryptionLevel::Strict {
+                tokio_rustls::rustls::DEFAULT_VERSIONS
+            } else {
+                &[&tokio_rustls::rustls::version::TLS12]
+            };
         let builder = ClientConfig::builder_with_provider(provider)
-            .with_protocol_versions(&[&version::TLS12])
+            .with_protocol_versions(versions)
             .map_err(|e| crate::Error::Tls(e.to_string()))?;
 
-        let mut client_config = match &config.trust {
+        let wants_client_cert: ConfigBuilder<ClientConfig, WantsClientCert> = match &config.trust {
+            // trust_cert_ca / trust_cert_ca_bundle add to the system roots,
+            // as on native-tls and vendored-openssl (and as documented).
+            // They used to *replace* them here. trust_cert_ca_only keeps
+            // that pinning behaviour, explicitly.
             TrustConfig::CaCertificateLocation(path) => {
-                if let Ok(buf) = fs::read(path) {
-                    let cert = match path.extension() {
-                        Some(ext)
-                            if ext.eq_ignore_ascii_case("pem")
-                                || ext.eq_ignore_ascii_case("crt") =>
-                        {
-                            let pem_certs: Vec<
-                                CertificateDer<'static>,
-                            > = CertificateDer::pem_slice_iter(&buf)
-                                .collect::<Result<Vec<_>, _>>()
-                                .map_err(|e| crate::Error::Io {
-                                    kind: IoErrorKind::InvalidData,
-                                    message: format!(
-                                        "Failed to parse PEM certificate: {e}"
-                                    ),
-                                })?;
-                            if pem_certs.len() != 1 {
-                                return Err(crate::Error::Io {
-                                    kind: IoErrorKind::InvalidInput,
-                                    message: format!(
-                                        "Certificate file {} contain 0 or more than 1 certs",
-                                        path.to_string_lossy()
-                                    ),
-                                });
-                            }
-
-                            pem_certs.into_iter().next().unwrap()
-                        }
-                        Some(ext)
-                            if ext.eq_ignore_ascii_case("der") =>
-                        {
-                            CertificateDer::from(buf)
-                        }
-                        Some(_) | None => {
-                            return Err(crate::Error::Io {
-                                kind: IoErrorKind::InvalidInput,
-                                message: "Provided CA certificate with unsupported file-extension! Supported types are pem, crt and der.".to_string(),
-                            })
-                        }
-                    };
-                    let mut cert_store = RootCertStore::empty();
-                    cert_store.add(cert)?;
-                    builder
-                        .with_root_certificates(cert_store)
-                        .with_no_client_auth()
-                } else {
-                    return Err(Error::Io {
-                        kind: IoErrorKind::InvalidData,
-                        message: "Could not read provided CA certificate!".to_string(),
-                    });
-                }
+                builder.with_root_certificates(ca_root_store(read_ca_file(path)?, true)?)
+            }
+            TrustConfig::CaCertificateOnly(path) => {
+                builder.with_root_certificates(ca_root_store(read_ca_file(path)?, false)?)
             }
             TrustConfig::CaCertificateBundle(bundle) => {
                 let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(bundle)
@@ -214,7 +345,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
                         kind: IoErrorKind::InvalidData,
                         message: format!("Failed to parse PEM certificate bundle: {e}"),
                     })?;
-
                 if certs.is_empty() {
                     return Err(crate::Error::Io {
                         kind: IoErrorKind::InvalidInput,
@@ -222,15 +352,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
                             .to_string(),
                     });
                 }
-
-                let mut cert_store = RootCertStore::empty();
-                for cert in certs {
-                    cert_store.add(cert)?;
-                }
-
-                builder
-                    .with_root_certificates(cert_store)
-                    .with_no_client_auth()
+                builder.with_root_certificates(ca_root_store(certs, true)?)
             }
             TrustConfig::TrustAll => {
                 event!(
@@ -240,17 +362,30 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> TlsStream<S> {
                 builder
                     .dangerous()
                     .with_custom_certificate_verifier(Arc::new(NoCertVerifier))
-                    .with_no_client_auth()
             }
             TrustConfig::Default => {
                 event!(Level::INFO, "Using default trust configuration.");
-                builder.with_native_roots()?.with_no_client_auth()
+                builder.with_native_roots()?
             }
             #[cfg(feature = "rustls-webpki-roots")]
             TrustConfig::WebPkiRoots => {
                 event!(Level::INFO, "Using webpki-roots trust configuration.");
-                builder.with_webpki_roots().with_no_client_auth()
+                builder.with_webpki_roots()
             }
+        };
+
+        let mut client_config = match &config.client_cert {
+            Some(source) => {
+                event!(
+                    Level::DEBUG,
+                    "Presenting a client certificate for mutual TLS."
+                );
+                let (chain, key) = load_client_auth(source)?;
+                wants_client_cert
+                    .with_client_auth_cert(chain, key)
+                    .map_err(|e| crate::Error::Tls(e.to_string()))?
+            }
+            None => wants_client_cert.with_no_client_auth(),
         };
 
         if config.encryption == crate::EncryptionLevel::Strict {
@@ -321,30 +456,7 @@ impl ConfigBuilderExt for ConfigBuilder<ClientConfig, WantsVerifier> {
     // errors are now logged and tolerated, and an empty store is a TLS error
     // (fails closed). Ported from upstream Tiberius afdf8b3 / 5885e11 / 3e6afc3.
     fn with_native_roots(self) -> crate::Result<ConfigBuilder<ClientConfig, WantsClientCert>> {
-        let mut roots = RootCertStore::empty();
-        let mut valid_count = 0;
-        let mut invalid_count = 0;
-
-        let loaded = rustls_native_certs::load_native_certs();
-        for err in &loaded.errors {
-            event!(Level::WARN, "error loading a platform certificate: {}", err);
-        }
-
-        for cert in loaded.certs {
-            match roots.add(cert) {
-                Ok(_) => valid_count += 1,
-                Err(err) => {
-                    event!(Level::DEBUG, "certificate parsing failed: {:?}", err);
-                    invalid_count += 1
-                }
-            }
-        }
-        event!(
-            Level::TRACE,
-            "with_native_roots processed {} valid and {} invalid certs",
-            valid_count,
-            invalid_count
-        );
+        let roots = native_root_store();
         if roots.is_empty() {
             return Err(crate::Error::Tls(
                 "no CA certificates found in the platform trust store; install the system \
@@ -432,7 +544,25 @@ mod handshake_error_tests {
             .cloned()
             .unwrap_or_else(|| Arc::new(ring::default_provider()));
         assert!(ClientConfig::builder_with_provider(provider)
-            .with_protocol_versions(&[&version::TLS12])
+            .with_safe_default_protocol_versions()
             .is_ok());
+    }
+
+    // trust_cert_ca adds the CA to the platform roots; trust_cert_ca_only
+    // trusts it alone.
+    #[test]
+    fn ca_trust_is_additive_unless_pinned() {
+        let ca = read_ca_file(&std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/docker/certs/mtls/ca.pem"
+        )))
+        .unwrap();
+        let native = native_root_store().len();
+
+        let additive = ca_root_store(ca.clone(), true).unwrap();
+        assert_eq!(additive.len(), native + 1);
+        let pinned = ca_root_store(ca, false).unwrap();
+        assert_eq!(pinned.len(), 1);
+        assert!(native > 0, "expected a platform trust store on this host");
     }
 }

@@ -25,6 +25,20 @@ cargo clippy --features=all -- -D warnings
 Clippy warnings are errors in CI — fix them or add a commented `#[allow]`,
 don't leave them for review.
 
+## Benchmarks and coverage (benches by hand; coverage also in CI's `coverage` job)
+
+```sh
+cd mssql
+cargo bench --bench offline                       # criterion, no server
+cargo bench --bench live                          # needs MSSQL_TEST_CONNECTION_STRING
+cargo tarpaulin                                   # coverage: unit + tls_local
+cargo tarpaulin --config tarpaulin-live.toml      # coverage incl. the live suite
+```
+
+For a performance-sensitive change, run `-- --save-baseline before` on the
+base commit and `-- --baseline before` on the change. Coverage baseline
+(2026-11-17): 46.6% offline and 71.9% live, on Azure SQL Edge.
+
 ## MSRV check (what CI's `msrv` job runs)
 
 ```sh
@@ -56,6 +70,28 @@ come up.) Alternatively, `docker-compose.yml` at the crate root defines
 named services per SQL Server version — `DOCKER_BUILDKIT=1 docker compose
 up -d mssql-2022` (or `mssql-2019`, `mssql-2017`) — which is what CI's Linux
 and macOS jobs use.
+
+## Testing against SQL Server 2022/2025 on Apple Silicon
+
+Only Azure SQL Edge runs natively on arm64. The 2022 and 2025 images are
+x86-64-only, segfault under podman/QEMU, and run fine under **Docker Desktop
+with Settings → General → "Use Rosetta for x86_64/amd64 emulation"** on:
+
+```sh
+docker --context desktop-linux run -d --name mssql-2025 --platform linux/amd64 \
+  -e ACCEPT_EULA=Y -e 'MSSQL_SA_PASSWORD=<YourStrong@Passw0rd>' -p 1436:1433 \
+  mcr.microsoft.com/mssql/server:2025-latest
+export MSSQL_TEST_CONNECTION_STRING='server=tcp:localhost,1436;user=SA;password=<YourStrong@Passw0rd>;TrustServerCertificate=true'
+cargo test --no-default-features --features rustls,tds73
+```
+
+A real TDS 8.0 Strict login (`tests/strict.rs`, opt-in through
+`MSSQL_TEST_STRICT_CONNECTION_STRING=...;encrypt=strict;TrustServerCertificateCA=<cert>`)
+needs the server started with `--hostname localhost`, plus an `mssql.conf` with
+`tlscert`/`tlskey` (CN/SAN `localhost`, `keyUsage=digitalSignature,keyEncipherment`,
+`extendedKeyUsage=serverAuth`, `CA:FALSE`) and `tlsprotocols = 1.2,1.3`.
+Verified on SQL Server 2025. SQL Server 2022 on Linux refused Strict here
+(error 17821) with the same certificate.
 
 ## The feature-flag matrix CI actually exercises
 

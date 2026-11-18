@@ -56,6 +56,8 @@ pub struct RpcParam<'a> {
     /// `Config::send_string_parameters_as_unicode(false)` to send string
     /// parameters as `VarChar` instead.
     pub type_info: Option<TypeInfo>,
+    /// A table-valued parameter: sent instead of `value` when set.
+    pub(crate) table: Option<super::TableValue<'a>>,
 }
 
 /// 2.2.6.6 RPC Request
@@ -165,6 +167,10 @@ impl<'a> Encode<BytesMut> for RpcParam<'a> {
 
         dst.put_u8(self.flags.bits());
 
+        if let Some(table) = self.table {
+            return table.encode(dst);
+        }
+
         // Unlike bulk_insert (which declares column types once, up front, in
         // a COLMETADATA token), an RPC parameter's TYPE_INFO is inlined here
         // before its value on every call, so when a type override is given
@@ -197,6 +203,7 @@ mod name_length_tests {
             flags: BitFlags::empty(),
             value: ColumnData::I32(Some(1)),
             type_info: None,
+            table: None,
         }
     }
 

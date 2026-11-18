@@ -10,6 +10,53 @@ use crate::EncryptionLevel;
 use ado_net::*;
 use jdbc::*;
 
+/// A client certificate presented for mutual TLS; see
+/// [`Config::client_certificate`].
+#[cfg(any(
+    feature = "rustls",
+    feature = "native-tls",
+    feature = "vendored-openssl"
+))]
+#[derive(Clone)]
+pub(crate) enum ClientCertSource {
+    /// Certificate chain and private key files (PEM, or DER on rustls).
+    CertAndKey { cert: PathBuf, key: PathBuf },
+    /// A PKCS#12 bundle (native-tls and vendored-openssl only).
+    #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
+    Pkcs12 {
+        path: PathBuf,
+        // Unread when rustls is also enabled: it wins backend selection and
+        // rejects PKCS#12. The variant still exists in that build so feature
+        // unification can't make `client_certificate_pkcs12` disappear.
+        #[cfg_attr(feature = "rustls", allow(dead_code))]
+        password: zeroize::Zeroizing<String>,
+    },
+}
+
+// Hand-written so the PKCS#12 password is never printed by `{:?}` on Config.
+#[cfg(any(
+    feature = "rustls",
+    feature = "native-tls",
+    feature = "vendored-openssl"
+))]
+impl std::fmt::Debug for ClientCertSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CertAndKey { cert, key } => f
+                .debug_struct("CertAndKey")
+                .field("cert", cert)
+                .field("key", key)
+                .finish(),
+            #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
+            Self::Pkcs12 { path, .. } => f
+                .debug_struct("Pkcs12")
+                .field("path", path)
+                .field("password", &"<HIDDEN>")
+                .finish(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 /// The `Config` struct contains all configuration information
 /// required for connecting to the database with a [`Client`](crate::Client).
@@ -29,11 +76,19 @@ pub struct Config {
     pub(crate) client_name: Option<String>,
     pub(crate) encryption: EncryptionLevel,
     pub(crate) trust: TrustConfig,
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    pub(crate) client_cert: Option<ClientCertSource>,
     pub(crate) host_name_in_certificate: Option<String>,
     pub(crate) auth: AuthMethod,
     pub(crate) readonly: bool,
     pub(crate) send_string_parameters_as_unicode: bool,
     pub(crate) lossy_codepage_decoding: bool,
+    pub(crate) handshake_timeout: Option<std::time::Duration>,
+    pub(crate) command_timeout: Option<std::time::Duration>,
     pub(crate) multi_subnet_failover: bool,
     pub(crate) packet_size: Option<u32>,
 }
@@ -42,12 +97,21 @@ pub struct Config {
 /// packet's `PacketSize` field.
 const PACKET_SIZE_RANGE: std::ops::RangeInclusive<u32> = 512..=32767;
 
+/// ADO.NET's `Connect Timeout` default.
+const DEFAULT_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// ADO.NET's `CommandTimeout` default.
+const DEFAULT_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 #[derive(Clone, Debug)]
 pub(crate) enum TrustConfig {
     #[allow(dead_code)]
     CaCertificateLocation(PathBuf),
     #[allow(dead_code)]
     CaCertificateBundle(Vec<u8>),
+    /// Only this CA, without the system roots (rustls only).
+    #[cfg(feature = "rustls")]
+    CaCertificateOnly(PathBuf),
     #[cfg(feature = "rustls-webpki-roots")]
     WebPkiRoots,
     TrustAll,
@@ -76,11 +140,19 @@ impl Default for Config {
             )))]
             encryption: EncryptionLevel::NotSupported,
             trust: TrustConfig::Default,
+            #[cfg(any(
+                feature = "rustls",
+                feature = "native-tls",
+                feature = "vendored-openssl"
+            ))]
+            client_cert: None,
             host_name_in_certificate: None,
             auth: AuthMethod::None,
             readonly: false,
             send_string_parameters_as_unicode: true,
             lossy_codepage_decoding: false,
+            handshake_timeout: Some(DEFAULT_HANDSHAKE_TIMEOUT),
+            command_timeout: Some(DEFAULT_COMMAND_TIMEOUT),
             multi_subnet_failover: false,
             packet_size: None,
         }
@@ -176,16 +248,21 @@ impl Config {
     pub fn trust_cert(&mut self) {
         if !matches!(&self.trust, TrustConfig::Default) {
             panic!(
-                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle' and 'trust_webpki_roots' are mutually exclusive! Only use one."
+                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle', 'trust_cert_ca_only' and 'trust_webpki_roots' are mutually exclusive! Only use one."
             )
         }
         self.trust = TrustConfig::TrustAll;
     }
 
     /// If set, the server certificate will be validated against the given CA certificate file, in
-    /// addition to the system-truststore.
+    /// addition to the system-truststore, on every TLS backend. Every certificate in a
+    /// `.pem`/`.crt` file is trusted; a `.der` file holds one.
     /// Useful when using self-signed certificates on the server without having to disable the
-    /// trust-chain.
+    /// trust-chain. To trust *only* this CA (pinning), use
+    /// [`trust_cert_ca_only`](Config::trust_cert_ca_only) (rustls).
+    ///
+    /// On rustls this used to replace the system roots rather than add to
+    /// them, unlike the other backends and these docs.
     ///
     /// # Panics
     /// Will panic in case `trust_cert` or `trust_cert_ca_bundle` was called before.
@@ -194,11 +271,29 @@ impl Config {
     pub fn trust_cert_ca(&mut self, path: impl Into<PathBuf>) {
         if !matches!(&self.trust, TrustConfig::Default) {
             panic!(
-                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle' and 'trust_webpki_roots' are mutually exclusive! Only use one."
+                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle', 'trust_cert_ca_only' and 'trust_webpki_roots' are mutually exclusive! Only use one."
             )
         } else {
             self.trust = TrustConfig::CaCertificateLocation(path.into())
         }
+    }
+
+    /// Trusts *only* the CA certificate(s) in `path`, not the system trust
+    /// store: a server certificate that any other CA issued is rejected,
+    /// even a publicly trusted one. This is the pinning behaviour rustls's
+    /// `trust_cert_ca` used to have. rustls only.
+    ///
+    /// # Panics
+    /// Will panic if another trust setting was set before.
+    #[cfg(feature = "rustls")]
+    #[cfg_attr(feature = "docs", doc(cfg(feature = "rustls")))]
+    pub fn trust_cert_ca_only(&mut self, path: impl Into<PathBuf>) {
+        if !matches!(&self.trust, TrustConfig::Default) {
+            panic!(
+                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle', 'trust_cert_ca_only' and 'trust_webpki_roots' are mutually exclusive! Only use one."
+            )
+        }
+        self.trust = TrustConfig::CaCertificateOnly(path.into());
     }
 
     /// Like [`trust_cert_ca`](Config::trust_cert_ca), but takes the CA
@@ -216,7 +311,7 @@ impl Config {
     pub fn trust_cert_ca_bundle(&mut self, bundle: impl Into<Vec<u8>>) {
         if !matches!(&self.trust, TrustConfig::Default) {
             panic!(
-                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle' and 'trust_webpki_roots' are mutually exclusive! Only use one."
+                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle', 'trust_cert_ca_only' and 'trust_webpki_roots' are mutually exclusive! Only use one."
             )
         } else {
             self.trust = TrustConfig::CaCertificateBundle(bundle.into())
@@ -240,11 +335,51 @@ impl Config {
     pub fn trust_webpki_roots(&mut self) {
         if !matches!(&self.trust, TrustConfig::Default) {
             panic!(
-                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle' and 'trust_webpki_roots' are mutually exclusive! Only use one."
+                "'trust_cert', 'trust_cert_ca', 'trust_cert_ca_bundle', 'trust_cert_ca_only' and 'trust_webpki_roots' are mutually exclusive! Only use one."
             )
         } else {
             self.trust = TrustConfig::WebPkiRoots;
         }
+    }
+
+    /// Presents a client certificate during the TLS handshake (mutual TLS),
+    /// for deployments that require one, typically a TLS-terminating proxy
+    /// in front of SQL Server. `cert` is the certificate chain and `key`
+    /// its private key:
+    ///
+    /// - rustls: `.pem`/`.crt` or `.der` certificate, `.pem`/`.key` (PKCS#8,
+    ///   PKCS#1 or SEC1) or `.der` key;
+    /// - native-tls: PEM certificate and PKCS#8 PEM key;
+    /// - vendored-openssl: not supported, use
+    ///   [`client_certificate_pkcs12`](Self::client_certificate_pkcs12).
+    ///
+    /// Files are read when connecting. Ported from upstream Tiberius
+    /// (tiberius-rs/tiberius 4a212e7).
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    pub fn client_certificate(&mut self, cert: impl Into<PathBuf>, key: impl Into<PathBuf>) {
+        self.client_cert = Some(ClientCertSource::CertAndKey {
+            cert: cert.into(),
+            key: key.into(),
+        });
+    }
+
+    /// Like [`client_certificate`](Self::client_certificate), from a
+    /// PKCS#12 (`.p12`/`.pfx`) bundle. The password is zeroized on drop and
+    /// redacted from `Debug`. native-tls and vendored-openssl only.
+    #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
+    pub fn client_certificate_pkcs12(
+        &mut self,
+        path: impl Into<PathBuf>,
+        password: impl Into<String>,
+    ) {
+        self.client_cert = Some(ClientCertSource::Pkcs12 {
+            path: path.into(),
+            password: zeroize::Zeroizing::new(password.into()),
+        });
     }
 
     /// Overrides the hostname used to validate the server's TLS certificate,
@@ -306,6 +441,50 @@ impl Config {
     /// Whether [`lossy_codepage_decoding`](Self::lossy_codepage_decoding) is on.
     pub fn get_lossy_codepage_decoding(&self) -> bool {
         self.lossy_codepage_decoding
+    }
+
+    /// Bounds the whole connection handshake after the TCP connect: PRELOGIN,
+    /// TLS negotiation and login. A server that accepts the TCP connection
+    /// and then stalls (upstream issues #375 and #360) makes `Client::connect`
+    /// fail with an `Io` error of kind `TimedOut` instead of hanging. Each
+    /// stage is logged with `tracing` at DEBUG, so a stall can be located.
+    ///
+    /// - Defaults to 15 seconds (ADO.NET's `Connect Timeout`). `None` waits
+    ///   indefinitely.
+    ///
+    /// The timer is runtime-agnostic (`futures-timer`). Ported from upstream
+    /// Tiberius (tiberius-rs/tiberius 2c63330).
+    pub fn handshake_timeout(&mut self, timeout: Option<std::time::Duration>) {
+        self.handshake_timeout = timeout;
+    }
+
+    /// See [`handshake_timeout`](Self::handshake_timeout).
+    pub fn get_handshake_timeout(&self) -> Option<std::time::Duration> {
+        self.handshake_timeout
+    }
+
+    /// Bounds each server round-trip while reading command results:
+    /// `query`, `execute`, `simple_query`, `call_procedure`, `column_metadata`
+    /// and the `bulk_insert` acknowledgement. The deadline resets every time
+    /// a token arrives, so it measures a *stalled server*, not total query
+    /// time, and a slow consumer never trips it. When it fires, the read
+    /// fails with an `Io` error of kind `TimedOut`, and the connection is out
+    /// of sync (the rest of the response is still unread), so every later use
+    /// returns an error. Drop it and open a new one.
+    ///
+    /// - Defaults to 30 seconds (ADO.NET's `CommandTimeout`). A statement
+    ///   that legitimately runs longer than that before the server sends
+    ///   anything (a long `WAITFOR`, a big sort or aggregate, a slow
+    ///   procedure) needs a larger value, or `None` to wait indefinitely.
+    ///
+    /// Ported from upstream Tiberius (tiberius-rs/tiberius 2c63330).
+    pub fn command_timeout(&mut self, timeout: Option<std::time::Duration>) {
+        self.command_timeout = timeout;
+    }
+
+    /// See [`command_timeout`](Self::command_timeout).
+    pub fn get_command_timeout(&self) -> Option<std::time::Duration> {
+        self.command_timeout
     }
 
     /// Sets the `MultiSubnetFailover` flag, hinting that the target is a SQL
@@ -400,7 +579,7 @@ impl Config {
     /// |`TrustServerCertificate`|`true`,`false`,`yes`,`no`|Specifies whether the driver trusts the server certificate when connecting using TLS. Cannot be used together with `TrustServerCertificateCA`.|
     /// |`TrustServerCertificateCA`|`<path>`|Path to a `pem`, `crt` or `der` certificate file. Cannot be used together with `TrustServerCertificate`.|
     /// |`HostNameInCertificate`, `HostName In Certificate`|`<string>`|The host name to validate the server certificate against, when it differs from `server`.|
-    /// |`encrypt`|`true`,`false`,`yes`,`no`,`strict`,`DANGER_PLAINTEXT`|Specifies whether the driver uses TLS to encrypt communication; `strict` is TDS 8.0. Without a TLS backend compiled in, any value requesting encryption is an error.|
+    /// |`encrypt`|`true`,`false`,`yes`,`no`,`strict`,`DANGER_PLAINTEXT`|Specifies whether the driver uses TLS to encrypt communication; `strict` is TDS 8.0. If omitted: `true` (Required) with a TLS backend, as in modern ADO.NET; `false` only encrypts the login. Without a TLS backend compiled in, any value requesting encryption is an error.|
     /// |`Application Name`, `ApplicationName`|`<string>`|Sets the application name for the connection.|
     /// |`ApplicationIntent`|`ReadOnly`,`ReadWrite`|`ReadOnly` (any letter case) requests read-only intent, e.g. for Always On read-only routing.|
     /// |`WorkstationID`, `Workstation ID`|`<string>`|The client/workstation name reported to the server.|
@@ -602,6 +781,13 @@ impl ConfigBuilder {
         self
     }
 
+    /// See [`Config::trust_cert_ca_only`].
+    #[cfg(feature = "rustls")]
+    pub fn trust_cert_ca_only(&mut self, path: impl Into<PathBuf>) -> &mut Self {
+        self.inner.trust_cert_ca_only(path);
+        self
+    }
+
     /// See [`Config::trust_cert_ca_bundle`].
     ///
     /// # Panics
@@ -624,6 +810,32 @@ impl ConfigBuilder {
         self
     }
 
+    /// See [`Config::client_certificate`].
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    pub fn client_certificate(
+        &mut self,
+        cert: impl Into<PathBuf>,
+        key: impl Into<PathBuf>,
+    ) -> &mut Self {
+        self.inner.client_certificate(cert, key);
+        self
+    }
+
+    /// See [`Config::client_certificate_pkcs12`].
+    #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
+    pub fn client_certificate_pkcs12(
+        &mut self,
+        path: impl Into<PathBuf>,
+        password: impl Into<String>,
+    ) -> &mut Self {
+        self.inner.client_certificate_pkcs12(path, password);
+        self
+    }
+
     /// See [`Config::host_name_in_certificate`].
     pub fn host_name_in_certificate(&mut self, name: impl ToString) -> &mut Self {
         self.inner.host_name_in_certificate(name);
@@ -639,6 +851,18 @@ impl ConfigBuilder {
     /// See [`Config::readonly`].
     pub fn readonly(&mut self, readonly: bool) -> &mut Self {
         self.inner.readonly(readonly);
+        self
+    }
+
+    /// See [`Config::handshake_timeout`].
+    pub fn handshake_timeout(&mut self, timeout: Option<std::time::Duration>) -> &mut Self {
+        self.inner.handshake_timeout(timeout);
+        self
+    }
+
+    /// See [`Config::command_timeout`].
+    pub fn command_timeout(&mut self, timeout: Option<std::time::Duration>) -> &mut Self {
+        self.inner.command_timeout(timeout);
         self
     }
 
@@ -802,7 +1026,11 @@ pub(crate) trait ConfigString {
                 Err(_) if val.eq_ignore_ascii_case("strict") => Ok(EncryptionLevel::Strict),
                 Err(e) => Err(e),
             })
-            .unwrap_or(Ok(EncryptionLevel::Off))
+            // No `encrypt` key: Required, matching modern ADO.NET
+            // (Microsoft.Data.SqlClient 4.0+) and `Config::new()`'s own default.
+            // It used to be Off (only the login encrypted). Upstream Tiberius
+            // 0.13.0 made the same change (3e6afc3).
+            .unwrap_or(Ok(EncryptionLevel::Required))
     }
 
     #[cfg(not(any(
@@ -875,6 +1103,39 @@ pub(crate) trait ConfigString {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
+    #[test]
+    fn pkcs12_password_is_redacted_from_debug() {
+        let mut config = Config::new();
+        config.client_certificate_pkcs12("/x/client.p12", "s3cret-pass");
+        let shown = format!("{config:?}");
+        assert!(!shown.contains("s3cret-pass"), "{shown}");
+        assert!(shown.contains("client.p12"), "{shown}");
+    }
+
+    #[test]
+    fn timeouts_default_to_ado_net_values_and_round_trip() {
+        use std::time::Duration;
+        let mut config = Config::new();
+        assert_eq!(
+            config.get_handshake_timeout(),
+            Some(Duration::from_secs(15))
+        );
+        assert_eq!(config.get_command_timeout(), Some(Duration::from_secs(30)));
+
+        config.handshake_timeout(None);
+        config.command_timeout(Some(Duration::from_millis(1)));
+        assert_eq!(config.get_handshake_timeout(), None);
+        assert_eq!(config.get_command_timeout(), Some(Duration::from_millis(1)));
+
+        let built = Config::builder()
+            .handshake_timeout(Some(Duration::from_secs(3)))
+            .command_timeout(None)
+            .build();
+        assert_eq!(built.get_handshake_timeout(), Some(Duration::from_secs(3)));
+        assert_eq!(built.get_command_timeout(), None);
+    }
 
     #[test]
     fn conflicting_trust_settings_in_connection_string_error_instead_of_panicking() {

@@ -14,6 +14,19 @@ forward.
 
 ## Unreleased
 
+### Added (tooling)
+
+- Benchmarks with criterion: `benches/offline.rs` (no server needed) and
+  `benches/live.rs` (opt-in through `MSSQL_TEST_CONNECTION_STRING`). See
+  CONTRIBUTING, "Benchmarks".
+- Coverage with cargo-tarpaulin: `tarpaulin.toml` (offline) and
+  `tarpaulin-live.toml` (with the live suite). Baseline with
+  rustls + tds73 + decimal/time/jiff/sql-browser/serde: 46.6% of lines
+  offline and 71.9% with the live suite against Azure SQL Edge.
+- CI `coverage` job: the live coverage run against SQL Server 2022, with the
+  percentage in the job summary and the reports uploaded as an artifact.
+  It doesn't gate on a threshold.
+
 Much of this cycle ports hardening and fixes from upstream Tiberius 0.13.0
 ([tiberius-rs/tiberius](https://github.com/tiberius-rs/tiberius), released
 2026-09-24). Many thanks to the Tiberius team, especially Matthew Jackson.
@@ -47,6 +60,9 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Fixed
 
+- TDS 8.0 Strict (`EncryptionLevel::Strict`, `encrypt=strict`) now does a raw
+  TLS handshake. Before, the handshake records were wrapped in TDS
+  PRELOGIN packets, which a real TDS 8.0 server can't parse.
 - `DECIMAL(38,38)` (scale equal to the maximum precision) panicked on
   read. Reading a wide `DECIMAL(38, s)` into `rust_decimal::Decimal` now
   converts fallibly instead of panicking.
@@ -105,6 +121,33 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Added
 
+- Client-certificate (mutual TLS) authentication:
+  `Config::client_certificate(cert, key)` on rustls (PEM/DER) and
+  native-tls (PEM), and `Config::client_certificate_pkcs12(path, password)`
+  on native-tls and vendored-openssl. The password is zeroized and redacted
+  from `Debug`. Also on `ConfigBuilder`.
+- Table-valued parameters for `call_procedure`:
+  `ProcParam::table("@rows", "dbo.MyType", rows)`, with rows as `TokenRow`s
+  in the table type's column order. The client fetches the type's columns
+  from the server first. Unlike upstream's version there's no derive macro,
+  and the type name is validated and bracket-quoted rather than interpolated
+  into SQL.
+- Transaction Manager requests: `Client::begin_transaction`,
+  `begin_transaction_with_isolation(IsolationLevel)`, `commit_transaction`,
+  `rollback_transaction`, `save_transaction(name)` and (fork addition)
+  `rollback_to_savepoint(name)`, plus the `IsolationLevel` enum.
+- NULL parameters of `bool`, the integer and float types and `Uuid` are
+  sent typed rather than as the untyped NULLTYPE, so `call_procedure`
+  accepts them as `OUTPUT` placeholders (`&None::<i32>`).
+- CLR UDT columns (`geography`, `geometry`, `hierarchyid`, user-defined CLR
+  types) can be read; their values are the raw serialized bytes as
+  `ColumnData::Binary`. Before, they failed with "unsupported column type".
+- `sql_variant` columns can be read. Each value comes back as the
+  `ColumnData` of its base type (int as `I32`, nvarchar as `String`, and so
+  on), and NULL as `String(None)`. Before, any `sql_variant` column, including
+  `SELECT SERVERPROPERTY(..)`, failed with "unsupported column type". Bulk
+  insert into a `sql_variant` column works too, with each value stored as
+  its own base type.
 - `Config::lossy_codepage_decoding` / `ConfigBuilder::lossy_codepage_decoding`
   (default `false`): decode `char`/`varchar`/`text` leniently, so invalid
   sequences become U+FFFD instead of returning `Error::Encoding`. Encoding
@@ -115,6 +158,45 @@ See `tasks.md`'s "Upstream Tiberius 0.13.0" section for the full triage.
 
 ### Changed
 
+- BREAKING: async-std support is removed. async-std is discontinued
+  (RUSTSEC-2025-0052), and its maintainers recommend smol. The
+  `sql-browser-async-std` feature is gone: use `sql-browser-smol`, which has
+  the same `TcpStream::connect_named` API. `Client` itself still works over
+  any futures-rs `AsyncRead + AsyncWrite`. Upstream Tiberius 0.13 made the
+  same change.
+- BREAKING (rustls): `trust_cert_ca` / `trust_cert_ca_bundle` (and
+  `TrustServerCertificateCA=`) now *add* the CA to the system trust store,
+  as they already did on native-tls and vendored-openssl and as documented.
+  On rustls they used to *replace* it, so a server with a publicly trusted
+  certificate was rejected. If you relied on that pinning, switch to the new
+  `Config::trust_cert_ca_only(path)` (rustls only). Also, on every backend,
+  every certificate in a PEM CA file is now trusted (rustls rejected
+  multi-cert files, and native-tls/openssl used only the first), and an
+  empty CA file or bundle is an error.
+- rustls negotiates TLS 1.3 as well as 1.2 for TDS 8.0 Strict connections,
+  instead of being pinned to TLS 1.2. Other encryption levels use the TDS 7.x
+  handshake, which supports TLS only up to 1.2, so they stay on 1.2 (offering
+  1.3 there breaks against a server that allows it). Verified live: Strict on
+  SQL Server 2025 negotiates TLS 1.3 and TDS 8.0.
+- BREAKING: a connection string without an `encrypt` key now means
+  `encrypt=true` (Required) when a TLS backend is compiled in, matching
+  modern ADO.NET and `Config::new()`'s own default. Before, it meant `Off`
+  (only the login encrypted). Pass `encrypt=false` explicitly for the old
+  behaviour. No-TLS builds are unchanged (`NotSupported`). Ported from
+  upstream Tiberius 3e6afc3.
+- BREAKING: connections now time out by default instead of potentially
+  hanging forever (upstream issues #375, #360; ported from upstream
+  Tiberius 2c63330). This matches ADO.NET's two settings:
+  - `Config::handshake_timeout` (default 15s) bounds PRELOGIN, TLS and
+    login. Each stage is logged at DEBUG.
+  - `Config::command_timeout` (default 30s) bounds each server round-trip
+    while reading results. It resets on every token, so it measures a
+    stalled server, not total query time. When it fires, the read fails
+    with `Io` `TimedOut`, and the connection is unusable afterwards.
+  A statement that runs longer than 30s before the server answers (a long
+  `WAITFOR`, a big sort, a slow procedure) now fails unless you raise
+  `command_timeout` or pass `None`. Both have `ConfigBuilder` setters.
+  Adds the runtime-agnostic `futures-timer` dependency.
 - rustls: a `CryptoProvider` installed process-wide by the application
   (`CryptoProvider::install_default`, e.g. aws-lc-rs or a FIPS provider) is
   now used. ring remains the default when none is installed.
