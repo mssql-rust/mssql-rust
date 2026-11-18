@@ -334,6 +334,16 @@ jobs:
           New-Item HKLM:\SOFTWARE\Microsoft\MSSQLServer\Client -Name ConnectTo | Out-Null
           Set-ItemProperty -Path HKLM:\SOFTWARE\Microsoft\MSSQLServer\Client\ConnectTo -Name '(local)' -Value "DBMSSOCN,$serverName\$instanceName" | Out-Null
 
+          # Mixed-mode authentication. The tests still connect with
+          # IntegratedSecurity, but tests/special_char_password.rs creates SQL
+          # logins and signs in as them. A Windows-only server refuses those
+          # with error 18452 ("login is from an untrusted domain"). Takes
+          # effect on the restart below.
+          echo "Enabling mixed-mode authentication"
+          $srv = New-Object ($smo + 'Server') $serverName
+          $srv.Settings.LoginMode = [Microsoft.SqlServer.Management.Smo.ServerLoginMode]::Mixed
+          $srv.Alter()
+
           # Start services
           echo "Starting services"
           Set-Service SQLBrowser -StartupType Manual
