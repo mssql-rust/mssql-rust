@@ -36,7 +36,7 @@
 		{
 			heading: 'Runtime-independent',
 			description:
-				'Built on futures-rs traits, not a specific executor — works with Tokio, async-std, or smol.'
+				'Built on futures-rs traits, not a specific executor — works with Tokio or smol.'
 		},
 		{
 			heading: 'Bulk insert, done well',
