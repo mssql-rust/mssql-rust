@@ -399,7 +399,7 @@ pub(crate) fn encode(dst: &mut bytes::BytesMut, value: ColumnData<'_>) -> crate:
 mod tests {
     use super::decode;
     use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
-    use crate::ColumnData;
+    use crate::{tds::xml::XmlData, ColumnData, VarLenType};
     use bytes::{BufMut, BytesMut};
 
     async fn run(bytes: &[u8]) -> crate::Result<ColumnData<'static>> {
@@ -520,6 +520,11 @@ mod tests {
                 ],
             ), // > i128::MAX
             variant(0x24, &[], &[0; 4]),                // guid with 4 bytes
+            variant(VarLenType::NVarchar as u8, &[0; 7], &[0]), // odd UTF-16 byte count
+            #[cfg(feature = "tds73")]
+            variant(VarLenType::Datetime2 as u8, &[7], &[0, 0]), // missing date bytes
+            #[cfg(feature = "tds73")]
+            variant(VarLenType::DatetimeOffsetn as u8, &[7], &[0, 0]), // too short
             variant(0xF1, &[], &[]),                    // xml: not a valid base type
             variant(0xff, &[], &[]),                    // unknown base type
             vec![1, 0, 0, 0, 0x38],                     // total length 1
@@ -532,5 +537,22 @@ mod tests {
                 "{bytes:?}: {err:?}"
             );
         }
+    }
+
+    #[test]
+    fn oversized_binary_and_xml_are_not_valid_variant_values() {
+        let mut buf = BytesMut::new();
+        assert!(super::encode(
+            &mut buf,
+            ColumnData::Binary(Some(vec![0; super::MAX_VARIANT_PAYLOAD + 1].into()))
+        )
+        .is_err());
+
+        let xml = XmlData::new("<x/>");
+        assert!(super::encode(
+            &mut buf,
+            ColumnData::Xml(Some(std::borrow::Cow::Borrowed(&xml)))
+        )
+        .is_err());
     }
 }

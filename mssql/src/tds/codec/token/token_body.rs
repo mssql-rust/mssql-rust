@@ -160,4 +160,21 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, crate::Error::Protocol(_)), "{err:?}");
     }
+
+    #[tokio::test]
+    async fn invalid_utf16_in_a_token_body_is_a_protocol_error() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&50000u32.to_le_bytes());
+        body.extend_from_slice(&[1, 16]);
+        body.extend_from_slice(&1u16.to_le_bytes());
+        body.extend_from_slice(&0xd800u16.to_le_bytes());
+
+        let mut wire = BytesMut::new();
+        wire.put_u16_le(body.len() as u16);
+        wire.put_slice(&body);
+        let error = TokenError::decode(&mut wire.into_sql_read_bytes())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, crate::Error::Protocol(_)));
+    }
 }

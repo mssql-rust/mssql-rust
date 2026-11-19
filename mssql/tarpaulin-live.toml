@@ -5,7 +5,7 @@
 # Everything: unit tests and every integration test, against a live server
 # (e.g. `./docker/test-server.sh up`). See tarpaulin.toml for offline coverage.
 #
-# Reports land in target/tarpaulin/ (tarpaulin-report.html, lcov.info).
+# Reports land in target/tarpaulin-live/ (tarpaulin-report.html, lcov.info).
 # The LLVM engine works on macOS and Linux; ptrace is Linux/x86-64 only.
 
 [live]
@@ -15,8 +15,8 @@ features = "rustls tds73 rust_decimal bigdecimal time jiff sql-browser-tokio sql
 workspace = false
 run-types = ["Lib", "Tests"]
 # This profile deliberately selects rustls and direct TCP. Source for the two
-# mutually-exclusive TLS backends, SQL Browser transports, and SSPI tokens is
-# verified in their own feature-matrix jobs and cannot execute in this build.
+# mutually-exclusive TLS backends and SQL Browser transports is verified in
+# their own feature-matrix jobs and cannot execute in this build.
 exclude-files = [
     "benches/*",
     "examples/*",
@@ -32,7 +32,42 @@ exclude-files = [
     # tested implementations by LLVM source mapping.
     "src/macros.rs",
 ]
-out = ["Html", "Lcov"]
-output-dir = "target/tarpaulin-live"
 timeout = "600s"
 target-dir = "target/tarpaulin-build"
+
+# Tarpaulin source maps include some cfg-disabled lines in the live profile.
+# Merge the supported feature matrix's unit-test trace for those lines. The
+# connection state machine is deliberately left to the live profile: enabling
+# every mutually-exclusive authentication backend in one binary creates a
+# synthetic branch set that no real connection can exercise.
+[feature_matrix]
+engine = "Llvm"
+no-default-features = true
+features = "all rustls vendored-openssl rustls-webpki-roots"
+workspace = false
+run-types = ["Lib"]
+args = ["--skip", "pkcs12_identity_loads_and_a_wrong_password_fails"]
+exclude-files = [
+    "benches/*",
+    "examples/*",
+    "runtimes-macro/*",
+    "tests/*",
+    "target/*",
+    "src/client/connection.rs",
+    "src/client/tls_stream/rustls_tls_stream.rs",
+    "src/error.rs",
+    "src/client/tls_stream/native_tls_stream.rs",
+    "src/client/tls_stream/opentls_tls_stream.rs",
+    "src/sql_browser/smol.rs",
+    "src/sql_browser/tokio.rs",
+    "src/tds/codec/token/token_sspi.rs",
+    "src/tds/codec/header.rs",
+    "src/tds/context.rs",
+    "src/macros.rs",
+]
+timeout = "600s"
+target-dir = "target/tarpaulin-build-features"
+
+[report]
+out = ["Html", "Lcov"]
+output-dir = "target/tarpaulin-live"

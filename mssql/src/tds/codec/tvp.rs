@@ -204,5 +204,16 @@ mod tests {
             tvp.encode(&mut BytesMut::new()),
             Err(crate::Error::Conversion(_))
         ));
+
+        let tvp = TableValue {
+            schema: String::new(),
+            type_name: "T".into(),
+            columns: vec![int_column(); u16::MAX as usize],
+            rows: Vec::new(),
+        };
+        assert!(matches!(
+            tvp.encode(&mut BytesMut::new()),
+            Err(crate::Error::Conversion(_))
+        ));
     }
 }

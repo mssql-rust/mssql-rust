@@ -104,7 +104,7 @@ as well as Linux:
 ```sh
 cargo tarpaulin                                  # offline: unit tests + tests/tls_local.rs
 cargo tarpaulin --config tarpaulin-live.toml     # everything; needs MSSQL_TEST_CONNECTION_STRING
-sh scripts/check-function-coverage.sh target/tarpaulin-live/lcov.info
+sh scripts/check-coverage.sh target/tarpaulin-live/lcov.info
 ```
 
 Reports (HTML and `lcov.info`) go to `target/tarpaulin/` and
@@ -112,12 +112,10 @@ Reports (HTML and `lcov.info`) go to `target/tarpaulin/` and
 excluded paths. `target/*` is among them, so the `target/package/` copies
 left by `cargo publish` don't count as uncovered code.
 
-CI's `coverage` job runs the live config against SQL Server 2022. It reports
-both line and function coverage, requires function coverage to remain strictly
-above 95%, and uploads the HTML and `lcov.info` as the `coverage-report`
-artifact. Function coverage is the gate because LLVM's source-line mapping
-counts some executed multi-line `match` arm headers as missed; line coverage
-is still reported so neither metric is hidden.
+CI's `coverage` job runs the live config against SQL Server 2022 plus a
+server-free feature-matrix unit-test trace. It requires both line and function
+coverage to remain strictly above 95%, and uploads the HTML and `lcov.info` as
+the `coverage-report` artifact.
 
 ## Code style and checks
 

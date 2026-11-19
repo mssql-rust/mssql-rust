@@ -569,6 +569,13 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn decode_rejects_unknown_type_discriminants() {
+        let mut bytes = BytesMut::from(&[0x01][..]).into_sql_read_bytes();
+        let error = TypeInfo::decode(&mut bytes).await.unwrap_err();
+        assert!(matches!(error, Error::Protocol(_)));
+    }
+
+    #[tokio::test]
     async fn decode_accepts_precision_38_scale_38() {
         let ti = TypeInfo::decode(&mut numericn_bytes(38, 38).into_sql_read_bytes())
             .await

@@ -1057,10 +1057,15 @@ where
 #[cfg(test)]
 mod timeout_tests {
     use super::*;
-    use crate::tds::codec::BatchRequest;
+    use crate::tds::codec::{
+        BaseMetaDataColumn, BatchRequest, FixedLenType, MetaDataColumn, TokenColMetaData, TypeInfo,
+    };
     use crate::tds::stream::ReceivedToken;
     use crate::{PacketType, TokenType};
+    use bytes::BufMut;
+    use enumflags2::BitFlags;
     use futures_util::{io::AsyncReadExt, StreamExt, TryStreamExt};
+    use std::borrow::Cow;
     use std::time::Duration;
 
     fn memory_connection() -> Connection<futures_util::io::Cursor<Vec<u8>>> {
@@ -1158,6 +1163,7 @@ mod timeout_tests {
 
         connection.context_mut().set_packet_size(512);
         assert_eq!(connection.context().packet_size(), 512);
+        connection.debug_buffer();
     }
 
     #[test]
@@ -1192,12 +1198,32 @@ mod timeout_tests {
             .tls_handshake(&config, EncryptionLevel::NotSupported)
             .await
             .unwrap();
-        let connection = connection
-            .tls_handshake(&config, EncryptionLevel::Strict)
-            .await
-            .unwrap();
-        let connection = connection.post_login_encryption(EncryptionLevel::On);
-        assert!(!connection.poisoned);
+
+        #[cfg(any(
+            feature = "rustls",
+            feature = "native-tls",
+            feature = "vendored-openssl"
+        ))]
+        {
+            let connection = connection
+                .tls_handshake(&config, EncryptionLevel::Strict)
+                .await
+                .unwrap();
+            let connection = connection.post_login_encryption(EncryptionLevel::On);
+            assert!(!connection.poisoned);
+        }
+
+        #[cfg(not(any(
+            feature = "rustls",
+            feature = "native-tls",
+            feature = "vendored-openssl"
+        )))]
+        assert!(matches!(
+            connection
+                .tls_handshake(&config, EncryptionLevel::Strict)
+                .await,
+            Err(crate::Error::Tls(_))
+        ));
 
         let connection = memory_connection().post_login_encryption(EncryptionLevel::Off);
         assert!(!connection.poisoned);
@@ -1235,6 +1261,11 @@ mod timeout_tests {
             0,
             3,
             0,
+            TokenType::Sspi as u8,
+            2,
+            0,
+            0x11,
+            0x22,
             TokenType::FeatureExtAck as u8,
             crate::FEA_EXT_TERMINATOR,
         ];
@@ -1249,11 +1280,168 @@ mod timeout_tests {
             panic!("expected ORDER");
         };
         assert_eq!(vec![1, 3], order.column_indexes);
+        let Some(ReceivedToken::Sspi(sspi)) = tokens.try_next().await.unwrap() else {
+            panic!("expected SSPI");
+        };
+        assert_eq!(sspi.as_ref(), &[0x11, 0x22]);
         let Some(ReceivedToken::FeatureExtAck(ack)) = tokens.try_next().await.unwrap() else {
             panic!("expected FEATUREEXTACK");
         };
         assert!(ack.features.is_empty());
         assert!(tokens.try_next().await.unwrap().is_none());
+    }
+
+    fn env_change(body: &[u8], payload: &mut Vec<u8>) {
+        payload.push(TokenType::EnvChange as u8);
+        payload.extend_from_slice(&(body.len() as u16).to_le_bytes());
+        payload.extend_from_slice(body);
+    }
+
+    #[tokio::test]
+    async fn environment_tokens_update_packet_size_and_transaction_context() {
+        fn b_varchar(value: &str) -> Vec<u8> {
+            let units: Vec<_> = value.encode_utf16().collect();
+            let mut bytes = vec![units.len() as u8];
+            for unit in units {
+                bytes.extend_from_slice(&unit.to_le_bytes());
+            }
+            bytes
+        }
+
+        let mut payload = Vec::new();
+        let mut packet_size = vec![crate::tds::codec::EnvChangeTy::PacketSize as u8];
+        packet_size.extend(b_varchar("8192"));
+        packet_size.extend(b_varchar("4096"));
+        env_change(&packet_size, &mut payload);
+
+        let descriptor = [1, 2, 3, 4, 5, 6, 7, 8];
+        let mut begin = vec![crate::tds::codec::EnvChangeTy::BeginTransaction as u8, 8];
+        begin.extend_from_slice(&descriptor);
+        env_change(&begin, &mut payload);
+        env_change(
+            &[crate::tds::codec::EnvChangeTy::CommitTransaction as u8],
+            &mut payload,
+        );
+
+        let mut connection = incoming_connection(&payload);
+        {
+            let mut tokens = TokenStream::new(&mut connection).try_unfold();
+            assert!(matches!(
+                tokens.try_next().await.unwrap(),
+                Some(ReceivedToken::EnvChange(_))
+            ));
+        }
+        assert_eq!(8192, connection.context().packet_size());
+
+        {
+            let mut tokens = TokenStream::new(&mut connection).try_unfold();
+            assert!(matches!(
+                tokens.try_next().await.unwrap(),
+                Some(ReceivedToken::EnvChange(_))
+            ));
+        }
+        assert_eq!(descriptor, connection.context().transaction_descriptor());
+
+        {
+            let mut tokens = TokenStream::new(&mut connection).try_unfold();
+            assert!(matches!(
+                tokens.try_next().await.unwrap(),
+                Some(ReceivedToken::EnvChange(_))
+            ));
+        }
+        assert_eq!([0; 8], connection.context().transaction_descriptor());
+    }
+
+    #[tokio::test]
+    async fn invalid_token_discriminants_are_protocol_errors() {
+        let mut connection = incoming_connection(&[0x01]);
+        let error = TokenStream::new(&mut connection)
+            .try_unfold()
+            .try_next()
+            .await
+            .unwrap_err();
+        assert!(matches!(error, crate::Error::Protocol(_)));
+    }
+
+    #[cfg(any(windows, feature = "integrated-auth-gssapi", feature = "sspi-rs"))]
+    #[tokio::test]
+    async fn flush_sspi_handles_success_server_error_and_missing_token() {
+        let success = [
+            TokenType::ReturnStatus as u8,
+            0,
+            0,
+            0,
+            0,
+            TokenType::Sspi as u8,
+            2,
+            0,
+            0x11,
+            0x22,
+        ];
+        let mut connection = incoming_connection(&success);
+        let token = connection.flush_sspi().await.unwrap();
+        assert_eq!(token.as_ref(), &[0x11, 0x22]);
+
+        fn error_token() -> Vec<u8> {
+            fn utf16(dst: &mut Vec<u8>, value: &str) {
+                for unit in value.encode_utf16() {
+                    dst.extend_from_slice(&unit.to_le_bytes());
+                }
+            }
+            let mut body = Vec::new();
+            body.extend_from_slice(&50000u32.to_le_bytes());
+            body.extend_from_slice(&[1, 16]);
+            body.extend_from_slice(&4u16.to_le_bytes());
+            utf16(&mut body, "boom");
+            body.push(2);
+            utf16(&mut body, "db");
+            body.push(0);
+            body.extend_from_slice(&1u32.to_le_bytes());
+
+            let mut token = vec![TokenType::Error as u8];
+            token.extend_from_slice(&(body.len() as u16).to_le_bytes());
+            token.extend(body);
+            token
+        }
+
+        let mut connection = incoming_connection(&error_token());
+        assert!(matches!(
+            TokenStream::new(&mut connection).flush_sspi().await,
+            Err(crate::Error::Server(_))
+        ));
+
+        let mut connection = memory_connection();
+        connection.flushed = true;
+        assert!(matches!(
+            TokenStream::new(&mut connection).flush_sspi().await,
+            Err(crate::Error::Protocol(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn owned_stream_reads_metadata_rows_and_clean_eof_from_its_client() {
+        let metadata = TokenColMetaData {
+            columns: vec![MetaDataColumn {
+                base: BaseMetaDataColumn {
+                    flags: BitFlags::empty(),
+                    ty: TypeInfo::FixedLen(FixedLenType::Int4),
+                },
+                col_name: Cow::Borrowed("answer"),
+            }],
+        };
+        let mut payload = BytesMut::new();
+        metadata.encode(&mut payload).unwrap();
+        payload.put_u8(TokenType::Row as u8);
+        payload.put_i32_le(42);
+
+        let client = crate::Client {
+            connection: incoming_connection(&payload),
+        };
+        let mut stream = crate::OwnedQueryStream::from_client(client);
+        let row = stream.try_next().await.unwrap().unwrap();
+        assert_eq!(Some(42), row.get::<i32, _>("answer"));
+        assert!(stream.try_next().await.unwrap().is_none());
+        assert!(stream.try_next().await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -1265,6 +1453,21 @@ mod timeout_tests {
         let mut connection = incoming_connection(&payload);
         let result = crate::ExecuteResult::new(&mut connection).await.unwrap();
         assert!(result.rows_affected().is_empty());
+    }
+
+    #[tokio::test]
+    async fn non_final_done_proc_reports_its_affected_row_count() {
+        let mut payload = vec![TokenType::DoneProc as u8];
+        payload.extend_from_slice(&1u16.to_le_bytes()); // MORE
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&99u64.to_le_bytes());
+        payload.push(TokenType::DoneProc as u8);
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&0u64.to_le_bytes());
+        let mut connection = incoming_connection(&payload);
+        let result = crate::ExecuteResult::new(&mut connection).await.unwrap();
+        assert_eq!(&[99], result.rows_affected());
     }
 
     #[tokio::test]
@@ -1359,5 +1562,62 @@ mod timeout_tests {
         assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
 
         memory_connection().close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn login_encoding_covers_none_and_aad_with_optional_fields() {
+        let connection = memory_connection()
+            .login(
+                AuthMethod::None,
+                EncryptionLevel::On,
+                Some("db".into()),
+                Some("server".into()),
+                Some("app".into()),
+                Some("client".into()),
+                true,
+                Some(8192),
+                PreloginMessage::new(),
+            )
+            .await
+            .unwrap();
+        assert!(!connection.poisoned);
+
+        let mut prelogin = PreloginMessage::new();
+        prelogin.fed_auth_required = true;
+        prelogin.nonce = Some([7; 32]);
+        let connection = memory_connection()
+            .login(
+                AuthMethod::aad_token("token"),
+                EncryptionLevel::On,
+                None,
+                None,
+                None,
+                None,
+                false,
+                None,
+                prelogin,
+            )
+            .await
+            .unwrap();
+        assert!(!connection.poisoned);
+    }
+
+    #[tokio::test]
+    async fn non_unicode_string_parameters_use_varchar_type_info() {
+        let mut client = crate::Client {
+            connection: memory_connection(),
+        };
+        client
+            .connection
+            .context_mut()
+            .set_send_string_parameters_as_unicode(false);
+        client
+            .rpc_perform_query(
+                crate::tds::codec::RpcProcId::ExecuteSQL,
+                Vec::new(),
+                vec![crate::ColumnData::String(Some(Cow::Borrowed("hello")))].into_iter(),
+            )
+            .await
+            .unwrap();
     }
 }

@@ -459,11 +459,14 @@ mod tests {
         buf.put_u8(EnvChangeTy::BeginTransaction as u8);
         buf.put_u8(3); // valid descriptor length is always 8
 
-        let mut framed = BytesMut::new();
-        framed.put_u16_le(buf.len() as u16);
-        framed.extend_from_slice(&buf);
+        let mut wire = BytesMut::new();
+        wire.put_u16_le(buf.len() as u16);
+        wire.extend_from_slice(&buf);
 
-        let result = TokenEnvChange::decode(&mut framed.into_sql_read_bytes()).await;
+        let result = TokenEnvChange::decode(&mut wire.into_sql_read_bytes()).await;
+        assert!(matches!(result, Err(Error::Protocol(_))));
+
+        let result = TokenEnvChange::decode(&mut framed(&[0xff])).await;
         assert!(matches!(result, Err(Error::Protocol(_))));
     }
 }

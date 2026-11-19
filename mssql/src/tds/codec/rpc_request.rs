@@ -196,6 +196,7 @@ impl<'a> Encode<BytesMut> for RpcParam<'a> {
 #[cfg(test)]
 mod name_length_tests {
     use super::*;
+    use crate::{VarLenContext, VarLenType};
 
     fn param(name: String) -> RpcParam<'static> {
         RpcParam {
@@ -226,5 +227,18 @@ mod name_length_tests {
         );
         let mut buf = BytesMut::new();
         assert!(req.encode(&mut buf).is_err());
+    }
+
+    #[test]
+    fn parameter_type_overrides_encode_the_header_and_value() {
+        let mut parameter = param("p".into());
+        parameter.type_info = Some(TypeInfo::VarLenSized(VarLenContext::new(
+            VarLenType::Intn,
+            4,
+            None,
+        )));
+        let mut buf = BytesMut::new();
+        parameter.encode(&mut buf).unwrap();
+        assert!(buf.ends_with(&[4, 1, 0, 0, 0]));
     }
 }

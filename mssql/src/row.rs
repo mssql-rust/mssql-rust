@@ -719,6 +719,7 @@ mod tests {
             row.get_column_data("value").unwrap()
         );
         assert!(row.get_column_data("missing").is_err());
+        assert!(row.get_column_data(1).is_err());
     }
 
     #[test]

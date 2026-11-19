@@ -1564,6 +1564,17 @@ mod bulk_collation_tests {
     }
 
     #[test]
+    fn undeclarable_bulk_column_types_return_a_typed_error() {
+        let columns = [column(
+            "unsupported",
+            TypeInfo::FixedLen(FixedLenType::Null),
+        )];
+        let error = bulk_column_list(&columns, &[]).unwrap_err();
+        assert!(matches!(error, crate::Error::BulkInput(_)));
+        assert!(error.to_string().contains("unsupported"));
+    }
+
+    #[test]
     fn collations_are_matched_by_column_name() {
         let columns = [
             column("B", var(VarLenType::BigVarChar, 10)),

@@ -696,6 +696,7 @@ mod collect_results_tests {
     use crate::Column;
     use enumflags2::BitFlags;
     use futures_util::stream;
+    use std::future;
 
     fn columns() -> Arc<Vec<Column>> {
         Arc::new(vec![Column::new("c".to_string(), ColumnType::Int4)])
@@ -809,14 +810,17 @@ mod collect_results_tests {
             metadata.as_metadata().unwrap().columns()[0].name()
         );
 
-        let row = query.try_next().await.unwrap().unwrap();
-        assert!(row.as_metadata().is_none());
-        assert_eq!(Some(42), row.as_row().unwrap().get::<i32, _>(0));
-        assert!(row.into_row().is_some());
+        let result_row = query.try_next().await.unwrap().unwrap();
+        assert!(result_row.as_metadata().is_none());
+        assert_eq!(Some(42), result_row.as_row().unwrap().get::<i32, _>(0));
+        assert!(result_row.into_row().is_some());
         assert!(query.try_next().await.unwrap().is_none());
 
         let metadata_item = QueryItem::metadata(columns(), 3);
         assert_eq!(3, metadata_item.into_metadata().unwrap().result_index());
+
+        let row_item = row(&columns(), 0);
+        assert!(row_item.into_metadata().is_none());
 
         let empty = query_stream(Vec::new());
         assert!(empty.into_results().await.unwrap().is_empty());
@@ -824,6 +828,8 @@ mod collect_results_tests {
         assert!(empty.into_first_result().await.unwrap().is_empty());
         let empty = query_stream(Vec::new());
         assert!(empty.into_row().await.unwrap().is_none());
+        let mut empty = query_stream(Vec::new());
+        assert!(empty.columns().await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -859,5 +865,51 @@ mod collect_results_tests {
             .unwrap();
         assert_eq!(1, rows.len());
         assert_eq!(Some(7), rows[0].get::<i32, _>(0));
+    }
+
+    type MemoryStream = futures_util::io::Cursor<Vec<u8>>;
+
+    fn unused_client(_: &mut ()) -> &mut Client<MemoryStream> {
+        panic!("a preloaded owned-stream future must not request its owner")
+    }
+
+    fn preloaded_owned_stream(
+        token: crate::Result<Option<ReceivedToken>>,
+    ) -> OwnedQueryStream<(), MemoryStream> {
+        OwnedQueryStream {
+            owner: None,
+            client_mut: unused_client,
+            pending: Some(Box::pin(future::ready(((), token)))),
+            columns: None,
+            result_set_index: None,
+            done: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn owned_stream_reports_protocol_server_transport_and_end_conditions() {
+        let mut row = TokenRow::new();
+        row.push(crate::ColumnData::I32(Some(1)));
+        let mut stream = preloaded_owned_stream(Ok(Some(ReceivedToken::Row(row))));
+        assert!(matches!(stream.try_next().await, Err(Error::Protocol(_))));
+        assert!(stream.try_next().await.unwrap().is_none());
+
+        let server = crate::tds::codec::TokenError {
+            code: 50000,
+            state: 1,
+            class: 16,
+            message: "sentinel".into(),
+            server: "server".into(),
+            procedure: "".into(),
+            line: 1,
+        };
+        let mut stream = preloaded_owned_stream(Ok(Some(ReceivedToken::Error(server))));
+        assert!(matches!(stream.try_next().await, Err(Error::Server(_))));
+
+        let mut stream = preloaded_owned_stream(Err(Error::Protocol("sentinel".into())));
+        assert!(matches!(stream.try_next().await, Err(Error::Protocol(_))));
+
+        let mut stream = preloaded_owned_stream(Ok(None));
+        assert!(stream.try_next().await.unwrap().is_none());
     }
 }

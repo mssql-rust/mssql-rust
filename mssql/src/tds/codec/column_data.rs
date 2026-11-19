@@ -1112,6 +1112,57 @@ mod tests {
     }
 
     #[test]
+    fn typed_bulk_nulls_cover_money_datetime_and_xml_encodings() {
+        let cases = [
+            (
+                ColumnData::Numeric(None),
+                TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Money, 8, None)),
+            ),
+            (
+                ColumnData::DateTime(None),
+                TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Datetimen, 8, None)),
+            ),
+            (
+                ColumnData::SmallDateTime(None),
+                TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Datetimen, 4, None)),
+            ),
+            #[cfg(feature = "tds73")]
+            (
+                ColumnData::DateTime2(None),
+                TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Datetimen, 8, None)),
+            ),
+        ];
+
+        for (value, ty) in cases {
+            let mut bytes = BytesMut::new();
+            value
+                .encode(&mut BytesMutWithTypeInfo::new(&mut bytes).with_type_info(&ty))
+                .unwrap();
+            assert_eq!(bytes.as_ref(), &[0]);
+        }
+
+        let xml = TypeInfo::Xml {
+            schema: None,
+            size: usize::MAX,
+        };
+        let mut bytes = BytesMut::new();
+        ColumnData::Xml(None)
+            .encode(&mut BytesMutWithTypeInfo::new(&mut bytes).with_type_info(&xml))
+            .unwrap();
+        assert_eq!(bytes.as_ref(), &u64::MAX.to_le_bytes());
+    }
+
+    #[test]
+    fn varchar_without_collation_is_a_bulk_input_error() {
+        let ty = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::BigVarChar, 20, None));
+        let mut bytes = BytesMut::new();
+        let error = ColumnData::String(Some(Cow::Borrowed("text")))
+            .encode(&mut BytesMutWithTypeInfo::new(&mut bytes).with_type_info(&ty))
+            .unwrap_err();
+        assert!(matches!(error, Error::BulkInput(_)));
+    }
+
+    #[test]
     fn legacy_text_requires_a_collation_and_very_long_strings_use_ntext() {
         let ty = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Text, 100, None));
         let mut bytes = BytesMut::new();
@@ -1168,6 +1219,81 @@ mod tests {
             ColumnData::String(value) => value.map(Cow::into_owned),
             other => panic!("expected string column data, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn scalar_decoders_reject_invalid_wire_lengths() {
+        fn reader(bytes: &[u8]) -> impl crate::SqlReadBytes {
+            BytesMut::from(bytes).into_sql_read_bytes()
+        }
+
+        let mut input = reader(&[2]);
+        assert!(matches!(
+            bit::decode(&mut input).await,
+            Err(Error::Protocol(_))
+        ));
+
+        let mut input = reader(&[2]);
+        assert!(matches!(
+            date::decode(&mut input).await,
+            Err(Error::Protocol(_))
+        ));
+
+        let mut input = reader(&[]);
+        assert!(matches!(
+            datetimen::decode(&mut input, 1, 1).await,
+            Err(Error::Protocol(_))
+        ));
+
+        let mut input = reader(&[3]);
+        assert!(matches!(
+            float::decode(&mut input, 8).await,
+            Err(Error::Protocol(_))
+        ));
+
+        let mut input = reader(&[15]);
+        assert!(matches!(
+            guid::decode(&mut input).await,
+            Err(Error::Protocol(_))
+        ));
+
+        let mut input = reader(&[]);
+        assert!(matches!(
+            money::decode(&mut input, 1).await,
+            Err(Error::Protocol(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn string_and_legacy_lob_decoders_cover_malformed_and_null_values() {
+        let mut input = BytesMut::from(&[1, 0, b'x'][..]).into_sql_read_bytes();
+        assert!(matches!(
+            string::decode(&mut input, VarLenType::BigVarChar, 8, None).await,
+            Err(Error::Protocol(_))
+        ));
+
+        let mut input = BytesMut::from(&[1, 0, b'x'][..]).into_sql_read_bytes();
+        assert!(matches!(
+            string::decode(&mut input, VarLenType::NVarchar, 8, None).await,
+            Err(Error::Protocol(_))
+        ));
+
+        let mut input = BytesMut::from(&[2, 0, 0, 0xd8][..]).into_sql_read_bytes();
+        assert!(string::decode(&mut input, VarLenType::Xml, 8, None)
+            .await
+            .is_err());
+
+        let mut input = BytesMut::from(&[0][..]).into_sql_read_bytes();
+        assert!(matches!(
+            image::decode(&mut input).await.unwrap(),
+            ColumnData::Binary(None)
+        ));
+
+        let mut input = BytesMut::from(&[0][..]).into_sql_read_bytes();
+        assert!(matches!(
+            text::decode(&mut input, None).await.unwrap(),
+            ColumnData::String(None)
+        ));
     }
 
     #[tokio::test]

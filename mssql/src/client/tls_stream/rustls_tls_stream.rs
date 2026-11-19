@@ -638,6 +638,18 @@ mod handshake_error_tests {
             })
         ));
 
+        let malformed_cert = temporary_file(
+            "client-malformed.pem",
+            b"-----BEGIN CERTIFICATE-----\n!\n-----END CERTIFICATE-----\n",
+        );
+        assert!(matches!(
+            load_client_auth(&source(malformed_cert, "key.pem".into())),
+            Err(Error::Io {
+                kind: IoErrorKind::InvalidData,
+                ..
+            })
+        ));
+
         let cert = std::path::PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/docker/certs/mtls/client.pem"
@@ -699,5 +711,28 @@ mod handshake_error_tests {
     fn rustls_errors_convert_to_public_tls_errors() {
         let error: Error = RustlsError::General("handshake failed".into()).into();
         assert!(matches!(error, Error::Tls(message) if message.contains("handshake failed")));
+    }
+
+    #[tokio::test]
+    async fn certificate_bundle_errors_are_rejected_before_network_io() {
+        for (bundle, expected_kind) in [
+            (&b""[..], IoErrorKind::InvalidInput),
+            (
+                &b"-----BEGIN CERTIFICATE-----\n!\n-----END CERTIFICATE-----\n"[..],
+                IoErrorKind::InvalidData,
+            ),
+        ] {
+            let mut config = Config::new();
+            config.trust_cert_ca_bundle(bundle);
+            let stream = futures_util::io::Cursor::new(Vec::<u8>::new());
+            let error = match TlsStream::new(&config, stream).await {
+                Ok(_) => panic!("invalid CA bundle unexpectedly reached a TLS connection"),
+                Err(error) => error,
+            };
+            assert!(matches!(
+                error,
+                Error::Io { kind, .. } if kind == expected_kind
+            ));
+        }
     }
 }

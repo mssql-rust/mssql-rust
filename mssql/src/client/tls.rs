@@ -439,6 +439,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handshake_eof_during_a_partial_header_is_clean_eof() {
+        let stream = MockStream {
+            data: std::io::Cursor::new(vec![PacketType::PreLogin as u8, 0]),
+            written: Vec::new(),
+        };
+        let mut wrapper = TlsPreloginWrapper::new(stream);
+        let mut payload = [0u8; 1];
+        assert_eq!(0, wrapper.read(&mut payload).await.unwrap());
+    }
+
+    #[tokio::test]
     async fn handshake_writes_one_prelogin_packet_then_passes_through() {
         let stream = MockStream {
             data: std::io::Cursor::new(Vec::new()),

@@ -174,6 +174,7 @@ mod encode_tests {
 
         for (value, scale, expected) in [
             (123_456, 5, 12_346i32),
+            (123_451, 5, 12_345),
             (-123_455, 5, -12_346),
             (1, 0, 10_000),
         ] {
@@ -184,5 +185,6 @@ mod encode_tests {
 
         let mut x = BytesMut::new();
         assert!(encode_numeric(&mut x, 8, Numeric::new_with_scale(i128::MAX, 0), true).is_err());
+        assert!(f64_bytes(1, 1.0, false).is_err());
     }
 }

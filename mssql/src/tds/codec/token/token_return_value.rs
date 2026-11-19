@@ -45,7 +45,8 @@ impl TokenReturnValue {
 mod tests {
     use super::TokenReturnValue;
     use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
-    use bytes::BytesMut;
+    use crate::tds::codec::FixedLenType;
+    use bytes::{BufMut, BytesMut};
 
     #[tokio::test]
     async fn rejects_unknown_parameter_status() {
@@ -55,5 +56,22 @@ mod tests {
             TokenReturnValue::decode(&mut source).await,
             Err(crate::Error::Protocol(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn decodes_a_user_defined_function_return_value() {
+        let mut wire = BytesMut::new();
+        wire.put_u16_le(1); // ordinal
+        wire.put_u8(0); // empty name
+        wire.put_u8(2); // UDF return value
+        wire.put_u32_le(0); // user type
+        wire.put_u16_le(0); // flags
+        wire.put_u8(FixedLenType::Int4 as u8);
+        wire.put_i32_le(42);
+
+        let value = TokenReturnValue::decode(&mut wire.into_sql_read_bytes())
+            .await
+            .unwrap();
+        assert!(value.udf);
     }
 }

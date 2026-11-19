@@ -254,6 +254,7 @@ async fn table_valued_parameter_round_trips() -> mssql::Result<()> {
     .await?;
 
     let result = async {
+        let unqualified_ty = ty.strip_prefix("dbo.").unwrap();
         let mut rows = Vec::new();
         for (id, name, amount) in [
             (1, Some("a"), Some(150)),
@@ -273,7 +274,7 @@ async fn table_valued_parameter_round_trips() -> mssql::Result<()> {
         let row = conn
             .call_procedure(
                 proc.as_str(),
-                &[ProcParam::table("@rows", ty.as_str(), rows)],
+                &[ProcParam::table("@rows", unqualified_ty, rows)],
             )
             .await?
             .into_row()
@@ -318,6 +319,20 @@ async fn table_valued_parameter_round_trips() -> mssql::Result<()> {
             .await
             .unwrap_err();
         assert!(!matches!(err, mssql::error::Error::Server(_)), "{err:?}");
+
+        for invalid_type in ["a.b.c", "dbo.[]"] {
+            let err = conn
+                .call_procedure(
+                    proc.as_str(),
+                    &[ProcParam::table("@rows", invalid_type, vec![])],
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, mssql::error::Error::Conversion(_)),
+                "{invalid_type}: {err:?}"
+            );
+        }
 
         // The connection is still usable.
         let row = conn

@@ -705,6 +705,27 @@ mod tests {
     }
 
     #[test]
+    fn regular_col_metadata_encoder_writes_token_columns_and_names() {
+        let metadata = TokenColMetaData {
+            columns: vec![
+                bulk_column("id", TypeInfo::FixedLen(FixedLenType::Int4)),
+                bulk_column("flag", TypeInfo::FixedLen(FixedLenType::Bit)),
+            ],
+        };
+        let mut encoded = BytesMut::new();
+        metadata.encode(&mut encoded).unwrap();
+
+        assert_eq!(encoded[0], TokenType::ColMetaData as u8);
+        assert_eq!(&encoded[1..3], &[2, 0]);
+        assert!(encoded
+            .windows(4)
+            .any(|window| window == [b'i', 0, b'd', 0]));
+        assert!(encoded
+            .windows(8)
+            .any(|window| window == [b'f', 0, b'l', 0, b'a', 0, b'g', 0]));
+    }
+
+    #[test]
     fn bulk_col_metadata_rejects_over_long_names() {
         let ty = TypeInfo::FixedLen(FixedLenType::Int4);
         let long_col = "c".repeat(256);

@@ -737,4 +737,32 @@ mod tests {
         assert!(!shown.contains("hunter2"), "{shown}");
         assert!(!shown.contains("aad-secret"), "{shown}");
     }
+
+    #[test]
+    fn integrated_security_and_read_only_flags_can_be_enabled_and_cleared() {
+        let mut login = LoginMessage::new();
+
+        #[cfg(any(
+            all(unix, any(feature = "integrated-auth-gssapi", feature = "sspi-rs")),
+            windows
+        ))]
+        {
+            login.integrated_security(Some(vec![1, 2, 3]));
+            assert!(login
+                .option_flags_2
+                .contains(OptionFlag2::IntegratedSecurity));
+            assert_eq!(login.integrated_security.as_deref(), Some(&[1, 2, 3][..]));
+
+            login.integrated_security(None);
+            assert!(!login
+                .option_flags_2
+                .contains(OptionFlag2::IntegratedSecurity));
+            assert!(login.integrated_security.is_none());
+        }
+
+        login.readonly(true);
+        assert!(login.type_flags.contains(LoginTypeFlag::ReadOnlyIntent));
+        login.readonly(false);
+        assert!(!login.type_flags.contains(LoginTypeFlag::ReadOnlyIntent));
+    }
 }

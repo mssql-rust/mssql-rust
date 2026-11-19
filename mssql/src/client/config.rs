@@ -1169,6 +1169,32 @@ mod tests {
 
         let ca = Config::builder().trust_cert_ca("ca.pem").build();
         assert!(matches!(ca.trust, TrustConfig::CaCertificateLocation(_)));
+
+        #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
+        {
+            let pkcs12 = Config::builder()
+                .client_certificate_pkcs12("client.p12", "secret")
+                .build();
+            assert!(matches!(
+                pkcs12.client_cert,
+                Some(ClientCertSource::Pkcs12 { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn connection_string_populates_instance_hostname_and_client_name() {
+        let config = Config::from_ado_string(
+            "server=db\\SQLEXPRESS;user id=sa;password=p;\
+             HostNameInCertificate=sql.example.com;Workstation ID=runner",
+        )
+        .unwrap();
+        assert_eq!(config.instance_name.as_deref(), Some("SQLEXPRESS"));
+        assert_eq!(
+            config.host_name_in_certificate.as_deref(),
+            Some("sql.example.com")
+        );
+        assert_eq!(config.client_name.as_deref(), Some("runner"));
     }
 
     #[test]
@@ -1186,6 +1212,10 @@ mod tests {
                 config.trust_cert_ca_bundle(Vec::new());
                 config.trust_cert_ca("ca.pem");
             },
+            |config| {
+                config.trust_cert_ca("ca.pem");
+                config.trust_cert_ca_bundle(Vec::new());
+            },
             #[cfg(feature = "rustls")]
             |config| {
                 config.trust_cert();
@@ -1197,6 +1227,8 @@ mod tests {
             }))
             .is_err());
         }
+
+        assert!(Config::from_ado_string("server=db;Encrypt=maybe").is_err());
     }
 
     #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
