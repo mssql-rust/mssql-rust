@@ -61,3 +61,28 @@ impl<'a> DerefMut for BytesMutWithDataColumns<'a> {
         self.bytes
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::BufMut;
+
+    #[test]
+    fn forwards_buffer_and_column_operations() {
+        let mut bytes = BytesMut::new();
+        let columns = Vec::new();
+        let mut wrapped = BytesMutWithDataColumns::new(&mut bytes, &columns);
+        assert!(wrapped.data_columns().is_empty());
+        assert!(wrapped.remaining_mut() > 0);
+        let _spare_capacity = wrapped.chunk_mut();
+        wrapped.put_slice(&[1, 2, 3]);
+        assert_eq!(&[1, 2, 3], &wrapped[..]);
+        assert_eq!(
+            &[1, 2, 3],
+            <BytesMutWithDataColumns<'_> as Borrow<[u8]>>::borrow(&wrapped)
+        );
+        <BytesMutWithDataColumns<'_> as BorrowMut<[u8]>>::borrow_mut(&mut wrapped)[0] = 9;
+        wrapped.deref_mut().extend_from_slice(&[4]);
+        assert_eq!(&[9, 2, 3, 4], &wrapped[..]);
+    }
+}

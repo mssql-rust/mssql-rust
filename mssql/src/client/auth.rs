@@ -211,4 +211,19 @@ mod tests {
         let shown = format!("{config:?}");
         assert!(!shown.contains("super-secret"), "{shown}");
     }
+
+    #[test]
+    fn sql_server_password_is_redacted_from_debug() {
+        let auth = AuthMethod::sql_server("alice", "top-secret");
+        let shown = format!("{auth:?}");
+
+        assert!(shown.contains("alice"), "{shown}");
+        assert!(shown.contains("<HIDDEN>"), "{shown}");
+        assert!(!shown.contains("top-secret"), "{shown}");
+    }
+
+    #[test]
+    fn none_auth_debug_is_stable() {
+        assert_eq!("None", format!("{:?}", AuthMethod::None));
+    }
 }

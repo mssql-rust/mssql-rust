@@ -153,4 +153,56 @@ mod tests {
         };
         assert!(tvp.encode(&mut BytesMut::new()).is_err());
     }
+
+    #[test]
+    fn every_fixed_type_uses_its_nullable_tvp_wire_type() {
+        let cases = [
+            (FixedLenType::Int1, Some((VarLenType::Intn, 1))),
+            (FixedLenType::Int2, Some((VarLenType::Intn, 2))),
+            (FixedLenType::Int4, Some((VarLenType::Intn, 4))),
+            (FixedLenType::Int8, Some((VarLenType::Intn, 8))),
+            (FixedLenType::Bit, Some((VarLenType::Bitn, 1))),
+            (FixedLenType::Float4, Some((VarLenType::Floatn, 4))),
+            (FixedLenType::Float8, Some((VarLenType::Floatn, 8))),
+            (FixedLenType::Money4, Some((VarLenType::Money, 4))),
+            (FixedLenType::Money, Some((VarLenType::Money, 8))),
+            (FixedLenType::Datetime4, Some((VarLenType::Datetimen, 4))),
+            (FixedLenType::Datetime, Some((VarLenType::Datetimen, 8))),
+            (FixedLenType::Null, None),
+        ];
+
+        for (fixed, expected) in cases {
+            let converted = tvp_column_type(TypeInfo::FixedLen(fixed));
+            match expected {
+                Some((ty, len)) => {
+                    let TypeInfo::VarLenSized(context) = converted else {
+                        panic!("{fixed:?} did not become variable length");
+                    };
+                    assert_eq!(ty, context.r#type());
+                    assert_eq!(len, context.len());
+                }
+                None => assert!(matches!(converted, TypeInfo::FixedLen(FixedLenType::Null))),
+            }
+        }
+
+        let variable = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::NVarchar, 20, None));
+        assert!(matches!(
+            tvp_column_type(variable),
+            TypeInfo::VarLenSized(_)
+        ));
+    }
+
+    #[test]
+    fn rejects_overlong_tvp_names() {
+        let tvp = TableValue {
+            schema: "s".repeat(256),
+            type_name: "T".into(),
+            columns: Vec::new(),
+            rows: Vec::new(),
+        };
+        assert!(matches!(
+            tvp.encode(&mut BytesMut::new()),
+            Err(crate::Error::Conversion(_))
+        ));
+    }
 }

@@ -278,6 +278,177 @@ mod tests {
     use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
     use bytes::{BufMut, BytesMut};
 
+    fn framed(body: &[u8]) -> impl SqlReadBytes {
+        let mut bytes = BytesMut::new();
+        bytes.put_u16_le(body.len() as u16);
+        bytes.extend_from_slice(body);
+        bytes.into_sql_read_bytes()
+    }
+
+    fn b_varchar(value: &str) -> Vec<u8> {
+        let units: Vec<_> = value.encode_utf16().collect();
+        let mut bytes = vec![units.len() as u8];
+        for unit in units {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[tokio::test]
+    async fn decode_every_environment_change_shape() {
+        let mut database = vec![EnvChangeTy::Database as u8];
+        database.extend(b_varchar("new"));
+        database.extend(b_varchar("old"));
+        assert!(matches!(
+            TokenEnvChange::decode(&mut framed(&database)).await.unwrap(),
+            TokenEnvChange::Database(new, old) if new == "new" && old == "old"
+        ));
+
+        let mut packet = vec![EnvChangeTy::PacketSize as u8];
+        packet.extend(b_varchar("8192"));
+        packet.extend(b_varchar("4096"));
+        assert!(matches!(
+            TokenEnvChange::decode(&mut framed(&packet)).await.unwrap(),
+            TokenEnvChange::PacketSize(8192, 4096)
+        ));
+
+        for (new, old) in [
+            (vec![5, 9, 4, 0, 0, 52], vec![5, 5, 4, 0, 0, 0]),
+            (vec![0], vec![0]),
+        ] {
+            let mut collation = vec![EnvChangeTy::SqlCollation as u8];
+            collation.extend(new);
+            collation.extend(old);
+            assert!(matches!(
+                TokenEnvChange::decode(&mut framed(&collation))
+                    .await
+                    .unwrap(),
+                TokenEnvChange::SqlCollation { .. }
+            ));
+        }
+
+        for ty in [
+            EnvChangeTy::BeginTransaction,
+            EnvChangeTy::EnlistDTCTransaction,
+        ] {
+            let mut transaction = vec![ty as u8, 8];
+            transaction.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+            assert!(matches!(
+                TokenEnvChange::decode(&mut framed(&transaction))
+                    .await
+                    .unwrap(),
+                TokenEnvChange::BeginTransaction([1, 2, 3, 4, 5, 6, 7, 8])
+            ));
+        }
+
+        for (ty, expected) in [
+            (EnvChangeTy::CommitTransaction, "Commit transaction"),
+            (EnvChangeTy::RollbackTransaction, "Rollback transaction"),
+            (EnvChangeTy::DefectTransaction, "Defect transaction"),
+        ] {
+            let token = TokenEnvChange::decode(&mut framed(&[ty as u8]))
+                .await
+                .unwrap();
+            assert_eq!(token.to_string(), expected);
+        }
+
+        let host: Vec<_> = "redirect.example".encode_utf16().collect();
+        let mut routing = vec![EnvChangeTy::Routing as u8];
+        routing.extend_from_slice(&(5 + host.len() as u16 * 2).to_le_bytes());
+        routing.push(0);
+        routing.extend_from_slice(&1433u16.to_le_bytes());
+        routing.extend_from_slice(&(host.len() as u16).to_le_bytes());
+        for unit in host {
+            routing.extend_from_slice(&unit.to_le_bytes());
+        }
+        assert!(matches!(
+            TokenEnvChange::decode(&mut framed(&routing)).await.unwrap(),
+            TokenEnvChange::Routing { host, port } if host == "redirect.example" && port == 1433
+        ));
+
+        let mut mirror = vec![EnvChangeTy::Rtls as u8];
+        mirror.extend(b_varchar("mirror"));
+        assert!(matches!(
+            TokenEnvChange::decode(&mut framed(&mirror)).await.unwrap(),
+            TokenEnvChange::ChangeMirror(name) if name == "mirror"
+        ));
+
+        for ty in [
+            EnvChangeTy::Language,
+            EnvChangeTy::CharacterSet,
+            EnvChangeTy::UnicodeDataSortingLID,
+            EnvChangeTy::UnicodeDataSortingCFL,
+            EnvChangeTy::PromoteTransaction,
+            EnvChangeTy::TransactionManagerAddress,
+            EnvChangeTy::TransactionEnded,
+            EnvChangeTy::ResetConnection,
+            EnvChangeTy::UserName,
+        ] {
+            assert!(matches!(
+                TokenEnvChange::decode(&mut framed(&[ty as u8])).await.unwrap(),
+                TokenEnvChange::Ignored(found) if found == ty
+            ));
+        }
+    }
+
+    #[test]
+    fn display_covers_every_environment_change_type_and_token() {
+        let types = [
+            EnvChangeTy::Database,
+            EnvChangeTy::Language,
+            EnvChangeTy::CharacterSet,
+            EnvChangeTy::PacketSize,
+            EnvChangeTy::UnicodeDataSortingLID,
+            EnvChangeTy::UnicodeDataSortingCFL,
+            EnvChangeTy::SqlCollation,
+            EnvChangeTy::BeginTransaction,
+            EnvChangeTy::CommitTransaction,
+            EnvChangeTy::RollbackTransaction,
+            EnvChangeTy::EnlistDTCTransaction,
+            EnvChangeTy::DefectTransaction,
+            EnvChangeTy::Rtls,
+            EnvChangeTy::PromoteTransaction,
+            EnvChangeTy::TransactionManagerAddress,
+            EnvChangeTy::TransactionEnded,
+            EnvChangeTy::ResetConnection,
+            EnvChangeTy::UserName,
+            EnvChangeTy::Routing,
+        ];
+        for ty in types {
+            assert!(!ty.to_string().is_empty());
+        }
+
+        let collation = Collation::new(0x0409, 52);
+        for token in [
+            TokenEnvChange::Database("new".into(), "old".into()),
+            TokenEnvChange::PacketSize(8192, 4096),
+            TokenEnvChange::SqlCollation {
+                old: Some(collation),
+                new: Some(collation),
+            },
+            TokenEnvChange::SqlCollation {
+                old: None,
+                new: Some(collation),
+            },
+            TokenEnvChange::SqlCollation {
+                old: None,
+                new: None,
+            },
+            TokenEnvChange::BeginTransaction([0; 8]),
+            TokenEnvChange::CommitTransaction,
+            TokenEnvChange::RollbackTransaction,
+            TokenEnvChange::DefectTransaction,
+            TokenEnvChange::Routing {
+                host: "host".into(),
+                port: 1433,
+            },
+            TokenEnvChange::ChangeMirror("mirror".into()),
+            TokenEnvChange::Ignored(EnvChangeTy::Language),
+        ] {
+            assert!(!token.to_string().is_empty());
+        }
+    }
+
     // The transaction descriptor length is server-controlled wire data
     // (255 of 256 byte values are not 8), and this was a bare `assert!`
     // rather than `debug_assert!`, so it panicked live in release builds

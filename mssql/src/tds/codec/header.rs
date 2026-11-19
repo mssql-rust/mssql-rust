@@ -33,8 +33,12 @@ uint_enum! {
         IgnoreEvent = 3,
         /// [client to server ONLY] [>= TDSv7.1]
         ResetConnection = 0x08,
+        /// RESETCONNECTION combined with EndOfMessage for a one-packet request.
+        ResetConnectionEndOfMessage = 0x09,
         /// [client to server ONLY] [>= TDSv7.3]
         ResetConnectionSkipTran = 0x10,
+        /// RESETCONNECTIONSKIPTRAN combined with EndOfMessage.
+        ResetConnectionSkipTranEndOfMessage = 0x11,
     }
 }
 
@@ -423,7 +427,9 @@ mod tests {
             PacketStatus::EndOfMessage,
             PacketStatus::IgnoreEvent,
             PacketStatus::ResetConnection,
+            PacketStatus::ResetConnectionEndOfMessage,
             PacketStatus::ResetConnectionSkipTran,
+            PacketStatus::ResetConnectionSkipTranEndOfMessage,
         ] {
             let mut header = PacketHeader::new(8, 0);
             header.status = status;

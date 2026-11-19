@@ -170,3 +170,73 @@ impl From<sspi::Error> for Error {
         Error::SspiRs(format!("{}", err))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+    use std::io;
+
+    #[test]
+    fn non_server_errors_have_no_code_and_are_not_deadlocks() {
+        let error = Error::Protocol("bad packet".into());
+        assert_eq!(None, error.code());
+        assert!(!error.is_deadlock());
+
+        let deadlock = Error::Server(crate::TokenError {
+            code: 1205,
+            state: 1,
+            class: 13,
+            message: "deadlock victim".to_string(),
+            server: "db".to_string(),
+            procedure: String::new(),
+            line: 1,
+        });
+        assert_eq!(Some(1205), deadlock.code());
+        assert!(deadlock.is_deadlock());
+    }
+
+    #[test]
+    fn converts_uuid_errors() {
+        let source = uuid::Uuid::parse_str("not-a-uuid").unwrap_err();
+        let error = Error::from(source);
+        assert!(matches!(error, Error::Conversion(_)));
+
+        let source = connection_string::Error::new("bad connection string");
+        let error = Error::from(source);
+        assert!(
+            matches!(error, Error::Conversion(message) if message.contains("bad connection string"))
+        );
+    }
+
+    #[test]
+    fn converts_io_errors_without_losing_kind_or_message() {
+        let error = Error::from(io::Error::new(io::ErrorKind::TimedOut, "too slow"));
+        assert_eq!(
+            Error::Io {
+                kind: io::ErrorKind::TimedOut,
+                message: "too slow".to_string(),
+            },
+            error
+        );
+    }
+
+    #[test]
+    fn converts_text_and_integer_errors() {
+        let parse_int = "nope".parse::<u8>().unwrap_err();
+        assert!(matches!(Error::from(parse_int), Error::ParseInt(_)));
+
+        let invalid_utf8 = std::hint::black_box([0xff]);
+        assert_eq!(
+            Error::Utf8,
+            Error::from(std::str::from_utf8(&invalid_utf8).unwrap_err())
+        );
+        assert_eq!(
+            Error::Utf8,
+            Error::from(String::from_utf8(vec![0xff]).unwrap_err())
+        );
+        assert_eq!(
+            Error::Utf16,
+            Error::from(String::from_utf16(&[0xd800]).unwrap_err())
+        );
+    }
+}

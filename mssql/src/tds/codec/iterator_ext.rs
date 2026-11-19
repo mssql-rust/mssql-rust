@@ -25,3 +25,15 @@ where
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::IteratorJoin;
+
+    #[test]
+    fn joins_empty_single_and_multiple_iterators() {
+        assert_eq!("", std::iter::empty::<u8>().join(","));
+        assert_eq!("1", [1].into_iter().join(","));
+        assert_eq!("1,2,3", [1, 2, 3].into_iter().join(","));
+    }
+}

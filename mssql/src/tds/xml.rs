@@ -117,3 +117,40 @@ impl Encode<BytesMut> for XmlData {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{XmlData, XmlSchema};
+    use crate::tds::codec::Encode;
+    use bytes::BytesMut;
+    use std::sync::Arc;
+
+    #[test]
+    fn schema_accessors_and_xml_views() {
+        let schema = Arc::new(XmlSchema::new("catalog", "dbo", "widgets"));
+        assert_eq!("catalog", schema.db_name());
+        assert_eq!("dbo", schema.owner());
+        assert_eq!("widgets", schema.collection());
+
+        let mut xml = XmlData::new("<widget />");
+        assert_eq!(None, xml.schema());
+        xml.set_schema(schema);
+        assert_eq!(Some("widgets"), xml.schema().map(XmlSchema::collection));
+        assert_eq!("<widget />", xml.as_ref());
+        assert_eq!("<widget />", xml.to_string());
+        assert_eq!("<widget />", xml.into_string());
+    }
+
+    #[test]
+    fn encoding_uses_plp_with_utf16_byte_length() {
+        let mut bytes = BytesMut::new();
+        XmlData::new("a🦀").encode(&mut bytes).unwrap();
+
+        assert_eq!(
+            &[0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+            &bytes[..8]
+        );
+        assert_eq!(&[6, 0, 0, 0], &bytes[8..12]);
+        assert_eq!(&[0, 0, 0, 0], &bytes[18..22]);
+    }
+}

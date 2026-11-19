@@ -40,3 +40,20 @@ impl TokenReturnValue {
         Ok(token)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TokenReturnValue;
+    use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+    use bytes::BytesMut;
+
+    #[tokio::test]
+    async fn rejects_unknown_parameter_status() {
+        // ordinal 1, empty B_VARCHAR name, invalid status byte
+        let mut source = BytesMut::from(&[1, 0, 0, 3][..]).into_sql_read_bytes();
+        assert!(matches!(
+            TokenReturnValue::decode(&mut source).await,
+            Err(crate::Error::Protocol(_))
+        ));
+    }
+}

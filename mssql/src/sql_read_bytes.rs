@@ -439,3 +439,69 @@ pub(crate) mod test_utils {
         }
     }
 }
+
+#[cfg(test)]
+mod reader_tests {
+    use super::test_utils::IntoSqlReadBytes;
+    use super::*;
+    use bytes::BytesMut;
+
+    #[tokio::test]
+    async fn every_primitive_reader_handles_endianness() {
+        let mut reader = BytesMut::from(
+            &[
+                0xff, // i8
+                0x01, 0x02, 0x03, 0x04, // u32 be
+                0x3f, 0x80, 0x00, 0x00, // f32 be
+                0x3f, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // f64 be
+            ][..],
+        )
+        .into_sql_read_bytes();
+        assert_eq!(reader.read_i8().await.unwrap(), -1);
+        assert_eq!(reader.read_u32().await.unwrap(), 0x0102_0304);
+        assert_eq!(reader.read_f32().await.unwrap(), 1.0);
+        assert_eq!(reader.read_f64().await.unwrap(), 1.0);
+
+        let mut reader = BytesMut::from(&u128::MAX.to_le_bytes()[..]).into_sql_read_bytes();
+        assert_eq!(reader.read_u128_le().await.unwrap(), u128::MAX);
+        let mut reader = BytesMut::from(&i128::MIN.to_le_bytes()[..]).into_sql_read_bytes();
+        assert_eq!(reader.read_i128_le().await.unwrap(), i128::MIN);
+    }
+
+    #[tokio::test]
+    async fn varchar_readers_cover_empty_invalid_and_truncated_input() {
+        let mut empty = BytesMut::from(&[0][..]).into_sql_read_bytes();
+        assert_eq!(empty.read_b_varchar().await.unwrap(), "");
+
+        let mut invalid = BytesMut::from(&[1, 0, 0, 0xd8][..]).into_sql_read_bytes();
+        assert_eq!(
+            invalid.read_us_varchar().await.unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+
+        let mut truncated = BytesMut::from(&[2, b'a', 0][..]).into_sql_read_bytes();
+        assert_eq!(
+            truncated.read_b_varchar().await.unwrap_err().kind(),
+            io::ErrorKind::UnexpectedEof
+        );
+    }
+
+    #[tokio::test]
+    async fn bounded_byte_reads_rollback_partial_output_on_eof() {
+        let mut source = futures_util::io::Cursor::new(vec![1, 2]);
+        let mut output = vec![9];
+        let error = read_bytes_into(&mut source, &mut output, 3)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+        assert_eq!(output, vec![9]);
+
+        let input = vec![7; MAX_PREALLOC + 1];
+        let mut source = futures_util::io::Cursor::new(input.clone());
+        let mut output = Vec::new();
+        read_bytes_into(&mut source, &mut output, input.len())
+            .await
+            .unwrap();
+        assert_eq!(output, input);
+    }
+}

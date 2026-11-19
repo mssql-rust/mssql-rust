@@ -1,16 +1,187 @@
 use crate::tds::codec::TokenReturnValue;
-use crate::tds::stream::ReceivedToken;
-use crate::{row::ColumnType, Column, Error, FromSql, Row};
+use crate::tds::stream::{ReceivedToken, TokenStream};
+use crate::{row::ColumnType, Client, Column, Error, FromSql, Row, ToSql};
 use futures_util::{
+    io::{AsyncRead, AsyncWrite},
     ready,
     stream::{BoxStream, Peekable, Stream, StreamExt, TryStreamExt},
 };
 use std::{
+    borrow::Cow,
     fmt::Debug,
+    future::Future,
+    ops::DerefMut,
     pin::Pin,
     sync::Arc,
     task::{self, Poll},
 };
+
+type OwnedRead<C> =
+    Pin<Box<dyn Future<Output = (C, crate::Result<Option<ReceivedToken>>)> + Send + 'static>>;
+
+/// A `'static` row stream that owns its client (or pool checkout).
+///
+/// Unlike [`QueryStream`], this stream is not tied to `&mut Client`. That
+/// makes it suitable for repository methods which need to return a stream.
+/// The owner may be any pool object implementing
+/// [`DerefMut<Target = Client<_>>`](DerefMut). Dropping the stream drops its
+/// owner, so pool checkouts return to their pool normally.
+pub struct OwnedQueryStream<C, S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    owner: Option<C>,
+    client_mut: fn(&mut C) -> &mut Client<S>,
+    pending: Option<OwnedRead<C>>,
+    columns: Option<Arc<Vec<Column>>>,
+    result_set_index: Option<usize>,
+    done: bool,
+}
+
+impl<C, S> Debug for OwnedQueryStream<C, S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OwnedQueryStream")
+            .field("has_owner", &self.owner.is_some())
+            .field("done", &self.done)
+            .finish()
+    }
+}
+
+impl<C, S> OwnedQueryStream<C, S>
+where
+    C: DerefMut<Target = Client<S>> + Send + Unpin + 'static,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    /// Start a parameterized query while taking ownership of a pool checkout.
+    pub async fn query<'a>(
+        mut owner: C,
+        query: impl Into<Cow<'a, str>>,
+        params: &'a [&'a dyn ToSql],
+    ) -> crate::Result<Self> {
+        owner.start_query(query, params).await?;
+        Ok(Self::new(owner, |owner| owner.deref_mut()))
+    }
+
+    /// Start a SQL batch while taking ownership of a pool checkout.
+    pub async fn simple_query<'a>(
+        mut owner: C,
+        query: impl Into<Cow<'a, str>>,
+    ) -> crate::Result<Self> {
+        owner.start_simple_query(query).await?;
+        Ok(Self::new(owner, |owner| owner.deref_mut()))
+    }
+}
+
+impl<S> OwnedQueryStream<Client<S>, S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    pub(crate) fn from_client(owner: Client<S>) -> Self {
+        Self::new(owner, |owner| owner)
+    }
+}
+
+impl<C, S> OwnedQueryStream<C, S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    fn new(owner: C, client_mut: fn(&mut C) -> &mut Client<S>) -> Self {
+        Self {
+            owner: Some(owner),
+            client_mut,
+            pending: None,
+            columns: None,
+            result_set_index: None,
+            done: false,
+        }
+    }
+}
+
+impl<C, S> Stream for OwnedQueryStream<C, S>
+where
+    C: Send + Unpin + 'static,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    type Item = crate::Result<Row>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        loop {
+            if this.done {
+                return Poll::Ready(None);
+            }
+
+            if this.pending.is_none() {
+                let mut owner = this.owner.take().expect("owner is present between reads");
+                let client_mut = this.client_mut;
+                this.pending = Some(Box::pin(async move {
+                    let result = {
+                        let client = client_mut(&mut owner);
+                        let mut tokens = TokenStream::new(&mut client.connection).try_unfold();
+                        tokens.try_next().await
+                    };
+                    (owner, result)
+                }));
+            }
+
+            let (owner, token) = ready!(this.pending.as_mut().unwrap().as_mut().poll(cx));
+            this.pending = None;
+            this.owner = Some(owner);
+
+            let token = match token {
+                Ok(Some(token)) => token,
+                Ok(None) => {
+                    this.done = true;
+                    return Poll::Ready(None);
+                }
+                Err(error) => {
+                    this.done = true;
+                    return Poll::Ready(Some(Err(error)));
+                }
+            };
+
+            match token {
+                ReceivedToken::NewResultset(meta) => {
+                    this.columns = Some(Arc::new(
+                        meta.columns
+                            .iter()
+                            .map(|column| Column {
+                                name: column.col_name.to_string(),
+                                column_type: ColumnType::from(&column.base.ty),
+                            })
+                            .collect(),
+                    ));
+                    this.result_set_index = Some(match this.result_set_index {
+                        Some(index) => index + 1,
+                        None => 0,
+                    });
+                }
+                ReceivedToken::Row(data) => {
+                    let Some(columns) = this.columns.clone() else {
+                        this.done = true;
+                        return Poll::Ready(Some(Err(Error::Protocol(
+                            "ROW token arrived before any column metadata".into(),
+                        ))));
+                    };
+                    return Poll::Ready(Some(Ok(Row {
+                        columns,
+                        data,
+                        result_index: this.result_set_index.unwrap_or(0),
+                    })));
+                }
+                ReceivedToken::Error(error) => {
+                    this.done = true;
+                    return Poll::Ready(Some(Err(Error::Server(error))));
+                }
+                _ => {}
+            }
+        }
+    }
+}
 
 /// A set of `Streams` of [`QueryItem`] values, which can be either result
 /// metadata or a row.
@@ -519,8 +690,11 @@ where
 mod collect_results_tests {
     use super::*;
     use crate::row::ColumnType;
-    use crate::tds::codec::TokenRow;
+    use crate::tds::codec::{
+        BaseMetaDataColumn, FixedLenType, MetaDataColumn, TokenColMetaData, TokenRow, TypeInfo,
+    };
     use crate::Column;
+    use enumflags2::BitFlags;
     use futures_util::stream;
 
     fn columns() -> Arc<Vec<Column>> {
@@ -594,5 +768,96 @@ mod collect_results_tests {
         let results = collect(vec![row(&cols, 0), row(&cols, 0)]).await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].len(), 2);
+    }
+
+    fn wire_metadata() -> Arc<TokenColMetaData<'static>> {
+        Arc::new(TokenColMetaData {
+            columns: vec![MetaDataColumn {
+                base: BaseMetaDataColumn {
+                    flags: BitFlags::empty(),
+                    ty: TypeInfo::FixedLen(FixedLenType::Int4),
+                },
+                col_name: Cow::Borrowed("answer"),
+            }],
+        })
+    }
+
+    fn query_stream(tokens: Vec<crate::Result<ReceivedToken>>) -> QueryStream<'static> {
+        QueryStream::new(Box::pin(stream::iter(tokens)))
+    }
+
+    #[tokio::test]
+    async fn query_stream_covers_metadata_rows_and_convenience_collectors() {
+        let metadata = wire_metadata();
+        let mut data = TokenRow::new();
+        data.push(crate::ColumnData::I32(Some(42)));
+        let tokens = vec![
+            Ok(ReceivedToken::NewResultset(metadata)),
+            Ok(ReceivedToken::Row(data)),
+        ];
+
+        let mut query = query_stream(tokens);
+        assert!(format!("{query:?}").contains("QueryStream"));
+        assert_eq!("answer", query.columns().await.unwrap().unwrap()[0].name());
+
+        let metadata = query.try_next().await.unwrap().unwrap();
+        assert!(metadata.as_metadata().is_some());
+        assert!(metadata.as_row().is_none());
+        assert_eq!(0, metadata.as_metadata().unwrap().result_index());
+        assert_eq!(
+            "answer",
+            metadata.as_metadata().unwrap().columns()[0].name()
+        );
+
+        let row = query.try_next().await.unwrap().unwrap();
+        assert!(row.as_metadata().is_none());
+        assert_eq!(Some(42), row.as_row().unwrap().get::<i32, _>(0));
+        assert!(row.into_row().is_some());
+        assert!(query.try_next().await.unwrap().is_none());
+
+        let metadata_item = QueryItem::metadata(columns(), 3);
+        assert_eq!(3, metadata_item.into_metadata().unwrap().result_index());
+
+        let empty = query_stream(Vec::new());
+        assert!(empty.into_results().await.unwrap().is_empty());
+        let empty = query_stream(Vec::new());
+        assert!(empty.into_first_result().await.unwrap().is_empty());
+        let empty = query_stream(Vec::new());
+        assert!(empty.into_row().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn query_stream_reports_bad_order_and_forwards_stream_errors() {
+        let mut data = TokenRow::new();
+        data.push(crate::ColumnData::I32(Some(1)));
+        let mut query = query_stream(vec![Ok(ReceivedToken::Row(data))]);
+        assert!(matches!(
+            query.try_next().await.unwrap_err(),
+            Error::Protocol(_)
+        ));
+
+        let mut query = query_stream(vec![Err(Error::Protocol("sentinel".into()))]);
+        assert!(matches!(
+            query.columns().await.unwrap_err(),
+            Error::Protocol(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn row_stream_filters_metadata_and_keeps_rows() {
+        let metadata = wire_metadata();
+        let mut data = TokenRow::new();
+        data.push(crate::ColumnData::I32(Some(7)));
+        let query = query_stream(vec![
+            Ok(ReceivedToken::NewResultset(metadata)),
+            Ok(ReceivedToken::Row(data)),
+        ]);
+        let rows = query
+            .into_row_stream()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(1, rows.len());
+        assert_eq!(Some(7), rows[0].get::<i32, _>(0));
     }
 }

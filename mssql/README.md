@@ -179,6 +179,11 @@ Beyond host/port/credentials, `Config` also covers:
   (`ALTER AVAILABILITY GROUP ... MODIFY REPLICA ... READ_ONLY_ROUTING_URL`)
   rather than the client.
 
+For repository methods that need to return a `'static` row stream rather than
+one borrowing `&mut Client`, use `Client::into_query` / `into_simple_query`.
+`OwnedQueryStream::query` also accepts pool checkout types that dereference to
+`Client`; dropping the stream returns that checkout to its pool.
+
 ## Encryption (TLS/SSL)
 
 `mssql` can be set to use three different implementations of TLS connection encryption. By default it uses `native-tls`, linking to the TLS library provided by the operating system. This is a good practice and in case of security vulnerabilities, upgrading the system libraries fixes the vulnerability in `mssql` without a recompilation. On Linux we link against OpenSSL, on Windows against schannel and on macOS against Security Framework.

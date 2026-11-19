@@ -218,4 +218,63 @@ mod tests {
         assert_eq!(ColumnData::I32(Some(42)), param.value.to_sql());
         assert_eq!("Param { value: I32(Some(42)) }", format!("{:?}", param));
     }
+
+    #[test]
+    fn borrowed_into_sql_implementations_preserve_values_and_nulls() {
+        let string = "hello".to_owned();
+        let bytes = vec![1, 2, 3];
+        let xml = XmlData::new("<x/>");
+        let uuid = Uuid::from_bytes([7; 16]);
+
+        assert_eq!(
+            (&*string).into_sql(),
+            ColumnData::String(Some("hello".into()))
+        );
+        assert_eq!(
+            Some(&*string).into_sql(),
+            ColumnData::String(Some("hello".into()))
+        );
+        assert_eq!(Option::<&str>::None.into_sql(), ColumnData::String(None));
+        assert_eq!(
+            (&string).into_sql(),
+            ColumnData::String(Some("hello".into()))
+        );
+        assert_eq!(Option::<&String>::None.into_sql(), ColumnData::String(None));
+        assert_eq!(
+            (&bytes[..]).into_sql(),
+            ColumnData::Binary(Some((&bytes[..]).into()))
+        );
+        assert_eq!(Option::<&[u8]>::None.into_sql(), ColumnData::Binary(None));
+        assert_eq!(
+            (&bytes).into_sql(),
+            ColumnData::Binary(Some((&bytes[..]).into()))
+        );
+        assert_eq!(
+            Option::<&Vec<u8>>::None.into_sql(),
+            ColumnData::Binary(None)
+        );
+        assert_eq!(
+            Cow::Borrowed("hello").into_sql(),
+            ColumnData::String(Some("hello".into()))
+        );
+        assert_eq!(
+            Option::<Cow<'_, str>>::None.into_sql(),
+            ColumnData::String(None)
+        );
+        assert_eq!(
+            Cow::Borrowed(&bytes[..]).into_sql(),
+            ColumnData::Binary(Some((&bytes[..]).into()))
+        );
+        assert_eq!(
+            Option::<Cow<'_, [u8]>>::None.into_sql(),
+            ColumnData::Binary(None)
+        );
+        assert_eq!(
+            (&xml).into_sql(),
+            ColumnData::Xml(Some(Cow::Borrowed(&xml)))
+        );
+        assert_eq!(Option::<&XmlData>::None.into_sql(), ColumnData::Xml(None));
+        assert_eq!((&uuid).into_sql(), ColumnData::Guid(Some(uuid)));
+        assert_eq!(Option::<&Uuid>::None.into_sql(), ColumnData::Guid(None));
+    }
 }

@@ -464,6 +464,188 @@ impl BaseMetaDataColumn {
 mod tests {
     use super::*;
 
+    fn rendered(ty: TypeInfo) -> String {
+        bulk_column("c", ty).to_string()
+    }
+
+    #[test]
+    fn every_bulk_declarable_type_has_the_expected_sql_spelling() {
+        use crate::tds::codec::VarLenContext;
+
+        for (wire, sql) in [
+            (FixedLenType::Int1, "tinyint"),
+            (FixedLenType::Bit, "bit"),
+            (FixedLenType::Int2, "smallint"),
+            (FixedLenType::Int4, "int"),
+            (FixedLenType::Datetime4, "smalldatetime"),
+            (FixedLenType::Float4, "real"),
+            (FixedLenType::Money, "money"),
+            (FixedLenType::Datetime, "datetime"),
+            (FixedLenType::Float8, "float"),
+            (FixedLenType::Money4, "smallmoney"),
+            (FixedLenType::Int8, "bigint"),
+        ] {
+            assert_eq!(rendered(TypeInfo::FixedLen(wire)), format!("[c] {sql}"));
+        }
+
+        for (wire, len, sql) in [
+            (VarLenType::Bitn, 1, "bit"),
+            (VarLenType::Guid, 16, "uniqueidentifier"),
+            (VarLenType::Datetimen, 8, "datetime"),
+            (VarLenType::BigVarBin, 12, "varbinary(12)"),
+            (VarLenType::BigVarBin, 8001, "varbinary(max)"),
+            (VarLenType::BigVarChar, 12, "varchar(12)"),
+            (VarLenType::BigVarChar, 8001, "varchar(max)"),
+            (VarLenType::BigBinary, 12, "binary(12)"),
+            (VarLenType::BigChar, 12, "char(12)"),
+            (VarLenType::NVarchar, 12, "nvarchar(12)"),
+            (VarLenType::NVarchar, 4001, "nvarchar(max)"),
+            (VarLenType::NChar, 12, "nchar(12)"),
+            (VarLenType::Text, 0, "text"),
+            (VarLenType::Image, 0, "image"),
+            (VarLenType::NText, 0, "ntext"),
+            (VarLenType::SSVariant, 0, "sql_variant"),
+            (VarLenType::Intn, 1, "tinyint"),
+            (VarLenType::Intn, 2, "smallint"),
+            (VarLenType::Intn, 4, "int"),
+            (VarLenType::Intn, 8, "bigint"),
+            (VarLenType::Floatn, 4, "real"),
+            (VarLenType::Floatn, 8, "float"),
+            (VarLenType::Money, 4, "smallmoney"),
+            (VarLenType::Money, 8, "money"),
+        ] {
+            let ty = TypeInfo::VarLenSized(VarLenContext::new(wire, len, None));
+            assert_eq!(rendered(ty), format!("[c] {sql}"), "{wire:?}");
+        }
+
+        #[cfg(feature = "tds73")]
+        for (wire, len, sql) in [
+            (VarLenType::Daten, 3, "date"),
+            (VarLenType::Timen, 5, "time"),
+            (VarLenType::Datetime2, 7, "datetime2(7)"),
+            (VarLenType::DatetimeOffsetn, 10, "datetimeoffset"),
+        ] {
+            let ty = TypeInfo::VarLenSized(VarLenContext::new(wire, len, None));
+            assert_eq!(rendered(ty), format!("[c] {sql}"), "{wire:?}");
+        }
+
+        assert_eq!(
+            rendered(TypeInfo::VarLenSizedPrecision {
+                ty: VarLenType::Decimaln,
+                size: 9,
+                precision: 18,
+                scale: 4,
+            }),
+            "[c] decimal(18,4)"
+        );
+        assert_eq!(
+            rendered(TypeInfo::VarLenSizedPrecision {
+                ty: VarLenType::Numericn,
+                size: 9,
+                precision: 18,
+                scale: 4,
+            }),
+            "[c] numeric(18,4)"
+        );
+        assert_eq!(
+            rendered(TypeInfo::Xml {
+                schema: None,
+                size: 0,
+            }),
+            "[c] xml"
+        );
+        assert_eq!(
+            bulk_column("a]b", TypeInfo::FixedLen(FixedLenType::Int4)).to_string(),
+            "[a]]b] int"
+        );
+    }
+
+    #[test]
+    fn null_value_covers_every_wire_type() {
+        use crate::tds::codec::VarLenContext;
+
+        let fixed = [
+            FixedLenType::Null,
+            FixedLenType::Int1,
+            FixedLenType::Bit,
+            FixedLenType::Int2,
+            FixedLenType::Int4,
+            FixedLenType::Datetime4,
+            FixedLenType::Float4,
+            FixedLenType::Money,
+            FixedLenType::Datetime,
+            FixedLenType::Float8,
+            FixedLenType::Money4,
+            FixedLenType::Int8,
+        ];
+        for wire in fixed {
+            let value = BaseMetaDataColumn {
+                flags: BitFlags::empty(),
+                ty: TypeInfo::FixedLen(wire),
+            }
+            .null_value();
+            assert!(value.is_null(), "{wire:?}");
+        }
+
+        for wire in [
+            VarLenType::Guid,
+            VarLenType::Intn,
+            VarLenType::Bitn,
+            VarLenType::Decimaln,
+            VarLenType::Numericn,
+            VarLenType::Floatn,
+            VarLenType::Money,
+            VarLenType::Datetimen,
+            #[cfg(feature = "tds73")]
+            VarLenType::Daten,
+            #[cfg(feature = "tds73")]
+            VarLenType::Timen,
+            #[cfg(feature = "tds73")]
+            VarLenType::Datetime2,
+            #[cfg(feature = "tds73")]
+            VarLenType::DatetimeOffsetn,
+            VarLenType::BigVarBin,
+            VarLenType::BigVarChar,
+            VarLenType::BigBinary,
+            VarLenType::BigChar,
+            VarLenType::NVarchar,
+            VarLenType::NChar,
+            VarLenType::Xml,
+            VarLenType::Udt,
+            VarLenType::Text,
+            VarLenType::Image,
+            VarLenType::NText,
+            VarLenType::SSVariant,
+        ] {
+            for ty in [
+                TypeInfo::VarLenSized(VarLenContext::new(wire, 4, None)),
+                TypeInfo::VarLenSizedPrecision {
+                    ty: wire,
+                    size: 4,
+                    precision: 4,
+                    scale: 0,
+                },
+            ] {
+                let value = BaseMetaDataColumn {
+                    flags: BitFlags::empty(),
+                    ty,
+                }
+                .null_value();
+                assert!(value.is_null(), "{wire:?}");
+            }
+        }
+
+        let xml = BaseMetaDataColumn {
+            flags: BitFlags::empty(),
+            ty: TypeInfo::Xml {
+                schema: None,
+                size: 0,
+            },
+        }
+        .null_value();
+        assert!(xml.is_null());
+    }
+
     fn us_varchar(s: &str) -> Vec<u8> {
         let units: Vec<u16> = s.encode_utf16().collect();
         let mut out = (units.len() as u16).to_le_bytes().to_vec();

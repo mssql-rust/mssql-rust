@@ -245,7 +245,7 @@ from_sql!(
 #[cfg(all(test, feature = "tds73"))]
 mod tests {
     use super::*;
-    use crate::{FromSql, IntoSql};
+    use crate::{FromSql, FromSqlOwned, IntoSql};
     use jiff::tz::{Offset, TimeZone};
 
     #[test]
@@ -257,6 +257,17 @@ mod tests {
         assert_eq!(Some(d), civil::Date::from_sql(&d.into_sql()).unwrap());
         let t = civil::time(23, 59, 59, 0);
         assert_eq!(Some(t), civil::Time::from_sql(&t.into_sql()).unwrap());
+
+        let legacy = ColumnData::DateTime(Some(crate::tds::time::DateTime::new(1, 300)));
+        assert_eq!(
+            Some(civil::date(1900, 1, 2).at(0, 0, 1, 0)),
+            civil::DateTime::from_sql(&legacy).unwrap()
+        );
+        let small = ColumnData::SmallDateTime(Some(crate::tds::time::SmallDateTime::new(1, 2)));
+        assert_eq!(
+            Some(civil::date(1900, 1, 2).at(0, 2, 0, 0)),
+            civil::DateTime::from_sql(&small).unwrap()
+        );
     }
 
     // Hostile/out-of-range wire values must be conversion errors, not panics.
@@ -305,5 +316,42 @@ mod tests {
         assert_eq!(z.timestamp(), back.timestamp());
         assert_eq!(z.offset(), back.offset());
         assert_eq!(Some(ts), Timestamp::from_sql(&cd).unwrap());
+    }
+
+    #[test]
+    fn owned_conversions_and_wrong_types_are_fallible() {
+        let ts: Timestamp = "2020-04-20T16:20:00Z".parse().unwrap();
+        assert_eq!(Timestamp::from_sql_owned(ts.into_sql()).unwrap(), Some(ts));
+
+        let z = ts.to_zoned(TimeZone::fixed(Offset::from_seconds(3600).unwrap()));
+        assert_eq!(
+            Zoned::from_sql_owned(z.clone().into_sql())
+                .unwrap()
+                .unwrap()
+                .timestamp(),
+            z.timestamp()
+        );
+
+        let wrong = ColumnData::I32(Some(1));
+        assert!(Timestamp::from_sql(&wrong).is_err());
+        assert!(Timestamp::from_sql_owned(wrong.clone()).is_err());
+        assert!(Zoned::from_sql(&wrong).is_err());
+        assert!(Zoned::from_sql_owned(wrong.clone()).is_err());
+        assert!(civil::DateTime::from_sql(&wrong).is_err());
+        assert!(civil::Time::from_sql(&wrong).is_err());
+        assert!(civil::Date::from_sql(&wrong).is_err());
+    }
+
+    #[test]
+    fn conversion_helpers_reject_both_date_and_time_boundaries() {
+        assert!(from_days(4_000_000, 1).is_err());
+        assert!(from_nanos(-1).is_err());
+        assert!(from_nanos(86_400 * 1_000_000_000).is_err());
+
+        let invalid_offset = ColumnData::DateTimeOffset(Some(DateTimeOffset::new(
+            civil_to_dt2(civil::date(2020, 1, 1).at(0, 0, 0, 0)),
+            i16::MAX,
+        )));
+        assert!(Zoned::from_sql(&invalid_offset).is_err());
     }
 }

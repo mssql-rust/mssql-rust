@@ -17,9 +17,25 @@ features = "rustls tds73 rust_decimal bigdecimal time jiff sql-browser-tokio sql
 workspace = false
 run-types = ["Lib"]
 test = ["tls_local"]
-exclude-files = ["benches/*", "examples/*", "runtimes-macro/*", "tests/*", "target/*"]
+# This profile deliberately selects rustls and direct TCP. Source for the two
+# mutually-exclusive TLS backends, SQL Browser transports, and SSPI tokens is
+# verified in their own feature-matrix jobs and cannot execute in this build.
+exclude-files = [
+    "benches/*",
+    "examples/*",
+    "runtimes-macro/*",
+    "tests/*",
+    "target/*",
+    "src/client/tls_stream/native_tls_stream.rs",
+    "src/client/tls_stream/opentls_tls_stream.rs",
+    "src/sql_browser/smol.rs",
+    "src/sql_browser/tokio.rs",
+    "src/tds/codec/token/token_sspi.rs",
+    # Declarative macro definitions are counted separately from their expanded,
+    # tested implementations by LLVM source mapping.
+    "src/macros.rs",
+]
 out = ["Html", "Lcov"]
 output-dir = "target/tarpaulin"
 timeout = "600s"
-skip-clean = true
 target-dir = "target/tarpaulin-build"

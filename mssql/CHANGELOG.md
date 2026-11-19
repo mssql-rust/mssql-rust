@@ -14,6 +14,23 @@ forward.
 
 ## Unreleased
 
+### Added
+
+- `Row::get_column_data` exposes a cell's raw `ColumnData` for callers that do
+  not know its type in advance (upstream #304).
+- `Row::get_case_insensitive` and `Row::try_get_case_insensitive` provide an
+  opt-in lookup for inconsistently-cased legacy schemas (upstream #219).
+- `Client::reset` restores a pooled connection to its login-time state through
+  the TDS `RESETCONNECTION` packet status (upstream #299).
+- `OwnedQueryStream` and `Client::into_query` / `into_simple_query` provide a
+  `'static` stream of rows which owns its client or pool checkout, so repository
+  methods can return streaming results (upstream #365).
+
+### Security
+
+- Hold the transitive `rustls-webpki` dependency at 0.103.13 or newer, the
+  floor containing the RUSTSEC-2026-0104 fix.
+
 ## Version 2.0.0
 
 A major release: see the BREAKING entries under "Changed" (async-std

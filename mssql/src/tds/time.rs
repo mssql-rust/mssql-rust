@@ -439,3 +439,43 @@ impl Encode<BytesMut> for DateTimeOffset {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+    use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+    use bytes::BytesMut;
+
+    #[test]
+    fn legacy_and_offset_accessors_return_constructor_values() {
+        let datetime = DateTime::new(-1, 300);
+        assert_eq!(datetime.days(), -1);
+        assert_eq!(datetime.seconds_fragments(), 300);
+
+        let small = SmallDateTime::new(2, 60);
+        assert_eq!(small.days(), 2);
+        assert_eq!(small.seconds_fragments(), 60);
+
+        let dto = DateTimeOffset::new(DateTime2::new(Date::new(3), Time::new(4, 0)), -60);
+        assert_eq!(dto.offset(), -60);
+        assert_eq!(dto.datetime2().date().days(), 3);
+    }
+
+    #[tokio::test]
+    async fn time_decode_covers_three_byte_shape_and_invalid_lengths() {
+        let mut reader = BytesMut::from(&[0x34, 0x12, 0x56][..]).into_sql_read_bytes();
+        let time = Time::decode(&mut reader, 2, 3).await.unwrap();
+        assert_eq!(time.increments(), 0x56_1234);
+        assert_eq!(time.scale(), 2);
+
+        let mut reader = BytesMut::new().into_sql_read_bytes();
+        assert!(matches!(
+            Time::decode(&mut reader, 2, 4).await,
+            Err(crate::Error::Protocol(_))
+        ));
+        assert!(matches!(
+            Time::new(0, 8).len(),
+            Err(crate::Error::Protocol(_))
+        ));
+    }
+}

@@ -596,6 +596,41 @@ mod tests {
         assert_eq!(n.value(), -value);
     }
 
+    #[tokio::test]
+    async fn decode_covers_null_sign_length_and_u96_shapes() {
+        assert_eq!(decode_bytes(vec![0], 0).await.unwrap(), None);
+        assert!(matches!(
+            decode_bytes(vec![5, 2, 0, 0, 0, 0], 0).await,
+            Err(Error::Protocol(_))
+        ));
+        assert!(matches!(
+            decode_bytes(vec![6, 1, 0, 0, 0, 0, 0], 0).await,
+            Err(Error::Protocol(_))
+        ));
+
+        let mut u96 = vec![13, 1];
+        u96.extend_from_slice(&[0; 8]);
+        u96.extend_from_slice(&1u32.to_le_bytes());
+        assert_eq!(
+            decode_bytes(u96, 0).await.unwrap().unwrap().value(),
+            1i128 << 64
+        );
+    }
+
+    #[test]
+    fn integer_conversions_and_decimal_type_errors_are_explicit() {
+        let value = Numeric::new_with_scale(1234, 2);
+        assert_eq!(i128::from(value), 12);
+        assert_eq!(u128::from(value), 12);
+
+        #[cfg(all(feature = "rust_decimal", feature = "tds73"))]
+        {
+            use crate::{ColumnData, FromSql, FromSqlOwned};
+            assert!(Decimal::from_sql(&ColumnData::I32(Some(1))).is_err());
+            assert!(Decimal::from_sql_owned(ColumnData::I32(Some(1))).is_err());
+        }
+    }
+
     #[cfg(all(feature = "rust_decimal", feature = "tds73"))]
     #[test]
     fn rust_decimal_from_wide_scale_does_not_panic() {

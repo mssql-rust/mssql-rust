@@ -308,7 +308,28 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
     ///
     /// The `send` will split the packet into multiple packets if bigger than
     /// the negotiated packet size, and handle flushing to the wire in an optimal way.
-    pub async fn send<E>(&mut self, mut header: PacketHeader, item: E) -> crate::Result<()>
+    pub async fn send<E>(&mut self, header: PacketHeader, item: E) -> crate::Result<()>
+    where
+        E: Sized + Encode<BytesMut>,
+    {
+        self.send_inner(header, item, false).await
+    }
+
+    /// Send a request whose first packet carries the TDS RESETCONNECTION bit.
+    /// SQL Server resets pooled-session state before executing the request.
+    pub(crate) async fn send_reset<E>(&mut self, header: PacketHeader, item: E) -> crate::Result<()>
+    where
+        E: Sized + Encode<BytesMut>,
+    {
+        self.send_inner(header, item, true).await
+    }
+
+    async fn send_inner<E>(
+        &mut self,
+        mut header: PacketHeader,
+        item: E,
+        reset_connection: bool,
+    ) -> crate::Result<()>
     where
         E: Sized + Encode<BytesMut>,
     {
@@ -323,11 +344,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         // above leaves the connection clean.
         self.poisoned = true;
 
+        let mut first_packet = true;
         while !payload.is_empty() {
             let writable = cmp::min(payload.len(), packet_size);
             let split_payload = payload.split_to(writable);
 
-            if payload.is_empty() {
+            if reset_connection && first_packet && payload.is_empty() {
+                header.set_status(PacketStatus::ResetConnectionEndOfMessage);
+            } else if reset_connection && first_packet {
+                header.set_status(PacketStatus::ResetConnection);
+            } else if payload.is_empty() {
                 header.set_status(PacketStatus::EndOfMessage);
             } else {
                 header.set_status(PacketStatus::NormalMessage);
@@ -340,6 +366,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
             );
 
             self.write_to_wire(header, split_payload).await?;
+            first_packet = false;
         }
 
         self.flush_sink().await?;
@@ -1029,8 +1056,52 @@ where
 
 #[cfg(test)]
 mod timeout_tests {
-    use super::with_optional_timeout;
+    use super::*;
+    use crate::tds::codec::BatchRequest;
+    use crate::tds::stream::ReceivedToken;
+    use crate::{PacketType, TokenType};
+    use futures_util::{io::AsyncReadExt, StreamExt, TryStreamExt};
     use std::time::Duration;
+
+    fn memory_connection() -> Connection<futures_util::io::Cursor<Vec<u8>>> {
+        Connection {
+            transport: Framed::new(
+                MaybeTlsStream::Raw(futures_util::io::Cursor::new(Vec::new())),
+                PacketCodec,
+            ),
+            flushed: false,
+            context: Context::new(),
+            buf: BytesMut::new(),
+            poisoned: false,
+            command_desync: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn incoming_connection(payload: &[u8]) -> Connection<futures_util::io::Cursor<Vec<u8>>> {
+        let length = (HEADER_BYTES + payload.len()) as u16;
+        let mut wire = vec![
+            PacketType::TabularResult as u8,
+            PacketStatus::EndOfMessage as u8,
+            (length >> 8) as u8,
+            length as u8,
+            0,
+            0,
+            1,
+            0,
+        ];
+        wire.extend_from_slice(payload);
+        Connection {
+            transport: Framed::new(
+                MaybeTlsStream::Raw(futures_util::io::Cursor::new(wire)),
+                PacketCodec,
+            ),
+            flushed: false,
+            context: Context::new(),
+            buf: BytesMut::new(),
+            poisoned: false,
+            command_desync: Arc::new(AtomicBool::new(false)),
+        }
+    }
 
     #[tokio::test]
     async fn a_stalled_future_times_out() {
@@ -1061,5 +1132,232 @@ mod timeout_tests {
         })
         .await;
         assert!(matches!(err, Err(crate::Error::Protocol(_))));
+    }
+
+    #[test]
+    fn poison_desync_context_and_debug_helpers_are_observable() {
+        let mut connection = memory_connection();
+        let shown = format!("{connection:?}");
+        assert!(shown.contains("Connection"));
+
+        connection.poison();
+        assert!(matches!(
+            connection.ensure_not_poisoned(),
+            Err(crate::Error::Protocol(_))
+        ));
+        connection.unpoison();
+        assert!(connection.ensure_not_poisoned().is_ok());
+
+        let flag = connection.command_desync_flag();
+        flag.store(true, Ordering::Release);
+        assert!(matches!(
+            connection.ensure_not_poisoned(),
+            Err(crate::Error::Protocol(_))
+        ));
+        flag.store(false, Ordering::Release);
+
+        connection.context_mut().set_packet_size(512);
+        assert_eq!(connection.context().packet_size(), 512);
+    }
+
+    #[test]
+    fn attention_ack_detection_checks_length_family_and_status() {
+        let mut modern = vec![0xaa, TokenType::Done as u8];
+        modern.extend_from_slice(&DONE_STATUS_ATTENTION.to_le_bytes());
+        modern.extend_from_slice(&0u16.to_le_bytes());
+        modern.extend_from_slice(&0u64.to_le_bytes());
+        assert!(ends_in_attention_ack(&modern, FeatureLevel::SqlServerN));
+
+        modern[2] = 0;
+        assert!(!ends_in_attention_ack(&modern, FeatureLevel::SqlServerN));
+        modern[1] = TokenType::Row as u8;
+        modern[2] = DONE_STATUS_ATTENTION as u8;
+        assert!(!ends_in_attention_ack(&modern, FeatureLevel::SqlServerN));
+        assert!(!ends_in_attention_ack(
+            &[TokenType::Done as u8],
+            FeatureLevel::SqlServerN
+        ));
+
+        let mut legacy = vec![TokenType::DoneProc as u8];
+        legacy.extend_from_slice(&DONE_STATUS_ATTENTION.to_le_bytes());
+        legacy.extend_from_slice(&0u16.to_le_bytes());
+        legacy.extend_from_slice(&0u32.to_le_bytes());
+        assert!(ends_in_attention_ack(&legacy, FeatureLevel::SqlServer2000));
+    }
+
+    #[tokio::test]
+    async fn no_op_tls_paths_preserve_the_connection() {
+        let config = Config::new();
+        let connection = memory_connection()
+            .tls_handshake(&config, EncryptionLevel::NotSupported)
+            .await
+            .unwrap();
+        let connection = connection
+            .tls_handshake(&config, EncryptionLevel::Strict)
+            .await
+            .unwrap();
+        let connection = connection.post_login_encryption(EncryptionLevel::On);
+        assert!(!connection.poisoned);
+
+        let connection = memory_connection().post_login_encryption(EncryptionLevel::Off);
+        assert!(!connection.poisoned);
+    }
+
+    #[tokio::test]
+    async fn packet_decode_errors_become_broken_pipe_reads() {
+        let mut connection = memory_connection();
+        connection.transport = Framed::new(
+            MaybeTlsStream::Raw(futures_util::io::Cursor::new(vec![0; HEADER_BYTES])),
+            PacketCodec,
+        );
+        let mut byte = [0u8; 1];
+        let error = connection.read_exact(&mut byte).await.unwrap_err();
+        assert_eq!(io::ErrorKind::BrokenPipe, error.kind());
+    }
+
+    #[tokio::test]
+    async fn token_stream_dispatches_return_order_feature_and_skipped_browse_tokens() {
+        let payload = [
+            TokenType::ColInfo as u8,
+            2,
+            0,
+            0xaa,
+            0xbb,
+            TokenType::ReturnStatus as u8,
+            42,
+            0,
+            0,
+            0,
+            TokenType::Order as u8,
+            4,
+            0,
+            1,
+            0,
+            3,
+            0,
+            TokenType::FeatureExtAck as u8,
+            crate::FEA_EXT_TERMINATOR,
+        ];
+        let mut connection = incoming_connection(&payload);
+        let mut tokens = TokenStream::new(&mut connection).try_unfold();
+
+        assert!(matches!(
+            tokens.try_next().await.unwrap(),
+            Some(ReceivedToken::ReturnStatus(42))
+        ));
+        let Some(ReceivedToken::Order(order)) = tokens.try_next().await.unwrap() else {
+            panic!("expected ORDER");
+        };
+        assert_eq!(vec![1, 3], order.column_indexes);
+        let Some(ReceivedToken::FeatureExtAck(ack)) = tokens.try_next().await.unwrap() else {
+            panic!("expected FEATUREEXTACK");
+        };
+        assert!(ack.features.is_empty());
+        assert!(tokens.try_next().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn final_done_proc_does_not_report_an_affected_row_count() {
+        let mut payload = vec![TokenType::DoneProc as u8];
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.extend_from_slice(&99u64.to_le_bytes());
+        let mut connection = incoming_connection(&payload);
+        let result = crate::ExecuteResult::new(&mut connection).await.unwrap();
+        assert!(result.rows_affected().is_empty());
+    }
+
+    #[tokio::test]
+    async fn flush_done_handles_success_and_missing_done() {
+        let mut done = vec![TokenType::Done as u8];
+        done.extend_from_slice(&0u16.to_le_bytes());
+        done.extend_from_slice(&0u16.to_le_bytes());
+        done.extend_from_slice(&5u64.to_le_bytes());
+        let mut connection = incoming_connection(&done);
+        assert_eq!(
+            5,
+            TokenStream::new(&mut connection)
+                .flush_done()
+                .await
+                .unwrap()
+                .rows()
+        );
+
+        let status_only = [TokenType::ReturnStatus as u8, 0, 0, 0, 0];
+        let mut connection = incoming_connection(&status_only);
+        assert!(matches!(
+            TokenStream::new(&mut connection).flush_done().await,
+            Err(crate::Error::Protocol(_))
+        ));
+
+        let host: Vec<_> = "redirect".encode_utf16().collect();
+        let mut routing_body = vec![crate::tds::codec::EnvChangeTy::Routing as u8];
+        routing_body.extend_from_slice(&(5 + host.len() as u16 * 2).to_le_bytes());
+        routing_body.push(0);
+        routing_body.extend_from_slice(&1444u16.to_le_bytes());
+        routing_body.extend_from_slice(&(host.len() as u16).to_le_bytes());
+        for unit in host {
+            routing_body.extend_from_slice(&unit.to_le_bytes());
+        }
+        let mut routed = vec![TokenType::EnvChange as u8];
+        routed.extend_from_slice(&(routing_body.len() as u16).to_le_bytes());
+        routed.extend_from_slice(&routing_body);
+        routed.extend_from_slice(&done);
+        let mut connection = incoming_connection(&routed);
+        assert!(matches!(
+            TokenStream::new(&mut connection).flush_done().await,
+            Err(crate::Error::Routing { host, port }) if host == "redirect" && port == 1444
+        ));
+
+        fn utf16(dst: &mut Vec<u8>, value: &str) {
+            for unit in value.encode_utf16() {
+                dst.extend_from_slice(&unit.to_le_bytes());
+            }
+        }
+        let mut error_body = Vec::new();
+        error_body.extend_from_slice(&1205u32.to_le_bytes());
+        error_body.extend_from_slice(&[1, 13]);
+        error_body.extend_from_slice(&4u16.to_le_bytes());
+        utf16(&mut error_body, "boom");
+        error_body.push(2);
+        utf16(&mut error_body, "db");
+        error_body.push(0);
+        error_body.extend_from_slice(&1u32.to_le_bytes());
+        let mut errored = vec![TokenType::Error as u8];
+        errored.extend_from_slice(&(error_body.len() as u16).to_le_bytes());
+        errored.extend_from_slice(&error_body);
+        errored.extend_from_slice(&done);
+        let mut connection = incoming_connection(&errored);
+        assert!(matches!(
+            TokenStream::new(&mut connection).flush_done().await,
+            Err(crate::Error::Server(error)) if error.code() == 1205
+        ));
+    }
+
+    #[tokio::test]
+    async fn memory_transport_covers_packet_splitting_reset_and_eof() {
+        let mut connection = memory_connection();
+        connection.context.set_packet_size(20);
+        let request = BatchRequest::new("SELECT 1234567890", [0; 8]);
+        connection
+            .send(PacketHeader::batch(0), request)
+            .await
+            .unwrap();
+        assert!(!connection.poisoned);
+
+        let request = BatchRequest::new("SELECT 1234567890", [0; 8]);
+        connection
+            .send_reset(PacketHeader::batch(1), request)
+            .await
+            .unwrap();
+        assert!(!connection.poisoned);
+
+        let mut eof = memory_connection();
+        assert!(eof.next().await.is_none());
+        let mut byte = [0u8; 1];
+        let error = eof.read_exact(&mut byte).await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+
+        memory_connection().close().await.unwrap();
     }
 }

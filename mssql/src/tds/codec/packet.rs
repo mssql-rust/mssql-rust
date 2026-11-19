@@ -55,3 +55,36 @@ impl<'a> Extend<&'a u8> for Packet {
         self.payload.extend(iter)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packet_roundtrips_and_rewrites_wire_length() {
+        let header = PacketHeader::login(4);
+        let packet = Packet::new(header, BytesMut::from(&b"abc"[..]));
+        assert!(packet.is_last());
+
+        let mut wire = BytesMut::new();
+        packet.encode(&mut wire).unwrap();
+        assert_eq!(&[0, 11], &wire[2..4]);
+
+        let decoded = Packet::decode(&mut wire).unwrap();
+        let (header, payload) = decoded.into_parts();
+        assert_eq!(PacketStatus::EndOfMessage, header.status());
+        assert_eq!(11, header.length());
+        assert_eq!(&b"abc"[..], &payload[..]);
+    }
+
+    #[test]
+    fn packet_extends_from_owned_and_borrowed_bytes() {
+        let mut packet = Packet::new(PacketHeader::batch(1), BytesMut::new());
+        assert!(!packet.is_last());
+
+        packet.extend([1_u8, 2]);
+        packet.extend([3_u8, 4].iter());
+
+        assert_eq!(&[1, 2, 3, 4], &packet.payload[..]);
+    }
+}

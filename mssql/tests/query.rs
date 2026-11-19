@@ -3039,6 +3039,124 @@ where
 }
 
 #[test_on_runtimes]
+async fn owned_row_stream_should_work<S>(conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let mut stream = conn
+        .into_query("SELECT @P1 AS first; SELECT @P2 AS second", &[&1i32, &2i32])
+        .await?;
+
+    let row = stream.try_next().await?.unwrap();
+    assert_eq!(Some(1), row.get("first"));
+    assert_eq!(0, row.result_index());
+
+    let row = stream.try_next().await?.unwrap();
+    assert_eq!(Some(2), row.get("second"));
+    assert_eq!(1, row.result_index());
+    assert!(stream.try_next().await?.is_none());
+
+    Ok(())
+}
+
+#[test_on_runtimes]
+async fn owned_simple_row_stream_should_work<S>(conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let mut stream = conn.into_simple_query("SELECT 9 AS value").await?;
+    assert_eq!(Some(9), stream.try_next().await?.unwrap().get("value"));
+    assert!(stream.try_next().await?.is_none());
+    Ok(())
+}
+
+#[test_on_runtimes]
+async fn client_close_finishes_cleanly<S>(conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    conn.close().await?;
+    Ok(())
+}
+
+#[test_on_runtimes]
+async fn public_column_metadata_describes_selected_columns<S>(
+    mut conn: mssql::Client<S>,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    conn.simple_query("CREATE TABLE #metadata_api (id INT NOT NULL, name NVARCHAR(20) NULL)")
+        .await?
+        .into_results()
+        .await?;
+    let columns = conn.column_metadata("#metadata_api", &["name"]).await?;
+    assert_eq!(1, columns.len());
+    assert_eq!("name", columns[0].col_name);
+    Ok(())
+}
+
+struct PoolCheckout<S>(mssql::Client<S>)
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send;
+
+impl<S> std::ops::Deref for PoolCheckout<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    type Target = mssql::Client<S>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<S> std::ops::DerefMut for PoolCheckout<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[test_on_runtimes]
+async fn owned_row_stream_accepts_a_pool_checkout<S>(conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let mut stream = mssql::OwnedQueryStream::simple_query(
+        PoolCheckout(conn),
+        "SELECT 1 AS value UNION ALL SELECT 2",
+    )
+    .await?;
+
+    assert_eq!(Some(1), stream.try_next().await?.unwrap().get("value"));
+    assert_eq!(Some(2), stream.try_next().await?.unwrap().get("value"));
+    assert!(stream.try_next().await?.is_none());
+
+    Ok(())
+}
+
+#[test_on_runtimes]
+async fn owned_parameterized_stream_accepts_a_pool_checkout<S>(conn: mssql::Client<S>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let mut stream =
+        mssql::OwnedQueryStream::query(PoolCheckout(conn), "SELECT @P1 AS value", &[&17i32])
+            .await?;
+
+    let shown = format!("{stream:?}");
+    assert!(shown.contains("OwnedQueryStream"));
+    assert!(shown.contains("has_owner"));
+    assert_eq!(Some(17), stream.try_next().await?.unwrap().get("value"));
+    assert!(stream.try_next().await?.is_none());
+
+    Ok(())
+}
+
+#[test_on_runtimes]
 async fn dynamic_query_binding_strings<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,

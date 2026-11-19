@@ -575,6 +575,43 @@ mod codec_tests {
     use super::*;
 
     #[test]
+    fn every_lcid_mapping_is_resolvable() {
+        let mut supported = 0;
+        for lcid in u16::MIN..=u16::MAX {
+            if let Some(encoding) = lcid_to_encoding(lcid) {
+                assert!(!encoding.name().is_empty());
+                supported += 1;
+            }
+        }
+        assert_eq!(supported, 207);
+    }
+
+    #[test]
+    fn every_sort_id_mapping_is_resolvable() {
+        let mut supported = 0;
+        for sort_id in u8::MIN..=u8::MAX {
+            if let Some(encoding) = sortid_to_encoding(sort_id) {
+                assert!(!encoding.name().is_empty());
+                supported += 1;
+            }
+        }
+        assert_eq!(supported, 86);
+    }
+
+    #[test]
+    fn collation_accessors_display_and_errors() {
+        let collation = Collation::new(0x1234_0409, 52);
+        assert_eq!(collation.info(), 0x1234_0409);
+        assert_eq!(collation.lcid(), 0x0409);
+        assert_eq!(collation.sort_id(), 52);
+        assert_eq!(collation.to_string(), "windows-1252");
+
+        let unsupported = Collation::new(0, 1);
+        assert!(unsupported.encoding().is_err());
+        assert_eq!(unsupported.to_string(), "None");
+    }
+
+    #[test]
     fn cp437_and_cp850_sort_ids_have_a_codec() {
         for (sort_id, name) in [
             (30, "CP437"),
@@ -610,6 +647,11 @@ mod codec_tests {
     fn unrepresentable_characters_are_errors() {
         let err = CollationCodec::Cp437.encode("a€").unwrap_err();
         assert!(err.to_string().contains('€'), "{err}");
+
+        let windows_1252 = CollationCodec::BuiltIn(encoding_rs::WINDOWS_1252);
+        assert_eq!(windows_1252.encode("café").unwrap(), b"caf\xe9");
+        let err = windows_1252.encode("🦀").unwrap_err();
+        assert!(err.to_string().contains('🦀'), "{err}");
     }
 
     #[test]

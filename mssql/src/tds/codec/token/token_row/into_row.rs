@@ -205,3 +205,53 @@ where
         row
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::IntoRow;
+    use crate::ColumnData;
+
+    fn values(row: crate::TokenRow<'_>) -> Vec<i32> {
+        row.into_iter()
+            .map(|value| match value {
+                ColumnData::I32(Some(value)) => value,
+                other => panic!("unexpected value: {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_supported_tuple_arity_preserves_order() {
+        assert_eq!(values(1i32.into_row()), vec![1]);
+        assert_eq!(values((1i32, 2i32).into_row()), vec![1, 2]);
+        assert_eq!(values((1i32, 2i32, 3i32).into_row()), vec![1, 2, 3]);
+        assert_eq!(
+            values((1i32, 2i32, 3i32, 4i32).into_row()),
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(
+            values((1i32, 2i32, 3i32, 4i32, 5i32).into_row()),
+            vec![1, 2, 3, 4, 5]
+        );
+        assert_eq!(
+            values((1i32, 2i32, 3i32, 4i32, 5i32, 6i32).into_row()),
+            vec![1, 2, 3, 4, 5, 6]
+        );
+        assert_eq!(
+            values((1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32).into_row()),
+            vec![1, 2, 3, 4, 5, 6, 7]
+        );
+        assert_eq!(
+            values((1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32, 8i32).into_row()),
+            vec![1, 2, 3, 4, 5, 6, 7, 8]
+        );
+        assert_eq!(
+            values((1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32, 8i32, 9i32).into_row()),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
+        );
+        assert_eq!(
+            values((1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32, 8i32, 9i32, 10i32,).into_row()),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        );
+    }
+}

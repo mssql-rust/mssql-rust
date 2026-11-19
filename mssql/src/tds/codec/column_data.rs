@@ -958,6 +958,106 @@ impl<'a> IntoSql<'a> for ColumnData<'a> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn every_value_reports_its_sql_type_and_nullness() {
+        let uuid = Uuid::from_bytes([7; 16]);
+        let xml = XmlData::new("<x/>");
+        let cases: Vec<(ColumnData<'_>, &str, bool)> = vec![
+            (ColumnData::U8(Some(1)), "tinyint", false),
+            (ColumnData::I16(Some(1)), "smallint", false),
+            (ColumnData::I32(Some(1)), "int", false),
+            (ColumnData::I64(Some(1)), "bigint", false),
+            (ColumnData::F32(Some(1.0)), "float(24)", false),
+            (ColumnData::F64(Some(1.0)), "float(53)", false),
+            (ColumnData::Bit(Some(true)), "bit", false),
+            (ColumnData::String(None), "nvarchar(4000)", true),
+            (
+                ColumnData::String(Some("x".into())),
+                "nvarchar(4000)",
+                false,
+            ),
+            (
+                ColumnData::String(Some("x".repeat(4001).into())),
+                "nvarchar(max)",
+                false,
+            ),
+            (ColumnData::Guid(Some(uuid)), "uniqueidentifier", false),
+            (
+                ColumnData::Binary(Some((&[1][..]).into())),
+                "varbinary(8000)",
+                false,
+            ),
+            (ColumnData::Binary(None), "varbinary(max)", true),
+            (
+                ColumnData::Numeric(Some(Numeric::new_with_scale(123, 2))),
+                "numeric(3,2)",
+                false,
+            ),
+            (ColumnData::Numeric(None), "numeric", true),
+            (ColumnData::Xml(Some(Cow::Borrowed(&xml))), "xml", false),
+            (ColumnData::DateTime(None), "datetime", true),
+            (ColumnData::SmallDateTime(None), "smalldatetime", true),
+            #[cfg(feature = "tds73")]
+            (ColumnData::Time(None), "time", true),
+            #[cfg(feature = "tds73")]
+            (ColumnData::Date(None), "date", true),
+            #[cfg(feature = "tds73")]
+            (ColumnData::DateTime2(None), "datetime2", true),
+            #[cfg(feature = "tds73")]
+            (ColumnData::DateTimeOffset(None), "datetimeoffset", true),
+        ];
+
+        for (value, type_name, is_null) in cases {
+            assert_eq!(value.type_name(), type_name, "{value:?}");
+            assert_eq!(value.is_null(), is_null, "{value:?}");
+        }
+    }
+
+    #[test]
+    fn scalar_values_encode_their_own_type_information() {
+        let uuid = Uuid::from_bytes([7; 16]);
+        let values = vec![
+            ColumnData::Bit(Some(true)),
+            ColumnData::U8(Some(7)),
+            ColumnData::I16(Some(-7)),
+            ColumnData::I32(Some(-7)),
+            ColumnData::I64(Some(-7)),
+            ColumnData::F32(Some(1.25)),
+            ColumnData::F64(Some(1.25)),
+            ColumnData::Guid(Some(uuid)),
+            ColumnData::String(Some("hello".into())),
+            ColumnData::String(Some("x".repeat(4001).into())),
+            ColumnData::Binary(Some(vec![1, 2, 3].into())),
+            ColumnData::Binary(Some(vec![0; 8001].into())),
+            ColumnData::DateTime(Some(DateTime::new(1, 2))),
+            ColumnData::SmallDateTime(Some(SmallDateTime::new(1, 2))),
+            ColumnData::Numeric(Some(Numeric::new_with_scale(123, 2))),
+            #[cfg(feature = "tds73")]
+            ColumnData::Date(Some(Date::new(1))),
+            #[cfg(feature = "tds73")]
+            ColumnData::Time(Some(Time::new(12_345, 3))),
+            #[cfg(feature = "tds73")]
+            ColumnData::DateTime2(Some(DateTime2::new(
+                Date::new(700_000),
+                Time::new(12_345, 3),
+            ))),
+            #[cfg(feature = "tds73")]
+            ColumnData::DateTimeOffset(Some(DateTimeOffset::new(
+                DateTime2::new(Date::new(700_000), Time::new(12_345, 3)),
+                60,
+            ))),
+        ];
+
+        for value in values {
+            let mut buf = BytesMut::new();
+            value
+                .clone()
+                .encode(&mut BytesMutWithTypeInfo::new(&mut buf))
+                .unwrap_or_else(|error| panic!("{value:?}: {error}"));
+            assert!(!buf.is_empty(), "{value:?}");
+        }
+    }
+
     // A typed NULL parameter: TYPE_INFO, then a zero value length.
     #[test]
     fn typed_null_parameters_carry_their_type() {
@@ -979,6 +1079,52 @@ mod tests {
                 .unwrap();
             assert_eq!(buf.as_ref(), expected.as_slice(), "{data:?}");
         }
+    }
+
+    #[test]
+    fn bounded_bulk_values_reject_encoded_data_over_the_column_limit() {
+        let cases = [
+            (
+                ColumnData::String(Some(Cow::Borrowed("toolong"))),
+                TypeInfo::VarLenSized(VarLenContext::new(
+                    VarLenType::BigVarChar,
+                    3,
+                    Some(Collation::new(0x0409, 0)),
+                )),
+            ),
+            (
+                ColumnData::String(Some(Cow::Borrowed("toolong"))),
+                TypeInfo::VarLenSized(VarLenContext::new(VarLenType::NVarchar, 4, None)),
+            ),
+            (
+                ColumnData::Binary(Some(Cow::Borrowed(&[1, 2, 3, 4]))),
+                TypeInfo::VarLenSized(VarLenContext::new(VarLenType::BigVarBin, 3, None)),
+            ),
+        ];
+
+        for (value, ty) in cases {
+            let mut bytes = BytesMut::new();
+            let error = value
+                .encode(&mut BytesMutWithTypeInfo::new(&mut bytes).with_type_info(&ty))
+                .unwrap_err();
+            assert!(matches!(error, Error::BulkInput(_)), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn legacy_text_requires_a_collation_and_very_long_strings_use_ntext() {
+        let ty = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Text, 100, None));
+        let mut bytes = BytesMut::new();
+        let error = ColumnData::String(Some(Cow::Borrowed("text")))
+            .encode(&mut BytesMutWithTypeInfo::new(&mut bytes).with_type_info(&ty))
+            .unwrap_err();
+        assert!(matches!(error, Error::BulkInput(_)));
+
+        let long = "x".repeat(MAX_NVARCHAR_SIZE + 1);
+        assert_eq!(
+            "ntext(max)",
+            ColumnData::String(Some(Cow::Owned(long))).type_name()
+        );
     }
     use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
     use crate::tds::Collation;

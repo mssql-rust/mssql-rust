@@ -150,6 +150,27 @@ impl TokenRow<'static> {
     }
 }
 
+#[cfg(test)]
+mod accessor_tests {
+    use super::TokenRow;
+    use crate::ColumnData;
+
+    #[test]
+    fn capacity_iteration_lookup_clear_and_into_iter() {
+        let mut row = TokenRow::with_capacity(2);
+        assert!(row.is_empty());
+        row.push(ColumnData::I32(Some(1)));
+        row.push(ColumnData::I32(Some(2)));
+        assert_eq!(2, row.len());
+        assert_eq!(Some(&ColumnData::I32(Some(1))), row.get(0));
+        assert_eq!(None, row.get(9));
+        assert_eq!(2, row.iter().count());
+        assert_eq!(2, row.clone().into_iter().count());
+        row.clear();
+        assert!(row.is_empty());
+    }
+}
+
 /// A bitmap of null values in the row. Sometimes SQL Server decides to pack the
 /// null values in the row, calling it the NBCROW. In this kind of tokens the row
 /// itself skips the null columns completely, but they can be found from the bitmap

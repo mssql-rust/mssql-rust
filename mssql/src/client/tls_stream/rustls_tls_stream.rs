@@ -489,6 +489,12 @@ mod handshake_error_tests {
         )
     }
 
+    fn temporary_file(name: &str, contents: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("mssql-rustls-{}-{name}", std::process::id()));
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
     // webpki's UnsupportedCertVersion reaches rustls as
     // `CertificateError::Other(..)` whose Debug text is that name.
     #[derive(Debug)]
@@ -563,6 +569,135 @@ mod handshake_error_tests {
         assert_eq!(additive.len(), native + 1);
         let pinned = ca_root_store(ca, false).unwrap();
         assert_eq!(pinned.len(), 1);
-        assert!(native > 0, "expected a platform trust store on this host");
+        // A hermetic container or an instrumented test process may have no
+        // discoverable platform roots. The size delta above still proves the
+        // configured CA is added rather than replacing whatever was found.
+    }
+
+    #[test]
+    fn certificate_file_errors_are_typed_and_actionable() {
+        let missing = std::path::Path::new("/definitely/missing/mssql-ca.pem");
+        assert!(matches!(read_ca_file(missing), Err(Error::Io { .. })));
+
+        let unsupported = temporary_file("ca.txt", b"certificate");
+        assert!(matches!(
+            read_ca_file(&unsupported),
+            Err(Error::Io {
+                kind: IoErrorKind::InvalidInput,
+                ..
+            })
+        ));
+
+        let empty = temporary_file("empty.pem", b"");
+        assert!(matches!(
+            read_ca_file(&empty),
+            Err(Error::Io {
+                kind: IoErrorKind::InvalidInput,
+                ..
+            })
+        ));
+
+        let malformed = temporary_file("malformed.pem", b"-----BEGIN CERTIFICATE-----\n!");
+        assert!(matches!(
+            read_ca_file(&malformed),
+            Err(Error::Io {
+                kind: IoErrorKind::InvalidData,
+                ..
+            })
+        ));
+
+        let der = temporary_file("opaque.der", &[1, 2, 3]);
+        assert_eq!(read_ca_file(&der).unwrap().len(), 1);
+        assert!(ca_root_store(read_ca_file(&der).unwrap(), false).is_err());
+    }
+
+    #[test]
+    fn client_auth_rejects_missing_empty_and_wrongly_named_files() {
+        let source = |cert, key| ClientCertSource::CertAndKey { cert, key };
+        let missing = std::path::PathBuf::from("/definitely/missing/client.pem");
+        assert!(matches!(
+            load_client_auth(&source(missing, "key.pem".into())),
+            Err(Error::Io { .. })
+        ));
+
+        let wrong_cert = temporary_file("client.txt", b"certificate");
+        assert!(matches!(
+            load_client_auth(&source(wrong_cert, "key.pem".into())),
+            Err(Error::Io {
+                kind: IoErrorKind::InvalidInput,
+                ..
+            })
+        ));
+
+        let empty_cert = temporary_file("client-empty.pem", b"");
+        assert!(matches!(
+            load_client_auth(&source(empty_cert, "key.pem".into())),
+            Err(Error::Io {
+                kind: IoErrorKind::InvalidData,
+                ..
+            })
+        ));
+
+        let cert = std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/docker/certs/mtls/client.pem"
+        ));
+        let wrong_key = temporary_file("client-key.txt", b"key");
+        assert!(matches!(
+            load_client_auth(&source(cert.clone(), wrong_key)),
+            Err(Error::Io {
+                kind: IoErrorKind::InvalidInput,
+                ..
+            })
+        ));
+        assert!(matches!(
+            load_client_auth(&source(
+                cert.clone(),
+                "/definitely/missing/client.key".into()
+            )),
+            Err(Error::Io { .. })
+        ));
+
+        let malformed_key = temporary_file("client-bad.key", b"not a key");
+        assert!(matches!(
+            load_client_auth(&source(cert.clone(), malformed_key)),
+            Err(Error::Io {
+                kind: IoErrorKind::InvalidData,
+                ..
+            })
+        ));
+        let malformed_der = temporary_file("client-bad.der", b"not a key");
+        assert!(matches!(
+            load_client_auth(&source(cert, malformed_der)),
+            Err(Error::Io {
+                kind: IoErrorKind::InvalidData,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn server_name_validation_only_allows_placeholders_when_trust_is_disabled() {
+        let mut config = Config::new();
+        config.host("not a valid DNS name");
+        assert!(matches!(get_server_name(&config), Err(Error::Tls(_))));
+
+        config.trust_cert();
+        assert_eq!(
+            get_server_name(&config).unwrap().to_str(),
+            "placeholder.domain.com"
+        );
+
+        config.host_name_in_certificate("sql.example.com");
+        assert_eq!(
+            get_server_name(&config).unwrap().to_str(),
+            "sql.example.com"
+        );
+    }
+
+    #[test]
+    fn rustls_errors_convert_to_public_tls_errors() {
+        let error: Error = RustlsError::General("handshake failed".into()).into();
+        assert!(matches!(error, Error::Tls(message) if message.contains("handshake failed")));
     }
 }

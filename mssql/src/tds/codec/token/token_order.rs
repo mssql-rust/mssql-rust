@@ -31,3 +31,30 @@ impl TokenOrder {
         Ok(TokenOrder { column_indexes })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TokenOrder;
+    use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+    use bytes::BytesMut;
+
+    #[tokio::test]
+    async fn decodes_empty_and_populated_column_lists() {
+        let mut empty = BytesMut::from(&[0, 0][..]).into_sql_read_bytes();
+        assert!(TokenOrder::decode(&mut empty)
+            .await
+            .unwrap()
+            .column_indexes
+            .is_empty());
+
+        let mut populated =
+            BytesMut::from(&[6, 0, 1, 0, 0xff, 0, 0xff, 0xff][..]).into_sql_read_bytes();
+        assert_eq!(
+            vec![1, 255, u16::MAX],
+            TokenOrder::decode(&mut populated)
+                .await
+                .unwrap()
+                .column_indexes
+        );
+    }
+}

@@ -526,12 +526,68 @@ impl Row {
         R: FromSql<'a>,
         I: QueryIdx,
     {
+        let data = self.get_column_data(idx)?;
+
+        R::from_sql(data)
+    }
+
+    /// Retrieve the raw data for a column without first knowing its Rust type.
+    ///
+    /// This is the dynamic counterpart to [`get`](Self::get): callers can
+    /// inspect the returned [`ColumnData`] variant and decide how to handle it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `idx` does not name a column, or if malformed row
+    /// data contains fewer cells than its column metadata.
+    #[track_caller]
+    pub fn get_column_data<I>(&self, idx: I) -> crate::Result<&ColumnData<'static>>
+    where
+        I: QueryIdx,
+    {
         let column_idx = idx.idx(self).ok_or_else(|| {
             Error::Conversion(format!("Could not find column with index {}", idx).into())
         })?;
 
+        self.data.get(column_idx).ok_or_else(|| {
+            Error::Protocol(format!("row has no data for column index {column_idx}").into())
+        })
+    }
+
+    /// Retrieve a column value by name using an ASCII case-insensitive lookup.
+    ///
+    /// An exact match always wins. This method is opt-in so existing
+    /// [`get`](Self::get) calls retain their case-sensitive behavior and so
+    /// schemas containing names that differ only by case remain unambiguous.
+    #[track_caller]
+    pub fn get_case_insensitive<'a, R>(&'a self, name: &str) -> Option<R>
+    where
+        R: FromSql<'a>,
+    {
+        self.try_get_case_insensitive(name).unwrap()
+    }
+
+    /// Non-panicking version of [`get_case_insensitive`](Self::get_case_insensitive).
+    #[track_caller]
+    pub fn try_get_case_insensitive<'a, R>(&'a self, name: &str) -> crate::Result<Option<R>>
+    where
+        R: FromSql<'a>,
+    {
+        let column_idx = self
+            .columns
+            .iter()
+            .position(|column| column.name() == name)
+            .or_else(|| {
+                self.columns
+                    .iter()
+                    .position(|column| column.name().eq_ignore_ascii_case(name))
+            })
+            .ok_or_else(|| {
+                Error::Conversion(format!("Could not find column with name {name}").into())
+            })?;
+
         let data = self.data.get(column_idx).ok_or_else(|| {
-            Error::Conversion(format!("Could not find column with index {}", idx).into())
+            Error::Protocol(format!("row has no data for column index {column_idx}").into())
         })?;
 
         R::from_sql(data)
@@ -646,5 +702,154 @@ mod tests {
         let b = Row::new(columns, data_b);
 
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn raw_column_data_is_available_by_name_and_index() {
+        let row = Row::builder()
+            .column("value", ColumnType::Int4, ColumnData::I32(Some(42)))
+            .build();
+
+        assert_eq!(
+            &ColumnData::I32(Some(42)),
+            row.get_column_data("value").unwrap()
+        );
+        assert_eq!(
+            row.get_column_data(0).unwrap(),
+            row.get_column_data("value").unwrap()
+        );
+        assert!(row.get_column_data("missing").is_err());
+    }
+
+    #[test]
+    fn raw_column_data_reports_malformed_rows() {
+        let row = Row::new(
+            vec![Column::new("missing".into(), ColumnType::Int4)],
+            TokenRow::new(),
+        );
+        let error = row.get_column_data("missing").unwrap_err();
+        assert!(matches!(error, Error::Protocol(_)));
+    }
+
+    #[test]
+    fn case_insensitive_lookup_is_opt_in_and_exact_match_wins() {
+        let row = Row::builder()
+            .column("CHANGED_BY", ColumnType::Int4, ColumnData::I32(Some(1)))
+            .column("changed_by", ColumnType::Int4, ColumnData::I32(Some(2)))
+            .build();
+
+        assert!(row.try_get::<i32, _>("Changed_By").is_err());
+        assert_eq!(Some(1), row.get_case_insensitive::<i32>("CHANGED_BY"));
+        assert_eq!(Some(2), row.get_case_insensitive::<i32>("changed_by"));
+        assert_eq!(Some(1), row.get_case_insensitive::<i32>("Changed_By"));
+        assert!(row.try_get_case_insensitive::<i32>("missing").is_err());
+    }
+
+    #[test]
+    fn every_fixed_len_type_maps_to_a_public_column_type() {
+        for (wire, public) in [
+            (FixedLenType::Int1, ColumnType::Int1),
+            (FixedLenType::Bit, ColumnType::Bit),
+            (FixedLenType::Int2, ColumnType::Int2),
+            (FixedLenType::Int4, ColumnType::Int4),
+            (FixedLenType::Datetime4, ColumnType::Datetime4),
+            (FixedLenType::Float4, ColumnType::Float4),
+            (FixedLenType::Money, ColumnType::Money),
+            (FixedLenType::Datetime, ColumnType::Datetime),
+            (FixedLenType::Float8, ColumnType::Float8),
+            (FixedLenType::Money4, ColumnType::Money4),
+            (FixedLenType::Int8, ColumnType::Int8),
+            (FixedLenType::Null, ColumnType::Null),
+        ] {
+            assert_eq!(public, ColumnType::from(&TypeInfo::FixedLen(wire)));
+        }
+    }
+
+    #[test]
+    fn every_var_len_type_maps_to_a_public_column_type() {
+        use crate::VarLenContext;
+
+        for (wire, public) in [
+            (VarLenType::Guid, ColumnType::Guid),
+            (VarLenType::Bitn, ColumnType::Bitn),
+            (VarLenType::Decimaln, ColumnType::Decimaln),
+            (VarLenType::Numericn, ColumnType::Numericn),
+            (VarLenType::Money, ColumnType::Money),
+            (VarLenType::Datetimen, ColumnType::Datetimen),
+            (VarLenType::BigVarBin, ColumnType::BigVarBin),
+            (VarLenType::BigVarChar, ColumnType::BigVarChar),
+            (VarLenType::BigBinary, ColumnType::BigBinary),
+            (VarLenType::BigChar, ColumnType::BigChar),
+            (VarLenType::NVarchar, ColumnType::NVarchar),
+            (VarLenType::NChar, ColumnType::NChar),
+            (VarLenType::Xml, ColumnType::Xml),
+            (VarLenType::Udt, ColumnType::Udt),
+            (VarLenType::Text, ColumnType::Text),
+            (VarLenType::Image, ColumnType::Image),
+            (VarLenType::NText, ColumnType::NText),
+            (VarLenType::SSVariant, ColumnType::SSVariant),
+        ] {
+            let sized = TypeInfo::VarLenSized(VarLenContext::new(wire, 17, None));
+            assert_eq!(public, ColumnType::from(&sized), "{wire:?}");
+
+            let precision = TypeInfo::VarLenSizedPrecision {
+                ty: wire,
+                size: 17,
+                precision: 10,
+                scale: 2,
+            };
+            assert_eq!(public, ColumnType::from(&precision), "{wire:?}");
+        }
+
+        for (len, public) in [
+            (1, ColumnType::Int1),
+            (2, ColumnType::Int2),
+            (4, ColumnType::Int4),
+            (8, ColumnType::Int8),
+            (3, ColumnType::Intn),
+        ] {
+            let ty = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Intn, len, None));
+            assert_eq!(public, ColumnType::from(&ty));
+        }
+        for (len, public) in [
+            (4, ColumnType::Float4),
+            (8, ColumnType::Float8),
+            (3, ColumnType::Floatn),
+        ] {
+            let ty = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Floatn, len, None));
+            assert_eq!(public, ColumnType::from(&ty));
+        }
+    }
+
+    #[cfg(feature = "tds73")]
+    #[test]
+    fn every_tds73_type_maps_in_both_var_len_forms() {
+        use crate::VarLenContext;
+
+        for (wire, public) in [
+            (VarLenType::Daten, ColumnType::Daten),
+            (VarLenType::Timen, ColumnType::Timen),
+            (VarLenType::Datetime2, ColumnType::Datetime2),
+            (VarLenType::DatetimeOffsetn, ColumnType::DatetimeOffsetn),
+        ] {
+            let sized = TypeInfo::VarLenSized(VarLenContext::new(wire, 8, None));
+            assert_eq!(public, ColumnType::from(&sized));
+            let precision = TypeInfo::VarLenSizedPrecision {
+                ty: wire,
+                size: 8,
+                precision: 0,
+                scale: 7,
+            };
+            assert_eq!(public, ColumnType::from(&precision));
+        }
+    }
+
+    #[test]
+    fn xml_type_info_maps_to_xml() {
+        let ty = TypeInfo::Xml {
+            schema: None,
+            size: 0,
+        };
+        assert_eq!(ColumnType::Xml, ColumnType::from(&ty));
     }
 }

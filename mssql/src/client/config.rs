@@ -1104,6 +1104,101 @@ pub(crate) trait ConfigString {
 mod tests {
     use super::*;
 
+    #[test]
+    fn address_defaults_cover_local_named_and_explicit_ports() {
+        let mut config = Config::new();
+        assert_eq!("localhost:1433", config.get_addr());
+        config.host(".");
+        config.instance_name("SQLEXPRESS");
+        assert_eq!("localhost:1434", config.get_addr());
+        config.port(1444);
+        assert_eq!("localhost:1444", config.get_addr());
+    }
+
+    #[cfg(feature = "rustls")]
+    #[test]
+    fn client_certificate_debug_lists_paths_without_secret_material() {
+        let mut config = Config::new();
+        config.client_certificate("client.pem", "client.key");
+        let shown = format!("{config:?}");
+        assert!(shown.contains("client.pem"), "{shown}");
+        assert!(shown.contains("client.key"), "{shown}");
+    }
+
+    #[cfg(feature = "rustls")]
+    #[test]
+    fn builder_exercises_every_chainable_setting() {
+        use std::time::Duration;
+
+        let config = Config::builder()
+            .host("db.example.com")
+            .port(1444)
+            .database("app")
+            .instance_name("SQLEXPRESS")
+            .application_name("coverage")
+            .client_name("runner")
+            .encryption(EncryptionLevel::Strict)
+            .trust_cert_ca_only("ca.pem")
+            .client_certificate("client.pem", "client.key")
+            .host_name_in_certificate("sql.example.com")
+            .authentication(AuthMethod::sql_server("user", "secret"))
+            .readonly(true)
+            .handshake_timeout(Some(Duration::from_secs(1)))
+            .command_timeout(None)
+            .lossy_codepage_decoding(true)
+            .send_string_parameters_as_unicode(false)
+            .multi_subnet_failover(true)
+            .build();
+
+        assert_eq!(config.instance_name.as_deref(), Some("SQLEXPRESS"));
+        assert_eq!(config.application_name.as_deref(), Some("coverage"));
+        assert_eq!(config.client_name.as_deref(), Some("runner"));
+        assert!(matches!(config.trust, TrustConfig::CaCertificateOnly(_)));
+        assert!(config.readonly);
+        assert!(config.get_lossy_codepage_decoding());
+        assert!(!config.send_string_parameters_as_unicode);
+        assert!(config.get_multi_subnet_failover());
+
+        let bundle = Config::builder()
+            .trust_cert_ca_bundle(b"certificate".to_vec())
+            .build();
+        assert!(matches!(bundle.trust, TrustConfig::CaCertificateBundle(_)));
+
+        let trusted = Config::builder().trust_cert().build();
+        assert!(matches!(trusted.trust, TrustConfig::TrustAll));
+
+        let ca = Config::builder().trust_cert_ca("ca.pem").build();
+        assert!(matches!(ca.trust, TrustConfig::CaCertificateLocation(_)));
+    }
+
+    #[test]
+    fn trust_modes_are_mutually_exclusive_in_every_order() {
+        for configure in [
+            (|config: &mut Config| {
+                config.trust_cert();
+                config.trust_cert_ca("ca.pem");
+            }) as fn(&mut Config),
+            |config| {
+                config.trust_cert_ca("ca.pem");
+                config.trust_cert();
+            },
+            |config| {
+                config.trust_cert_ca_bundle(Vec::new());
+                config.trust_cert_ca("ca.pem");
+            },
+            #[cfg(feature = "rustls")]
+            |config| {
+                config.trust_cert();
+                config.trust_cert_ca_only("ca.pem");
+            },
+        ] {
+            assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                configure(&mut Config::new());
+            }))
+            .is_err());
+        }
+    }
+
     #[cfg(any(feature = "native-tls", feature = "vendored-openssl"))]
     #[test]
     fn pkcs12_password_is_redacted_from_debug() {

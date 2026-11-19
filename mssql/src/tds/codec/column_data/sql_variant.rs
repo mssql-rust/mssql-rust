@@ -435,7 +435,7 @@ mod tests {
     #[tokio::test]
     async fn encode_decode_round_trip() {
         use crate::tds::Numeric;
-        for value in [
+        let mut values = vec![
             ColumnData::I32(Some(-7)),
             ColumnData::I64(Some(9_000_000_000)),
             ColumnData::U8(Some(200)),
@@ -448,7 +448,27 @@ mod tests {
             ColumnData::Binary(Some((&[1u8, 2, 3][..]).into())),
             ColumnData::Guid(Some(uuid::Uuid::from_bytes([7; 16]))),
             ColumnData::String(None),
-        ] {
+            ColumnData::DateTime(Some(crate::tds::time::DateTime::new(12, 34))),
+            ColumnData::SmallDateTime(Some(crate::tds::time::SmallDateTime::new(12, 34))),
+        ];
+        #[cfg(feature = "tds73")]
+        values.extend([
+            ColumnData::Date(Some(crate::tds::time::Date::new(700_000))),
+            ColumnData::Time(Some(crate::tds::time::Time::new(12_345, 3))),
+            ColumnData::DateTime2(Some(crate::tds::time::DateTime2::new(
+                crate::tds::time::Date::new(700_000),
+                crate::tds::time::Time::new(12_345, 3),
+            ))),
+            ColumnData::DateTimeOffset(Some(crate::tds::time::DateTimeOffset::new(
+                crate::tds::time::DateTime2::new(
+                    crate::tds::time::Date::new(700_000),
+                    crate::tds::time::Time::new(12_345, 3),
+                ),
+                60,
+            ))),
+        ]);
+
+        for value in values {
             let mut buf = BytesMut::new();
             super::encode(&mut buf, value.clone()).unwrap();
             assert_eq!(run(&buf).await.unwrap(), value, "{value:?}");
@@ -478,10 +498,19 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_variants_are_protocol_errors_not_desyncs() {
+        let mut oversized = BytesMut::new();
+        oversized.put_u32_le(8_003);
+        oversized.put_u8(0xa5);
+        oversized.put_u8(0);
+
         for bytes in [
             variant(0x38, &[], &[1, 2]),                // int with 2 value bytes
             variant(0x38, &[0], &[1, 2, 3, 4]),         // int with property bytes
+            variant(0x1f, &[], &[]),                    // NULL is not a variant base type
             variant(0x6C, &[10, 39], &[1, 0, 0, 0, 0]), // scale > precision
+            variant(0x6C, &[10, 2], &[]),               // empty numeric
+            variant(0x6C, &[10, 2], &[1, 0]),           // wrong magnitude width
+            variant(0x6C, &[10, 2], &[2, 0, 0, 0, 0]),  // invalid sign
             variant(
                 0x6C,
                 &[38, 0],
@@ -492,7 +521,10 @@ mod tests {
             ), // > i128::MAX
             variant(0x24, &[], &[0; 4]),                // guid with 4 bytes
             variant(0xF1, &[], &[]),                    // xml: not a valid base type
+            variant(0xff, &[], &[]),                    // unknown base type
             vec![1, 0, 0, 0, 0x38],                     // total length 1
+            vec![2, 0, 0, 0, 0x38, 1],                  // properties exceed total
+            oversized.to_vec(),                         // over-sized payload
         ] {
             let err = run(&bytes).await.unwrap_err();
             assert!(

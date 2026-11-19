@@ -358,7 +358,7 @@ pub use tds::{
         MetaDataColumn, TokenRow, TypeInfo, TypeLength,
     },
     numeric,
-    stream::{OutputParams, QueryStream},
+    stream::{OutputParams, OwnedQueryStream, QueryStream},
     time, xml, EncryptionLevel,
 };
 pub use to_sql::{IntoSql, ToSql};

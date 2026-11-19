@@ -262,6 +262,22 @@ impl Decode<BytesMut> for PreloginMessage {
 mod tests {
     use super::*;
 
+    fn packet(fields: &[(u8, &[u8])]) -> BytesMut {
+        let mut packet = BytesMut::new();
+        let mut offset = (fields.len() * 5 + 1) as u16;
+        for (token, value) in fields {
+            packet.put_u8(*token);
+            packet.put_u16(offset);
+            packet.put_u16(value.len() as u16);
+            offset += value.len() as u16;
+        }
+        packet.put_u8(PRELOGIN_TERMINATOR);
+        for (_, value) in fields {
+            packet.extend_from_slice(value);
+        }
+        packet
+    }
+
     #[test]
     fn prelogin_roundtrip() {
         let mut payload = BytesMut::new();
@@ -342,5 +358,92 @@ mod tests {
         let decoded = PreloginMessage::decode(&mut payload).expect("decode should succeed");
 
         assert_eq!(prelogin, decoded);
+    }
+
+    #[test]
+    fn decode_covers_all_optional_prelogin_fields() {
+        let guid = [7u8; 16];
+        let mut trace = guid.to_vec();
+        trace.extend_from_slice(&42u32.to_le_bytes());
+        let nonce = [9u8; 32];
+        let mut payload = packet(&[
+            (PRELOGIN_INSTOPT, b"SQLEXPRESS\0"),
+            (PRELOGIN_THREADID, &123u32.to_be_bytes()),
+            (PRELOGIN_MARS, &[1]),
+            (PRELOGIN_TRACEID, &trace),
+            (PRELOGIN_FEDAUTHREQUIRED, &[1]),
+            (PRELOGIN_NONCEOPT, &nonce),
+            (0xfe, &[1, 2, 3]),
+        ]);
+
+        let decoded = PreloginMessage::decode(&mut payload).unwrap();
+        assert_eq!(decoded.instance_name.as_deref(), Some("SQLEXPRESS"));
+        assert_eq!(decoded.thread_id, 123);
+        assert!(decoded.mars);
+        assert_eq!(decoded.activity_id.unwrap().sequence, 42);
+        assert!(decoded.fed_auth_required);
+        assert_eq!(decoded.nonce, Some(nonce));
+    }
+
+    #[test]
+    fn decode_validates_encryption_and_thread_id_fields() {
+        let mut empty_thread = packet(&[(PRELOGIN_THREADID, &[])]);
+        assert_eq!(
+            PreloginMessage::decode(&mut empty_thread)
+                .unwrap()
+                .thread_id,
+            0
+        );
+
+        let mut invalid_thread = packet(&[(PRELOGIN_THREADID, &[1, 2])]);
+        assert!(matches!(
+            PreloginMessage::decode(&mut invalid_thread),
+            Err(Error::Protocol(_))
+        ));
+
+        let mut invalid_encryption = packet(&[(PRELOGIN_ENCRYPTION, &[0xfe])]);
+        assert!(matches!(
+            PreloginMessage::decode(&mut invalid_encryption),
+            Err(Error::Protocol(_))
+        ));
+    }
+
+    #[cfg(any(
+        feature = "rustls",
+        feature = "native-tls",
+        feature = "vendored-openssl"
+    ))]
+    #[test]
+    fn negotiated_encryption_covers_success_and_rejection_paths() {
+        for (expected, offered, result) in [
+            (
+                EncryptionLevel::NotSupported,
+                EncryptionLevel::NotSupported,
+                Ok(EncryptionLevel::NotSupported),
+            ),
+            (
+                EncryptionLevel::Off,
+                EncryptionLevel::Off,
+                Ok(EncryptionLevel::Off),
+            ),
+            (
+                EncryptionLevel::Required,
+                EncryptionLevel::Required,
+                Ok(EncryptionLevel::On),
+            ),
+        ] {
+            let mut response = PreloginMessage::new();
+            response.encryption = offered;
+            assert_eq!(response.negotiated_encryption(expected), result);
+        }
+
+        for offered in [EncryptionLevel::Off, EncryptionLevel::NotSupported] {
+            let mut response = PreloginMessage::new();
+            response.encryption = offered;
+            assert!(matches!(
+                response.negotiated_encryption(EncryptionLevel::On),
+                Err(Error::Protocol(_))
+            ));
+        }
     }
 }

@@ -344,7 +344,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> AsyncWrite for TlsPreloginWrapper
 ))]
 mod tests {
     use super::*;
-    use futures_util::io::{AsyncRead, AsyncWrite};
+    use futures_util::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
     use std::task::{Context, Poll, Waker};
 
     // A minimal in-memory stream that yields a fixed slice of bytes to the
@@ -352,6 +352,7 @@ mod tests {
     // prelogin header-parsing branch without a real socket / TLS handshake.
     struct MockStream {
         data: std::io::Cursor<Vec<u8>>,
+        written: Vec<u8>,
     }
 
     impl AsyncRead for MockStream {
@@ -371,10 +372,11 @@ mod tests {
 
     impl AsyncWrite for MockStream {
         fn poll_write(
-            self: Pin<&mut Self>,
+            mut self: Pin<&mut Self>,
             _cx: &mut task::Context<'_>,
             buf: &[u8],
         ) -> Poll<io::Result<usize>> {
+            self.written.extend_from_slice(buf);
             Poll::Ready(Ok(buf.len()))
         }
         fn poll_flush(self: Pin<&mut Self>, _cx: &mut task::Context<'_>) -> Poll<io::Result<()>> {
@@ -389,6 +391,7 @@ mod tests {
     fn poll_header(header: [u8; HEADER_BYTES]) -> Poll<io::Result<usize>> {
         let stream = MockStream {
             data: std::io::Cursor::new(header.to_vec()),
+            written: Vec::new(),
         };
         let mut wrapper = TlsPreloginWrapper::new(stream);
         let waker = Waker::noop();
@@ -419,5 +422,41 @@ mod tests {
             Poll::Ready(Err(e)) => assert_eq!(e.kind(), io::ErrorKind::InvalidData),
             other => panic!("expected InvalidData error, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn handshake_reads_payload_without_exposing_the_tds_header() {
+        let mut wire = vec![18u8, 1, 0, 11, 0, 0, 0, 0];
+        wire.extend_from_slice(&[1, 2, 3]);
+        let stream = MockStream {
+            data: std::io::Cursor::new(wire),
+            written: Vec::new(),
+        };
+        let mut wrapper = TlsPreloginWrapper::new(stream);
+        let mut payload = [0u8; 3];
+        wrapper.read_exact(&mut payload).await.unwrap();
+        assert_eq!([1, 2, 3], payload);
+    }
+
+    #[tokio::test]
+    async fn handshake_writes_one_prelogin_packet_then_passes_through() {
+        let stream = MockStream {
+            data: std::io::Cursor::new(Vec::new()),
+            written: Vec::new(),
+        };
+        let mut wrapper = TlsPreloginWrapper::new(stream);
+        wrapper.write_all(&[1, 2, 3]).await.unwrap();
+        wrapper.flush().await.unwrap();
+        assert_eq!(11, wrapper.stream.as_ref().unwrap().written.len());
+        assert_eq!(
+            PacketType::PreLogin as u8,
+            wrapper.stream.as_ref().unwrap().written[0]
+        );
+
+        wrapper.handshake_complete();
+        wrapper.write_all(&[4, 5]).await.unwrap();
+        wrapper.flush().await.unwrap();
+        wrapper.close().await.unwrap();
+        assert!(wrapper.stream.as_ref().unwrap().written.ends_with(&[4, 5]));
     }
 }

@@ -83,6 +83,31 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         })
     }
 
+    /// Reset this connection to its login-time state for reuse by a pool.
+    ///
+    /// The next SQL batch carries the TDS `RESETCONNECTION` status bit. SQL
+    /// Server rolls back an open transaction and clears session settings,
+    /// temporary objects, cursors and other per-session state before executing
+    /// that batch. The reset acknowledgement is fully consumed before this
+    /// method returns.
+    pub async fn reset(&mut self) -> crate::Result<()> {
+        self.connection.flush_stream().await?;
+
+        // A non-empty batch ensures a request is emitted even though the
+        // generic packet sender deliberately emits nothing for empty payloads.
+        let request = BatchRequest::new(
+            "SELECT 1",
+            self.connection.context().transaction_descriptor(),
+        );
+        let id = self.connection.context_mut().next_packet_id();
+        self.connection
+            .send_reset(PacketHeader::batch(id), request)
+            .await?;
+        TokenStream::new(&mut self.connection).flush_done().await?;
+
+        Ok(())
+    }
+
     /// Executes SQL statements in the SQL Server, returning the number rows
     /// affected. Useful for `INSERT`, `UPDATE` and `DELETE` statements. The
     /// `query` can define the parameter placement by annotating them with
@@ -183,18 +208,39 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     where
         'a: 'b,
     {
-        self.connection.flush_stream().await?;
-        let rpc_params = Self::rpc_params(query);
-
-        let params = params.iter().map(|p| p.to_sql());
-        self.rpc_perform_query(RpcProcId::ExecuteSQL, rpc_params, params)
-            .await?;
+        self.start_query(query, params).await?;
 
         let ts = TokenStream::new(&mut self.connection);
         let mut result = QueryStream::new(ts.try_unfold());
         result.forward_to_metadata().await?;
 
         Ok(result)
+    }
+
+    /// Start a parameterized query and return a `'static` stream which owns
+    /// this client. See [`OwnedQueryStream`](crate::OwnedQueryStream).
+    pub async fn into_query<'b>(
+        mut self,
+        query: impl Into<Cow<'b, str>>,
+        params: &'b [&'b dyn ToSql],
+    ) -> crate::Result<crate::OwnedQueryStream<Self, S>>
+    where
+        S: 'static,
+    {
+        self.start_query(query, params).await?;
+        Ok(crate::OwnedQueryStream::from_client(self))
+    }
+
+    pub(crate) async fn start_query<'b>(
+        &mut self,
+        query: impl Into<Cow<'b, str>>,
+        params: &'b [&'b dyn ToSql],
+    ) -> crate::Result<()> {
+        self.connection.flush_stream().await?;
+        let rpc_params = Self::rpc_params(query);
+        let params = params.iter().map(|param| param.to_sql());
+        self.rpc_perform_query(RpcProcId::ExecuteSQL, rpc_params, params)
+            .await
     }
 
     /// Execute multiple queries, delimited with `;` and return multiple result
@@ -234,12 +280,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     where
         'a: 'b,
     {
-        self.connection.flush_stream().await?;
-
-        let req = BatchRequest::new(query, self.connection.context().transaction_descriptor());
-
-        let id = self.connection.context_mut().next_packet_id();
-        self.connection.send(PacketHeader::batch(id), req).await?;
+        self.start_simple_query(query).await?;
 
         let ts = TokenStream::new(&mut self.connection);
 
@@ -247,6 +288,28 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         result.forward_to_metadata().await?;
 
         Ok(result)
+    }
+
+    /// Start a SQL batch and return a `'static` stream which owns this client.
+    pub async fn into_simple_query<'b>(
+        mut self,
+        query: impl Into<Cow<'b, str>>,
+    ) -> crate::Result<crate::OwnedQueryStream<Self, S>>
+    where
+        S: 'static,
+    {
+        self.start_simple_query(query).await?;
+        Ok(crate::OwnedQueryStream::from_client(self))
+    }
+
+    pub(crate) async fn start_simple_query<'b>(
+        &mut self,
+        query: impl Into<Cow<'b, str>>,
+    ) -> crate::Result<()> {
+        self.connection.flush_stream().await?;
+        let request = BatchRequest::new(query, self.connection.context().transaction_descriptor());
+        let id = self.connection.context_mut().next_packet_id();
+        self.connection.send(PacketHeader::batch(id), request).await
     }
 
     /// Call a stored procedure by name, with `OUTPUT` parameters and the
@@ -1386,7 +1449,7 @@ fn validate_collation_name(name: &str) -> crate::Result<()> {
 // Server-free tests for the column collations declared in `INSERT BULK`.
 #[cfg(test)]
 mod bulk_collation_tests {
-    use super::{bulk_column_list, table_collations_sql, validate_collation_name};
+    use super::{bulk_column_list, table_collations_sql, validate_collation_name, Client};
     use crate::tds::codec::FeatureLevel;
     use crate::tds::codec::{
         BaseMetaDataColumn, ColumnFlag, FixedLenType, TypeInfo, VarLenContext, VarLenType,
@@ -1424,6 +1487,20 @@ mod bulk_collation_tests {
         rows.iter()
             .map(|(name, collation)| (name.to_string(), collation.map(str::to_string)))
             .collect()
+    }
+
+    #[test]
+    fn default_non_unicode_parameter_type_is_varchar_max_with_us_english_collation() {
+        type MemoryClient = Client<futures_util::io::Cursor<Vec<u8>>>;
+        let collation = MemoryClient::default_varchar_collation();
+        assert_eq!(0x0409, collation.lcid());
+
+        let TypeInfo::VarLenSized(context) = MemoryClient::varchar_type_info() else {
+            panic!("VARCHAR type info must be variable length");
+        };
+        assert_eq!(VarLenType::BigVarChar, context.r#type());
+        assert_eq!(0xffff_ffff, context.len());
+        assert_eq!(Some(collation), context.collation());
     }
 
     #[test]

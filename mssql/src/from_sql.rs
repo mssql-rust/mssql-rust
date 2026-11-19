@@ -173,4 +173,72 @@ mod widening_tests {
         );
         assert_eq!(None, i32::from_sql(&ColumnData::I16(None)).unwrap());
     }
+
+    #[test]
+    fn primitive_conversions_cover_values_null_widths_and_type_errors() {
+        assert_eq!(
+            bool::from_sql(&ColumnData::Bit(Some(true))).unwrap(),
+            Some(true)
+        );
+        assert_eq!(u8::from_sql(&ColumnData::U8(Some(7))).unwrap(), Some(7));
+        assert_eq!(i16::from_sql(&ColumnData::I16(Some(-7))).unwrap(), Some(-7));
+        assert_eq!(i64::from_sql(&ColumnData::I64(Some(-7))).unwrap(), Some(-7));
+        assert_eq!(
+            f32::from_sql(&ColumnData::F32(Some(1.5))).unwrap(),
+            Some(1.5)
+        );
+        assert_eq!(
+            f64::from_sql(&ColumnData::F64(Some(1.5))).unwrap(),
+            Some(1.5)
+        );
+
+        for null in [
+            ColumnData::U8(None),
+            ColumnData::I16(None),
+            ColumnData::I32(None),
+            ColumnData::I64(None),
+        ] {
+            assert_eq!(u8::from_sql(&null).unwrap(), None);
+            assert_eq!(i16::from_sql(&null).unwrap(), None);
+            assert_eq!(i32::from_sql(&null).unwrap(), None);
+            assert_eq!(i64::from_sql(&null).unwrap(), None);
+        }
+        assert_eq!(f32::from_sql(&ColumnData::F64(None)).unwrap(), None);
+        assert_eq!(f64::from_sql(&ColumnData::F32(None)).unwrap(), None);
+        assert!(bool::from_sql(&ColumnData::I32(Some(1))).is_err());
+    }
+
+    #[test]
+    fn borrowed_and_owned_lob_conversions_cover_success_and_errors() {
+        let string = ColumnData::String(Some("hello".into()));
+        assert_eq!(<&str>::from_sql(&string).unwrap(), Some("hello"));
+        assert_eq!(
+            String::from_sql_owned(string).unwrap().as_deref(),
+            Some("hello")
+        );
+
+        let binary = ColumnData::Binary(Some(vec![1, 2, 3].into()));
+        assert_eq!(<&[u8]>::from_sql(&binary).unwrap(), Some(&[1, 2, 3][..]));
+        assert_eq!(
+            Vec::<u8>::from_sql_owned(binary).unwrap(),
+            Some(vec![1, 2, 3])
+        );
+
+        let xml = ColumnData::Xml(Some(std::borrow::Cow::Owned(XmlData::new("<x/>"))));
+        assert_eq!(
+            <&XmlData>::from_sql(&xml).unwrap().unwrap().as_ref(),
+            "<x/>"
+        );
+        assert_eq!(
+            XmlData::from_sql_owned(xml).unwrap().unwrap().as_ref(),
+            "<x/>"
+        );
+
+        assert!(<&str>::from_sql(&ColumnData::I32(Some(1))).is_err());
+        assert!(String::from_sql_owned(ColumnData::I32(Some(1))).is_err());
+        assert!(<&[u8]>::from_sql(&ColumnData::I32(Some(1))).is_err());
+        assert!(Vec::<u8>::from_sql_owned(ColumnData::I32(Some(1))).is_err());
+        assert!(<&XmlData>::from_sql(&ColumnData::I32(Some(1))).is_err());
+        assert!(XmlData::from_sql_owned(ColumnData::I32(Some(1))).is_err());
+    }
 }

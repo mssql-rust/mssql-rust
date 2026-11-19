@@ -169,12 +169,9 @@ jobs:
       - name: Run tests
         run: cargo test ${{matrix.features}}
 
-  # Line coverage of the unit tests plus the whole live suite, against SQL
-  # Server 2022 (mssql/tarpaulin-live.toml has the feature set). It reports a
-  # number and doesn't gate on one: the percentage goes to the job summary,
-  # and the HTML and lcov reports are uploaded as an artifact. The same
-  # tests already gate in cargo-test-linux, so a failure here means the
-  # instrumented build, not the code.
+  # Coverage of the unit tests plus the whole live suite, against SQL Server
+  # 2022 (mssql/tarpaulin-live.toml has the feature set). Function coverage
+  # must remain strictly above 95%; line coverage is reported alongside it.
   coverage:
     runs-on: ubuntu-latest
     env:
@@ -224,8 +221,10 @@ jobs:
           set -o pipefail
           cargo tarpaulin --config tarpaulin-live.toml 2>&1 | tee tarpaulin.log
           line="$(grep -E '^[0-9.]+% coverage' tarpaulin.log | tail -n 1)"
+          functions="$(sh scripts/check-function-coverage.sh target/tarpaulin-live/lcov.info)"
           echo "### Coverage (SQL Server 2022, live suite)" >> "$GITHUB_STEP_SUMMARY"
           echo "${line:-no coverage line found}" >> "$GITHUB_STEP_SUMMARY"
+          echo "$functions" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         if: always()

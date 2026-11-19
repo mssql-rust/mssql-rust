@@ -87,3 +87,40 @@ impl fmt::Display for TokenDone {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+    use bytes::BytesMut;
+
+    #[tokio::test]
+    async fn decode_accessors_display_and_encode_cover_status_shapes() {
+        let mut wire = BytesMut::new();
+        wire.put_u16_le((DoneStatus::Count | DoneStatus::More).bits());
+        wire.put_u16_le(7);
+        wire.put_u64_le(2);
+
+        let done = TokenDone::decode(&mut wire.into_sql_read_bytes())
+            .await
+            .unwrap();
+        assert!(!done.is_final());
+        assert_eq!(2, done.rows());
+        assert!(done.to_string().contains("2 rows left"));
+
+        let mut encoded = BytesMut::new();
+        done.encode(&mut encoded).unwrap();
+        assert_eq!(TokenType::Done as u8, encoded[0]);
+        assert_eq!(13, encoded.len());
+
+        assert_eq!(
+            "Done with status BitFlags<DoneStatus>(0b0)",
+            TokenDone::default().to_string()
+        );
+        let one = TokenDone {
+            done_rows: 1,
+            ..TokenDone::default()
+        };
+        assert!(one.to_string().contains("1 row left"));
+    }
+}

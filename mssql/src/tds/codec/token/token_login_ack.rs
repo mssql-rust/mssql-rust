@@ -38,3 +38,43 @@ impl TokenLoginAck {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+    use bytes::{BufMut, BytesMut};
+
+    fn login_ack(version: u32) -> BytesMut {
+        let mut body = BytesMut::new();
+        body.put_u8(1);
+        body.put_u32(version);
+        body.put_u8(3);
+        for unit in "SQL".encode_utf16() {
+            body.put_u16_le(unit);
+        }
+        body.put_u32_le(0x0102_0304);
+
+        let mut wire = BytesMut::new();
+        wire.put_u16_le(body.len() as u16);
+        wire.extend_from_slice(&body);
+        wire
+    }
+
+    #[tokio::test]
+    async fn decodes_every_login_ack_field() {
+        let mut source = login_ack(FeatureLevel::SqlServerN as u32).into_sql_read_bytes();
+        let ack = TokenLoginAck::decode(&mut source).await.unwrap();
+        assert_eq!(1, ack.interface);
+        assert_eq!(FeatureLevel::SqlServerN, ack.tds_version);
+        assert_eq!("SQL", ack.prog_name);
+        assert_eq!(0x0102_0304, ack.version);
+    }
+
+    #[tokio::test]
+    async fn rejects_unknown_tds_version() {
+        let mut source = login_ack(0xdead_beef).into_sql_read_bytes();
+        let error = TokenLoginAck::decode(&mut source).await.unwrap_err();
+        assert!(matches!(error, Error::Protocol(_)), "{error:?}");
+    }
+}

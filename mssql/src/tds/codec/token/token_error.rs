@@ -102,3 +102,36 @@ impl fmt::Display for TokenError {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TokenError;
+
+    pub(crate) fn error_with_code(code: u32) -> TokenError {
+        TokenError {
+            code,
+            state: 2,
+            class: 16,
+            message: "boom".to_string(),
+            server: "db.example".to_string(),
+            procedure: "do_work".to_string(),
+            line: 42,
+        }
+    }
+
+    #[test]
+    fn accessors_and_display_expose_every_server_field() {
+        let error = error_with_code(50000);
+        assert_eq!(50000, error.code());
+        assert_eq!(2, error.state());
+        assert_eq!(16, error.class());
+        assert_eq!("boom", error.message());
+        assert_eq!("db.example", error.server());
+        assert_eq!("do_work", error.procedure());
+        assert_eq!(42, error.line());
+        assert_eq!(
+            "'boom' on server db.example executing do_work on line 42 (code: 50000, state: 2, class: 16)",
+            error.to_string()
+        );
+    }
+}
