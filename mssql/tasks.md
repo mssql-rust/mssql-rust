@@ -166,10 +166,11 @@ original would have broken the default build), plus direct fixes for issues
 
 ## Defer — not wrong, just low priority or already covered
 
-- [ ] **#304** — `Row::get_column_data`. Mostly duplicates functionality
-  already shipped via `Row::cells()` (merged from upstream #303).
-- [ ] **#388** — column-name space fix. Superseded by the combined
-  #387+#388-tests fix above; don't merge both.
+- [x] **#304** — `Row::get_column_data`. Added the direct dynamic-value
+  accessor now shipped upstream, including malformed-row error handling rather
+  than an indexing panic. Done: `70c256b`.
+- [x] **#388** — column-name space fix. Superseded by the combined
+  #387+#388-tests fix above. Done: `2f33e33`.
 - [x] **#416** — optional serde `Serialize`/`Deserialize` feature.
   Reimplemented as a pure addition, cherry-picking just the `cfg_attr`
   derives + `tests/serde.rs` (skipped its unrelated `rustls-pemfile` hunk,
@@ -283,22 +284,23 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   names. Wire it into `fetch_column_metadata` once, not per entry point.
 - [x] **Tolerate COLINFO / TABNAME tokens** (done on the backlog branch) (`FOR BROWSE`) by skipping by
   length. Don't port upstream's decoders (`8b6e080`, `617dc43`).
-- [ ] **CI, urgent**: (Gitleaks CLI, `apt-get update`, the Linux readiness wait
-  and cargo-deny: done on the backlog branch. Only the macOS lane is still
-  open.) This fork's Gitleaks job failed on every PR ("License
+- [x] **CI, urgent**: This fork's Gitleaks job failed on every PR ("License
   key is required" for an organization). Run the gitleaks CLI directly
   with a verified SHA-256, and add `.gitleaks.toml` allowlisting
   `mssql/docker/certs/` (`47331db`, `1039eb0`, `b448f43`). Also:
   `apt-get update` before `apt install` (`55be39e`), a Linux SQL Server
   readiness wait (`169091d`), and a cargo-deny job using this fork's own
   ignore list (`f823a1b`). The macOS lane currently fails in
-  `setup-docker-action`; colima (`b550fc8`) is a candidate.
+  `setup-docker-action`; a clean retry after deleting the failed Lima VM fixed
+  that transient failure. All Linux, Windows, coverage, cargo-deny and both
+  macOS feature lanes passed in CI run 44418658198. Done: `eaf2884`,
+  `26a652e`, `ac45b36`.
 - [x] **Legacy CP437/CP850 collations** (done on the backlog branch, including
   the opt-in lossy code-page decoding) (currently "unsupported
   encoding") and opt-in lossy code-page decoding (`30f7b36`, `cbacb58`,
   `35605c9`). Then port upstream's CP437/CP850 bulk live test from
   `75d7afc`.
-- [ ] **Small items**: ~~rustls handshake diagnostics for #327 (`610154f`)~~ (done);
+- [x] **Small items**: ~~rustls handshake diagnostics for #327 (`610154f`)~~ (done);
   ~~connection-string docs and error hints for #333 (`0dec9cb`)~~ (done; the hint
   is in the ADO parser's error);
   ~~`Row::builder()` for #383 (`30b059c`)~~ (done); ~~case-insensitive
@@ -306,11 +308,12 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   column match before the `r#` fallback (`bf25ac6`)~~ (done); ~~native-tls ALPN
   `tds/8.0` for Strict (`dd6d913`; async-native-tls 0.6 has
   `request_alpns`)~~ (done); ~~honour a process-installed rustls `CryptoProvider`
-  with a **ring** fallback (`7235f4c`)~~ (done); `rustls-webpki` floor (`4ab275b`);
+  with a **ring** fallback (`7235f4c`)~~ (done); ~~`rustls-webpki` floor (`4ab275b`)~~
+  (done);
   ~~unit tests for `PacketHeader` (`0fb4067`), `into_results` (`38896ba`)
-  and FeatureExtAck (`931223f`)~~ (done). Still open from this list: the
-  `rustls-webpki` floor (`4ab275b`), which is a dependency declaration, so
-  it belongs in a deliberate dependency-update commit.
+  and FeatureExtAck (`931223f`)~~ (done). The `rustls-webpki` floor is a
+  direct dependency declaration at the RUSTSEC-2026-0104 fixed version.
+  Done: `70c256b`.
 
 ## Needs a decision first: behaviour change or new API surface
 
@@ -341,7 +344,7 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   2022 on Linux refuses Strict with error 17821, even with a certificate that
   2025 accepts. It matters for TDS 8.0 Strict.
   The pin exists for macOS CI KeyUpdate EOFs, so re-test there first.
-- [ ] **Larger additive features**, each to be built from this fork's
+- [x] **Larger additive features**, each built from this fork's
   source with its own review:
   - SQL_VARIANT decode/encode (`ee4450b`, `dd19eeb`, `b0cf775`). **Decode
     done** on `upstream/tiberius-0.13-decisions`, with the fixed-length size

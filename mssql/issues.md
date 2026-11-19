@@ -268,32 +268,38 @@ scoped out (see its own entry below).
     u32 length plus data. Verified live for TEXT, NTEXT and IMAGE: values,
     NULLs and 20 KB values. Done: see the backlog commit "fix: bulk insert
     into TEXT/NTEXT/IMAGE columns".
-- [ ] **#365** — Wants an owned (`'static`, non-borrowing) row stream like
-  `tokio-postgres`'s `query_raw`/`sqlx`'s `fetch`, instead of one bound to
-  `&mut Client`. Legitimate repository-pattern pain point, but would need a
-  real API/ownership redesign, not a small change.
+- [x] **#365** — Added `OwnedQueryStream`, a `'static` row stream which owns
+  either a `Client` (`Client::into_query` / `into_simple_query`) or a pool
+  checkout implementing `DerefMut<Target = Client<_>>`. It stays
+  runtime-independent and returns a checkout to its pool normally when
+  dropped. Live-verified over both Tokio and smol, including the pool-owner
+  shape. Done: `70c256b`.
 - [x] **#354** — Add `jiff` as a date/time backend. Done: the `chrono`
   feature was replaced by `jiff` (chrono is no longer supported), alongside
   `time`.
-- [ ] **#299** — Connection reset (`sp_reset_connection`-equivalent) for
-  pool reuse without full re-login. The wire-level `PacketStatus::
-  ResetConnection` flag and `EnvChangeTy::ResetConnection` ack already exist
-  in the protocol layer but are unused; exposing a `Client::reset()` is
-  medium effort and only benefits people hand-rolling pool integrations
-  (bb8/deadpool users recycle whole `Client`s today, which works fine).
-- [ ] **#219** — Case-insensitive `row.get()`/`try_get()` lookup for
-  inconsistently-cased legacy schemas. Small feature, but an easy SQL-side
-  workaround exists (`AS` to normalize casing).
-- [ ] **#364** — TLS handshake fails from macOS 15 against SQL Server 2014
-  across all three TLS backends. Plausible legacy-server TLS-stack
-  incompatibility; no live SQL Server 2014 test infrastructure to diagnose
-  properly, and low priority given the fork deprioritizes legacy SQL Server
-  versions.
-- [ ] **#375** — azure-sql-edge on macOS hangs indefinitely with default
-  features (native-tls) but works with `--no-default-features`. Likely
-  already explained by the documented native-tls-on-macOS/SQL-Server-TLS
-  incompatibility (the README already recommends rustls on macOS); no
-  distinct code defect confirmed.
+- [x] **#299** — Connection reset (`sp_reset_connection`-equivalent) for
+  pool reuse without full re-login. Added `Client::reset()`, which marks the
+  first packet of a batch with TDS `RESETCONNECTION` and drains the response.
+  The live regression test verifies an open transaction is rolled back and
+  `SET ROWCOUNT` is restored. Done: `70c256b`.
+- [x] **#219** — Case-insensitive `row.get()`/`try_get()` lookup for
+  inconsistently-cased legacy schemas. Added opt-in `get_case_insensitive` /
+  `try_get_case_insensitive`; exact matches win, and existing lookup semantics
+  stay unchanged. Done: `70c256b`.
+- [x] **#364** — TLS handshake fails from macOS 15 against SQL Server 2014
+  SP2 across all three TLS backends. Resolved as no safe client change: the
+  server closes every modern backend during negotiation, and adding a TLS 1.0
+  or certificate-validation downgrade would conflict with this fork's security
+  policy (the same reason #381 is rejected). Current rustls errors now name the
+  certificate remedies and all handshakes are bounded by `handshake_timeout`.
+  Not live-verified against SQL Server 2014 because no such server is available;
+  the fork's 2017+ matrix remains green. Done by decision; diagnostics/timeouts:
+  `769e392`, `4064f50`.
+- [x] **#375** — azure-sql-edge on macOS could hang indefinitely with default
+  features. `handshake_timeout` (15s) and `command_timeout` (30s) now prevent
+  unbounded hangs, with actionable rustls diagnostics and the existing rustls
+  recommendation covering the macOS backend incompatibility. Done: `4064f50`,
+  `769e392`.
 
 ## Not actionable / already resolved
 
