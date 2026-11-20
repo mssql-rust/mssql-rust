@@ -215,6 +215,11 @@ jobs:
           docker compose -f docker-compose.yml logs mssql-2022 || true
           exit 1
 
+      # The feature-matrix trace in tarpaulin-live.toml enables `all`, which
+      # includes integrated-auth-gssapi and therefore needs the system headers.
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y openssl libkrb5-dev
+
       - name: Run coverage
         # pipefail: the default `bash -e` would let `tee` hide a failing run.
         run: |
