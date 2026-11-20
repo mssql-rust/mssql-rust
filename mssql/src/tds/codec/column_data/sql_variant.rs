@@ -435,7 +435,7 @@ mod tests {
     #[tokio::test]
     async fn encode_decode_round_trip() {
         use crate::tds::Numeric;
-        let mut values = vec![
+        let values = vec![
             ColumnData::I32(Some(-7)),
             ColumnData::I64(Some(9_000_000_000)),
             ColumnData::U8(Some(200)),
@@ -452,21 +452,25 @@ mod tests {
             ColumnData::SmallDateTime(Some(crate::tds::time::SmallDateTime::new(12, 34))),
         ];
         #[cfg(feature = "tds73")]
-        values.extend([
-            ColumnData::Date(Some(crate::tds::time::Date::new(700_000))),
-            ColumnData::Time(Some(crate::tds::time::Time::new(12_345, 3))),
-            ColumnData::DateTime2(Some(crate::tds::time::DateTime2::new(
-                crate::tds::time::Date::new(700_000),
-                crate::tds::time::Time::new(12_345, 3),
-            ))),
-            ColumnData::DateTimeOffset(Some(crate::tds::time::DateTimeOffset::new(
-                crate::tds::time::DateTime2::new(
+        let values = {
+            let mut values = values;
+            values.extend([
+                ColumnData::Date(Some(crate::tds::time::Date::new(700_000))),
+                ColumnData::Time(Some(crate::tds::time::Time::new(12_345, 3))),
+                ColumnData::DateTime2(Some(crate::tds::time::DateTime2::new(
                     crate::tds::time::Date::new(700_000),
                     crate::tds::time::Time::new(12_345, 3),
-                ),
-                60,
-            ))),
-        ]);
+                ))),
+                ColumnData::DateTimeOffset(Some(crate::tds::time::DateTimeOffset::new(
+                    crate::tds::time::DateTime2::new(
+                        crate::tds::time::Date::new(700_000),
+                        crate::tds::time::Time::new(12_345, 3),
+                    ),
+                    60,
+                ))),
+            ]);
+            values
+        };
 
         for value in values {
             let mut buf = BytesMut::new();

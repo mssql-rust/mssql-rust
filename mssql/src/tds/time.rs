@@ -443,7 +443,9 @@ impl Encode<BytesMut> for DateTimeOffset {
 #[cfg(test)]
 mod coverage_tests {
     use super::*;
+    #[cfg(feature = "tds73")]
     use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+    #[cfg(feature = "tds73")]
     use bytes::BytesMut;
 
     #[test]
@@ -456,11 +458,15 @@ mod coverage_tests {
         assert_eq!(small.days(), 2);
         assert_eq!(small.seconds_fragments(), 60);
 
-        let dto = DateTimeOffset::new(DateTime2::new(Date::new(3), Time::new(4, 0)), -60);
-        assert_eq!(dto.offset(), -60);
-        assert_eq!(dto.datetime2().date().days(), 3);
+        #[cfg(feature = "tds73")]
+        {
+            let dto = DateTimeOffset::new(DateTime2::new(Date::new(3), Time::new(4, 0)), -60);
+            assert_eq!(dto.offset(), -60);
+            assert_eq!(dto.datetime2().date().days(), 3);
+        }
     }
 
+    #[cfg(feature = "tds73")]
     #[tokio::test]
     async fn time_decode_covers_three_byte_shape_and_invalid_lengths() {
         let mut reader = BytesMut::from(&[0x34, 0x12, 0x56][..]).into_sql_read_bytes();

@@ -1233,11 +1233,14 @@ mod tests {
             Err(Error::Protocol(_))
         ));
 
-        let mut input = reader(&[2]);
-        assert!(matches!(
-            date::decode(&mut input).await,
-            Err(Error::Protocol(_))
-        ));
+        #[cfg(feature = "tds73")]
+        {
+            let mut input = reader(&[2]);
+            assert!(matches!(
+                date::decode(&mut input).await,
+                Err(Error::Protocol(_))
+            ));
+        }
 
         let mut input = reader(&[]);
         assert!(matches!(
