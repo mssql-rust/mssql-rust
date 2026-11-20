@@ -385,3 +385,81 @@ valuable part. Work landed on branch `upstream/tiberius-0.13-sync`.
   workstation name (adds `libc` and unsafe FFI), and `docsrs` cfg hygiene.
 - Upstream-only CI lanes, comment trims, rustfmt-only and rename-only
   commits.
+
+---
+
+# Post-0.13 upstream follow-up (work in progress)
+
+Audit started 2026-11-20 after the 2.1.0 release. This section is an explicit
+handoff, not a claim that every open diff below has completed the full triage
+checklist. The fork's own GitHub repository had no open pull requests or
+issues, and its exact `main` commit was green in the full 37-job matrix.
+
+## Landed in this pass
+
+- [x] **#470 — copy packet payloads in one operation.** Replaced iterator-led
+  byte appends with `BytesMut::extend_from_slice` in packet, connection, codec,
+  string and binary value paths. Wire bytes are unchanged. Added a multi-packet
+  codec regression test; verified with 451 all-feature library tests, fmt and
+  all-feature clippy with warnings denied. Done: `aa2c1a8`.
+- [x] **Dependabot Cargo update repair (fork-only).** Weekly Cargo updates were
+  failing before dependency resolution because Dependabot no longer accepts a
+  one-line `rust-toolchain` file. Converted it to the equivalent supported
+  `rust-toolchain.toml` (`stable` remains selected). Verified on Rust 1.100.0
+  with Cargo metadata, fmt, all-feature clippy and 450 all-feature library
+  tests. Done: `10ae9fc`.
+
+## Already superseded here
+
+- **#460 / #469 — Attention acknowledgement across messages.** This fork's
+  `flush_stream` already drains packet-blind across response-message boundaries
+  until a trailing `DONE_ATTN`, including the separate acknowledgement message
+  observed on SQL Server, and has both live cancellation scenarios plus
+  server-free tail detection tests. The upstream patches target its separate
+  public `cancel_query` path and do not port directly.
+- **#464 — `sspi` 0.23.** This fork already requires `sspi = "0.23.1"`.
+- **#456 (installed-provider half).** This fork already honours a process-wide
+  rustls `CryptoProvider`, with a Ring fallback. The PR's distinct
+  provider-neutral feature remains under review below.
+
+## Review next
+
+- [ ] **#456 — provider-neutral rustls feature.** Full-diff review still needs
+  completion against this fork's Ring-fallback implementation. If built, add
+  the feature to the crate/site `llms.json` and `llms.txt`, README, maintainer
+  feature docs and the CI matrix; verify the dependency graph contains no
+  crypto backend and test caller-installed Ring/AWS-LC providers.
+- [ ] **#458 — per-login external authentication + SPN override.** Full diff
+  read. Additive and well isolated with a scripted TDS server, but the actual
+  Kerberos exchange was not live-tested upstream. Re-review the empty-token and
+  completion semantics alongside #465 before choosing one authentication API.
+- [ ] **#461 — opt-in exact MONEY/SMALLMONEY decoding.** Review started but the
+  whole diff still needs a clean pass. The default-off approach avoids changing
+  existing `f64` reads; verify every fixed/nullable null placeholder and live
+  round-trips at both range extremes before building.
+- [ ] **#463 — caller-supplied rustls `ClientConfig`.** Full diff read. Additive
+  and useful, but explicitly bypasses this crate's trust/client-certificate
+  settings. Document that precedence prominently and verify Required + Strict
+  handshakes (including injected `tds/8.0` ALPN) before landing.
+- [ ] **#465 — Windows SSPI Negotiate.** Review started but the whole Windows
+  FFI/test diff still needs a clean pass. It replaces `winauth` with direct
+  `windows-sys` unsafe calls and needs real Kerberos and NTLM live verification
+  on Windows, including named credentials and token cleanup.
+- [ ] **#467 / #468 — affected-row and full batch streams.** Both full diffs
+  read. #467 adds a breaking `QueryItem` variant and therefore waits for a major
+  release. #468 is additive (`BatchStream`) and is the better near-term API;
+  verify continued batches after server errors and statement/DONE ordering live
+  before choosing it.
+- [ ] **#455 — upstream dev-to-main release pipeline.** Upstream-repository CI
+  design, not a source port. This fork already has its own full matrix and OIDC
+  trusted publishing; compare only for isolated CI improvements.
+
+## Dependency follow-up
+
+- [ ] Re-run the repaired weekly Cargo update. A local non-writing
+  `cargo update --dry-run` found 12 compatible lockfile updates (`bytes`,
+  `clap`, `clap_lex`, `jiff`, `jiff-core`, `jiff-static`, `rand`, `regex`,
+  `regex-automata`, `regex-syntax`, `uuid`, `zeroize`). Apply and verify those
+  in a separate dependency-only change; do not mix them into the fixes above.
+- [x] The site dependency audit was clean: `npm outdated --json` returned an
+  empty object.
