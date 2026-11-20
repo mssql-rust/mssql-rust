@@ -14,6 +14,10 @@ forward.
 
 ## Unreleased
 
+## Version 2.1.0
+
+Released 2026-11-20.
+
 ### Added
 
 - `Row::get_column_data` exposes a cell's raw `ColumnData` for callers that do
