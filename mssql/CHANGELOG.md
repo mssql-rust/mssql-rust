@@ -14,6 +14,12 @@ forward.
 
 ## Unreleased
 
+### Fixed (tooling)
+
+- Cargo dependency updates can run again: the stable toolchain override now
+  uses Rust's supported `rust-toolchain.toml` format instead of the deprecated
+  one-line `rust-toolchain` file that Dependabot refuses to parse.
+
 ## Version 2.1.0
 
 Released 2026-11-20.
