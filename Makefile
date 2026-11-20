@@ -12,6 +12,14 @@ github-pages:
 	bin/make-github-pages
 
 # Check and test on the minimum supported Rust version (N-2) and on N-1.
-.PHONY: test-minimum-supported-rust-version
-test-minimum-supported-rust-version:
-	bin/make-test-minimum-supported-rust-version
+.PHONY: ci-minimum-supported-rust-version
+ci-minimum-supported-rust-version:
+	bin/make-ci-minimum-supported-rust-version
+
+.PHONY: test-benchmarks
+test-benchmarks:
+	bin/test-benchmarks
+
+.PHONY: test-coverage
+test-coverage:
+	bin/test-coverage

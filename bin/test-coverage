@@ -1,0 +1,5 @@
+#!/bin/sh
+# Line coverage with cargo-tarpaulin (config: mssql/tarpaulin.toml).
+set -eu
+cd "$(dirname "$0")/../mssql"
+cargo tarpaulin --config tarpaulin.toml
