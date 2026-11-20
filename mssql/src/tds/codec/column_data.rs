@@ -652,14 +652,14 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                         }
 
                         dst.put_u16_le(bytes.len() as u16);
-                        dst.extend(bytes.into_owned());
+                        dst.extend_from_slice(&bytes);
                     } else {
                         // unknown size
                         dst.put_u64_le(0xfffffffffffffffe);
                         dst.put_u32_le(bytes.len() as u32);
 
                         if !bytes.is_empty() {
-                            dst.extend(bytes.into_owned());
+                            dst.extend_from_slice(&bytes);
                             dst.put_u32_le(0);
                         }
                     }
@@ -673,7 +673,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 dst.put_u8(VarLenType::BigVarBin as u8);
                 dst.put_u16_le(8000);
                 dst.put_u16_le(bytes.len() as u16);
-                dst.extend(bytes.into_owned());
+                dst.extend_from_slice(&bytes);
             }
             (ColumnData::Binary(Some(bytes)), None) => {
                 dst.put_u8(VarLenType::BigVarBin as u8);
@@ -686,7 +686,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
 
                 if !bytes.is_empty() {
                     // Payload
-                    dst.extend(bytes.into_owned());
+                    dst.extend_from_slice(&bytes);
                     // PLP_TERMINATOR
                     dst.put_u32_le(0);
                 }

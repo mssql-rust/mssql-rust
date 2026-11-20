@@ -14,6 +14,11 @@ forward.
 
 ## Unreleased
 
+### Performance
+
+- Copy packet and column payloads into `BytesMut` in one operation instead of
+  extending the destination one byte at a time (upstream Tiberius #470).
+
 ### Fixed (tooling)
 
 - Cargo dependency updates can run again: the stable toolchain override now
