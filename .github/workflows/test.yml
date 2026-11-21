@@ -420,7 +420,7 @@ jobs:
       - name: Set up Docker
         id: setup-docker
         continue-on-error: true
-        uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5  # v5.6.0
+        uses: docker/setup-docker-action@3f1ab1ab0e29231562e4db4ca600c1a49653bac6  # v5.7.0
 
       - name: Clean up the failed Docker VM before retrying
         if: steps.setup-docker.outcome == 'failure'
@@ -430,7 +430,7 @@ jobs:
 
       - name: Set up Docker (retry)
         if: steps.setup-docker.outcome == 'failure'
-        uses: docker/setup-docker-action@7ec28a010822b4626af4874f9448a4b05ac6f3e5  # v5.6.0
+        uses: docker/setup-docker-action@3f1ab1ab0e29231562e4db4ca600c1a49653bac6  # v5.7.0
 
       - name: Install docker compose plugin
         run: brew install docker-compose
