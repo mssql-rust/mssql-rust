@@ -121,7 +121,7 @@ features = ["compat"]
 optional = true
 
 [dependencies.jiff]
-version = "0.2.45"
+version = "1.0.1"
 optional = true
 default-features = false
 features = ["std"]
@@ -220,7 +220,7 @@ env_logger = "0.11"
 azure_identity = { version = "1.0.0", default-features = false }
 url = "2.5.8"
 indicatif = "0.18"
-jiff = "0.2.45"
+jiff = "1.0.1"
 indoc = "2.0.8"
 azure_core = { version = "1.1.0", default-features = false, features = ["reqwest", "reqwest_gzip", "reqwest_deflate"] }
 # reqwest with the ring provider only: azure_core's `reqwest_rustls` feature selects aws-lc-rs.
