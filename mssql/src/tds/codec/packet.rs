@@ -23,7 +23,15 @@ impl Packet {
 
 impl Encode<BytesMut> for Packet {
     fn encode(self, dst: &mut BytesMut) -> crate::Result<()> {
-        let size = (self.payload.len() as u16 + HEADER_BYTES as u16).to_be_bytes();
+        let size = self
+            .payload
+            .len()
+            .checked_add(HEADER_BYTES)
+            .and_then(|total| u16::try_from(total).ok())
+            .ok_or_else(|| {
+                crate::Error::Conversion("packet_length: value does not fit the target type".into())
+            })?
+            .to_be_bytes();
 
         self.header.encode(dst)?;
         // `BytesMut::extend` appends an iterator one byte at a time;
@@ -77,6 +85,31 @@ mod tests {
         assert_eq!(PacketStatus::EndOfMessage, header.status());
         assert_eq!(11, header.length());
         assert_eq!(&b"abc"[..], &payload[..]);
+    }
+
+    #[test]
+    fn encode_accepts_the_largest_packet_and_rejects_one_more_byte() {
+        let largest = usize::from(u16::MAX) - HEADER_BYTES;
+
+        let mut wire = BytesMut::new();
+        Packet::new(
+            PacketHeader::batch(1),
+            BytesMut::from(vec![0; largest].as_slice()),
+        )
+        .encode(&mut wire)
+        .unwrap();
+        assert_eq!(&[0xff, 0xff], &wire[2..4]);
+
+        let err = Packet::new(
+            PacketHeader::batch(1),
+            BytesMut::from(vec![0; largest + 1].as_slice()),
+        )
+        .encode(&mut BytesMut::new())
+        .unwrap_err();
+        assert_eq!(
+            err,
+            crate::Error::Conversion("packet_length: value does not fit the target type".into())
+        );
     }
 
     #[test]

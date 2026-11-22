@@ -287,6 +287,11 @@ inherits = "test"
 debug = "none"
 incremental = false
 
+# spec/rust-checked-arithmetic RCA-ENF-4: a backstop, not a licence to panic.
+# Any operator the lints miss panics (detectably) instead of wrapping silently.
+[profile.release]
+overflow-checks = true
+
 # Faster dev/test builds: keep line tables for backtraces, drop the rest of the debug info.
 [profile.dev]
 debug = "line-tables-only"

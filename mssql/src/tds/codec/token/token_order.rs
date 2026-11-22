@@ -22,7 +22,7 @@ impl TokenOrder {
         }
         let len = byte_len / 2;
 
-        let mut column_indexes = Vec::with_capacity(len as usize);
+        let mut column_indexes = Vec::with_capacity(usize::from(len));
 
         for _ in 0..len {
             column_indexes.push(src.read_u16_le().await?);

@@ -28,14 +28,20 @@ where
     while remaining > 0 {
         let want = remaining.min(MAX_PREALLOC);
         let start = dst.len();
-        dst.resize(start + want, 0);
+        let end = start
+            .checked_add(want)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "read length overflow"))?;
+        dst.resize(end, 0);
 
         if let Err(e) = src.read_exact(&mut dst[start..]).await {
             dst.truncate(start);
             return Err(e);
         }
 
-        remaining -= want;
+        // `want` is at most `remaining`, so this cannot fail.
+        remaining = remaining
+            .checked_sub(want)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "read length underflow"))?;
     }
 
     Ok(())
@@ -83,8 +89,17 @@ macro_rules! varchar_reader {
                         Poll::Pending => return Poll::Pending,
                         Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
                         Poll::Ready(Ok(length)) => {
-                            *me.length = Some(length as usize);
-                            *me.buf = Some(Vec::with_capacity(length as usize));
+                            let length = match usize::try_from(length) {
+                                Ok(length) => length,
+                                Err(_) => {
+                                    return Poll::Ready(Err(io::Error::new(
+                                        io::ErrorKind::InvalidData,
+                                        "string length does not fit usize",
+                                    )))
+                                }
+                            };
+                            *me.length = Some(length);
+                            *me.buf = Some(Vec::with_capacity(length));
                         }
                     }
                 }
@@ -138,7 +153,7 @@ macro_rules! bytes_reader {
                 #[pin]
                 src: R,
                 buf: [u8; $bytes],
-                read: u8,
+                read: usize,
             }
         }
 
@@ -162,22 +177,27 @@ macro_rules! bytes_reader {
             fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
                 let mut me = self.project();
 
-                if *me.read == $bytes as u8 {
+                if *me.read == $bytes {
                     return Poll::Ready(Ok(Buf::$reader(&mut &me.buf[..])));
                 }
 
-                while *me.read < $bytes as u8 {
-                    *me.read += match me
-                        .src
-                        .as_mut()
-                        .poll_read(cx, &mut me.buf[*me.read as usize..])
-                    {
+                while *me.read < $bytes {
+                    let read = match me.src.as_mut().poll_read(cx, &mut me.buf[*me.read..]) {
                         Poll::Pending => return Poll::Pending,
                         Poll::Ready(Err(e)) => return Poll::Ready(Err(e.into())),
                         Poll::Ready(Ok(0)) => {
                             return Poll::Ready(Err(UnexpectedEof.into()));
                         }
-                        Poll::Ready(Ok(n)) => n as u8,
+                        Poll::Ready(Ok(n)) => n,
+                    };
+                    *me.read = match me.read.checked_add(read) {
+                        Some(total) => total,
+                        None => {
+                            return Poll::Ready(Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "read counter overflow",
+                            )))
+                        }
                     };
                 }
 

@@ -83,7 +83,7 @@ pub(crate) fn parse(input: &str) -> Result<AdoNetString, &'static str> {
                 i += 1; // consume the separating `=`
                 break;
             }
-            key.push(b[i] as char);
+            key.push(char::from(b[i]));
             i += 1;
         }
         let key = key
@@ -113,14 +113,14 @@ pub(crate) fn parse(input: &str) -> Result<AdoNetString, &'static str> {
                 if b[i] == quote {
                     // A doubled quote is a literal quote; a lone quote closes.
                     if i + 1 < n && b[i + 1] == quote {
-                        v.push(quote as char);
+                        v.push(char::from(quote));
                         i += 2;
                         continue;
                     }
                     i += 1;
                     break;
                 }
-                v.push(b[i] as char);
+                v.push(char::from(b[i]));
                 i += 1;
             }
             skip_trailing(b, &mut i, "unexpected characters after a quoted value")?;
@@ -136,7 +136,7 @@ pub(crate) fn parse(input: &str) -> Result<AdoNetString, &'static str> {
                     i += 1;
                     break;
                 }
-                v.push(b[i] as char);
+                v.push(char::from(b[i]));
                 i += 1;
             }
             skip_trailing(

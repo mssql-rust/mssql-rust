@@ -235,8 +235,8 @@ impl BaseMetaDataColumn {
 
 impl<'a> Encode<BytesMut> for TokenColMetaData<'a> {
     fn encode(self, dst: &mut BytesMut) -> crate::Result<()> {
-        dst.put_u8(TokenType::ColMetaData as u8);
-        dst.put_u16_le(self.columns.len() as u16);
+        dst.put_u8(u8::from(TokenType::ColMetaData));
+        dst.put_u16_le(crate::num::convert(self.columns.len(), "column_count")?);
 
         for col in self.columns.into_iter() {
             col.encode(dst)?;
@@ -268,7 +268,7 @@ pub(crate) fn encode_bulk_col_metadata(
     let count = u16::try_from(columns.len())
         .map_err(|_| crate::Error::BulkInput("too many columns for a bulk insert".into()))?;
 
-    dst.put_u8(TokenType::ColMetaData as u8);
+    dst.put_u8(u8::from(TokenType::ColMetaData));
     dst.put_u16_le(count);
 
     for col in columns {
@@ -329,7 +329,9 @@ impl<'a> Encode<BytesMut> for MetaDataColumn<'a> {
         dst.put_u8(length);
 
         for chr in self.col_name.encode_utf16() {
-            length += 1;
+            length = length
+                .checked_add(1)
+                .ok_or_else(|| crate::num::overflow("column_name_length"))?;
             dst.put_u16_le(chr);
         }
 
@@ -405,7 +407,7 @@ impl TokenColMetaData<'static> {
         R: SqlReadBytes + Unpin,
     {
         let column_count = src.read_u16_le().await?;
-        let mut columns = Vec::with_capacity(column_count as usize);
+        let mut columns = Vec::with_capacity(usize::from(column_count));
 
         if column_count > 0 && column_count < 0xffff {
             for _ in 0..column_count {

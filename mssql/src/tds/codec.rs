@@ -35,7 +35,10 @@ pub(crate) use tvp::{tvp_column_type, TableValue};
 pub use type_info::*;
 
 const HEADER_BYTES: usize = 8;
-const ALL_HEADERS_LEN_TX: usize = 22;
+/// Total length of the transaction-descriptor ALL_HEADERS block.
+const ALL_HEADERS_LEN_TX: u32 = 22;
+/// The same block's length without its own 4-byte `TotalLength` field.
+const ALL_HEADERS_LEN_TX_HEADER: u32 = ALL_HEADERS_LEN_TX - 4;
 
 #[derive(Debug)]
 #[repr(u16)]
@@ -45,6 +48,8 @@ enum AllHeaderTy {
     TransactionDescriptor = 2,
     TraceActivity = 3,
 }
+
+enum_into_int!(AllHeaderTy => u16);
 
 pub struct PacketCodec;
 

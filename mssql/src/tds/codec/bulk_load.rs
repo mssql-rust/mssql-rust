@@ -106,7 +106,7 @@ where
     }
 
     async fn write_packets(&mut self) -> crate::Result<()> {
-        let packet_size = (self.connection.context().packet_size() as usize) - HEADER_BYTES;
+        let packet_size = self.connection.context().payload_size()?;
 
         if self.buf.len() <= packet_size {
             return Ok(());

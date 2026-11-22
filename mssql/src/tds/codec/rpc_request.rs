@@ -1,4 +1,4 @@
-use super::{AllHeaderTy, Encode, ALL_HEADERS_LEN_TX};
+use super::{AllHeaderTy, Encode, ALL_HEADERS_LEN_TX, ALL_HEADERS_LEN_TX_HEADER};
 use crate::{tds::codec::ColumnData, BytesMutWithTypeInfo, Result, TypeInfo};
 use bytes::{BufMut, BytesMut};
 use enumflags2::{bitflags, BitFlags};
@@ -91,6 +91,8 @@ where
     }
 }
 
+enum_into_int!(RpcProcId => u8);
+
 impl<'a> From<RpcProcId> for RpcProcIdValue<'a> {
     fn from(id: RpcProcId) -> Self {
         Self::Id(id)
@@ -99,15 +101,15 @@ impl<'a> From<RpcProcId> for RpcProcIdValue<'a> {
 
 impl<'a> Encode<BytesMut> for TokenRpcRequest<'a> {
     fn encode(self, dst: &mut BytesMut) -> Result<()> {
-        dst.put_u32_le(ALL_HEADERS_LEN_TX as u32);
-        dst.put_u32_le(ALL_HEADERS_LEN_TX as u32 - 4);
-        dst.put_u16_le(AllHeaderTy::TransactionDescriptor as u16);
+        dst.put_u32_le(ALL_HEADERS_LEN_TX);
+        dst.put_u32_le(ALL_HEADERS_LEN_TX_HEADER);
+        dst.put_u16_le(u16::from(AllHeaderTy::TransactionDescriptor));
         dst.put_slice(&self.transaction_desc);
         dst.put_u32_le(1);
 
         match self.proc_id {
             RpcProcIdValue::Id(ref id) => {
-                let val = (0xffff_u32) | ((*id as u16) as u32) << 16;
+                let val = 0xffff_u32 | (u32::from(u8::from(*id)) << 16);
                 dst.put_u32_le(val);
             }
             // 2.2.6.5 RPCReqBatch: a named procedure call's `ProcName` is a

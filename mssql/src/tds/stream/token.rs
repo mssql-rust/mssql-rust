@@ -254,7 +254,7 @@ where
                     // "unhandled token type". (Upstream Tiberius 8b6e080 and
                     // 617dc43 decode them; that isn't needed here.)
                     TokenType::ColInfo | TokenType::TabName => {
-                        let len = this.conn.read_u16_le().await? as usize;
+                        let len = usize::from(this.conn.read_u16_le().await?);
                         let mut skipped = vec![0u8; len];
                         futures_util::io::AsyncReadExt::read_exact(&mut this.conn, &mut skipped)
                             .await?;

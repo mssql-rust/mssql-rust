@@ -4,7 +4,7 @@ pub(crate) async fn decode<R>(src: &mut R) -> crate::Result<ColumnData<'static>>
 where
     R: SqlReadBytes + Unpin,
 {
-    let recv_len = src.read_u8().await? as usize;
+    let recv_len = usize::from(src.read_u8().await?);
 
     let res = match recv_len {
         0 => ColumnData::Bit(None),

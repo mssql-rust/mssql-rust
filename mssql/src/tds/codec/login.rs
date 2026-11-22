@@ -1,4 +1,5 @@
 use super::Encode;
+use crate::num::convert;
 use byteorder::{LittleEndian, WriteBytesExt};
 use bytes::BytesMut;
 use enumflags2::{bitflags, BitFlags};
@@ -23,9 +24,17 @@ uint_enum! {
     }
 }
 
+enum_into_int!(FeatureLevel => u32);
+
+/// The error for a LOGIN7 message whose offsets or lengths do not fit their
+/// wire fields.
+fn login_too_large() -> crate::Error {
+    crate::Error::Conversion("login_length: value does not fit the target type".into())
+}
+
 impl FeatureLevel {
     pub fn done_row_count_bytes(self) -> u8 {
-        if self as u32 >= FeatureLevel::SqlServer2005 as u32 {
+        if self.discriminant() >= FeatureLevel::SqlServer2005.discriminant() {
             8
         } else {
             4
@@ -295,9 +304,10 @@ impl<'a> LoginMessage<'a> {
     /// so no unzeroized copy of a credential is left behind in freed heap.
     /// Same goal as upstream Tiberius 35f2fe6/d290aea, which compute the exact
     /// length instead.
-    fn encoded_len_upper_bound(&self) -> usize {
+    fn encoded_len_upper_bound(&self) -> crate::Result<usize> {
         const FIXED_PART: usize = 94;
         const FEATURE_EXT_FRAMING: usize = 64;
+        let too_large = login_too_large;
 
         let strings = [
             &self.hostname,
@@ -308,28 +318,41 @@ impl<'a> LoginMessage<'a> {
             &self.db_name,
         ]
         .iter()
-        .map(|s| s.len() * 2)
-        .sum::<usize>();
+        .try_fold(0_usize, |total, s| {
+            s.len()
+                .checked_mul(2)
+                .and_then(|bytes| total.checked_add(bytes))
+        })
+        .ok_or_else(too_large)?;
 
         let sspi = self.integrated_security.as_ref().map_or(0, Vec::len);
 
-        let fed_auth = self
-            .fed_auth_ext
-            .as_ref()
-            .map_or(0, |ext| FEATURE_EXT_FRAMING + ext.fed_auth_token.len() * 2);
+        let fed_auth = match self.fed_auth_ext.as_ref() {
+            Some(ext) => ext
+                .fed_auth_token
+                .len()
+                .checked_mul(2)
+                .and_then(|token| FEATURE_EXT_FRAMING.checked_add(token))
+                .ok_or_else(too_large)?,
+            None => 0,
+        };
 
-        FIXED_PART + strings + sspi + fed_auth
+        FIXED_PART
+            .checked_add(strings)
+            .and_then(|total| total.checked_add(sspi))
+            .and_then(|total| total.checked_add(fed_auth))
+            .ok_or_else(too_large)
     }
 
     pub(crate) fn encode_to_vec(self) -> crate::Result<Zeroizing<Vec<u8>>> {
-        let reserved = self.encoded_len_upper_bound();
+        let reserved = self.encoded_len_upper_bound()?;
         let mut cursor = Cursor::new(Vec::with_capacity(reserved));
         let reserved = cursor.get_ref().capacity();
 
         // Space for the length
         cursor.write_u32::<LittleEndian>(0)?;
 
-        cursor.write_u32::<LittleEndian>(self.tds_version as u32)?;
+        cursor.write_u32::<LittleEndian>(u32::from(self.tds_version))?;
         cursor.write_u32::<LittleEndian>(self.packet_size)?;
         cursor.write_u32::<LittleEndian>(self.client_prog_ver)?;
         cursor.write_u32::<LittleEndian>(self.client_pid)?;
@@ -340,7 +363,7 @@ impl<'a> LoginMessage<'a> {
         cursor.write_u8(self.type_flags.bits())?;
         cursor.write_u8(self.option_flags_3.bits())?;
 
-        cursor.write_u32::<LittleEndian>(self.client_timezone as u32)?;
+        cursor.write_i32::<LittleEndian>(self.client_timezone)?;
         cursor.write_u32::<LittleEndian>(self.client_lcid)?;
 
         // variable length data (OffsetLength)
@@ -360,7 +383,17 @@ impl<'a> LoginMessage<'a> {
             &"".into(), // ibChangePassword
         ];
 
-        let mut data_offset = cursor.position() as usize + var_data.len() * 2 * 2 + 6;
+        // The fixed OffsetLength table: 13 entries of (offset, length) u16
+        // pairs, plus the 6-byte ClientId, follow the current position.
+        let mut data_offset = convert::<_, usize>(cursor.position(), "login_offset")?
+            .checked_add(
+                var_data
+                    .len()
+                    .checked_mul(2 * 2)
+                    .and_then(|table| table.checked_add(6))
+                    .ok_or_else(login_too_large)?,
+            )
+            .ok_or_else(login_too_large)?;
         let mut fea_ext_offset = 0;
 
         for (i, value) in var_data.iter().enumerate() {
@@ -376,17 +409,19 @@ impl<'a> LoginMessage<'a> {
                 continue;
             }
 
-            cursor.write_u16::<LittleEndian>(data_offset as u16)?;
+            cursor.write_u16::<LittleEndian>(convert(data_offset, "login_offset")?)?;
 
             // ibSSPI
             if i == 10 {
                 let length = if let Some(ref bytes) = self.integrated_security {
                     let bak = cursor.position();
 
-                    cursor.set_position(data_offset as u64);
+                    cursor.set_position(convert(data_offset, "login_offset")?);
                     cursor.write_all(bytes)?;
 
-                    data_offset += bytes.len();
+                    data_offset = data_offset
+                        .checked_add(bytes.len())
+                        .ok_or_else(login_too_large)?;
                     cursor.set_position(bak);
 
                     bytes.len()
@@ -394,20 +429,20 @@ impl<'a> LoginMessage<'a> {
                     0
                 };
 
-                cursor.write_u16::<LittleEndian>(length as u16)?;
+                cursor.write_u16::<LittleEndian>(convert(length, "login_sspi_length")?)?;
 
                 continue;
             }
 
             // jump into the data portion of the output
             let bak = cursor.position();
-            cursor.set_position(data_offset as u64);
+            cursor.set_position(convert(data_offset, "login_offset")?);
 
             for codepoint in value.encode_utf16() {
                 cursor.write_u16::<LittleEndian>(codepoint)?;
             }
 
-            let new_position = cursor.position() as usize;
+            let new_position = convert::<_, usize>(cursor.position(), "login_offset")?;
 
             // prepare the password in MS-fashion
             if i == 2 {
@@ -417,13 +452,19 @@ impl<'a> LoginMessage<'a> {
                 }
             }
 
-            let length = new_position - data_offset;
+            let length = new_position
+                .checked_sub(data_offset)
+                .ok_or_else(login_too_large)?;
             cursor.set_position(bak);
-            data_offset += length;
+            data_offset = data_offset
+                .checked_add(length)
+                .ok_or_else(login_too_large)?;
 
             // microsoft being really consistent here... using byte offsets with utf16-length's
             // sounds like premature optimization
-            cursor.write_u16::<LittleEndian>(length as u16 / 2)?;
+            // (`length` is a whole number of UTF-16 code units, so it is even.)
+            let units = length.checked_div(2).ok_or_else(login_too_large)?;
+            cursor.write_u16::<LittleEndian>(convert(units, "login_field_length")?)?;
         }
 
         // cbSSPILong
@@ -433,12 +474,12 @@ impl<'a> LoginMessage<'a> {
         if let Some(fed_auth_ext) = self.fed_auth_ext {
             // update fea_ext_offset
             cursor.set_position(fea_ext_offset);
-            cursor.write_u16::<LittleEndian>(data_offset as u16)?;
+            cursor.write_u16::<LittleEndian>(convert(data_offset, "login_offset")?)?;
             cursor.write_u16::<LittleEndian>(4)?;
 
-            cursor.set_position(data_offset as u64);
-            data_offset += 4;
-            cursor.write_u32::<LittleEndian>(data_offset as u32)?;
+            cursor.set_position(convert(data_offset, "login_offset")?);
+            data_offset = data_offset.checked_add(4).ok_or_else(login_too_large)?;
+            cursor.write_u32::<LittleEndian>(convert(data_offset, "login_offset")?)?;
 
             cursor.write_u8(FEA_EXT_FEDAUTH)?;
 
@@ -451,10 +492,17 @@ impl<'a> LoginMessage<'a> {
             }
 
             // options (1) + TokenLength(4) + Token.length + nonce.length
-            let feature_ext_length =
-                1 + 4 + token.len() + if fed_auth_ext.nonce.is_some() { 32 } else { 0 };
+            let nonce_len = if fed_auth_ext.nonce.is_some() { 32 } else { 0 };
+            let feature_ext_length = token
+                .len()
+                .checked_add(1 + 4)
+                .and_then(|len| len.checked_add(nonce_len))
+                .ok_or_else(login_too_large)?;
 
-            cursor.write_u32::<LittleEndian>(feature_ext_length as u32)?;
+            cursor.write_u32::<LittleEndian>(convert(
+                feature_ext_length,
+                "login_feature_ext_length",
+            )?)?;
 
             let mut options: u8 = FED_AUTH_LIBRARYSECURITYTOKEN << 1;
             if fed_auth_ext.fed_auth_echo {
@@ -463,7 +511,7 @@ impl<'a> LoginMessage<'a> {
 
             cursor.write_u8(options)?;
 
-            cursor.write_u32::<LittleEndian>(token.len() as u32)?;
+            cursor.write_u32::<LittleEndian>(convert(token.len(), "login_token_length")?)?;
             cursor.write_all(token.as_slice())?;
             token.zeroize();
 
@@ -475,7 +523,8 @@ impl<'a> LoginMessage<'a> {
         }
 
         cursor.set_position(0);
-        cursor.write_u32::<LittleEndian>(cursor.get_ref().len() as u32)?;
+        let total_length = convert(cursor.get_ref().len(), "login_length")?;
+        cursor.write_u32::<LittleEndian>(total_length)?;
 
         debug_assert_eq!(
             reserved,
@@ -499,6 +548,68 @@ impl<'a> Encode<BytesMut> for LoginMessage<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn oversized_fields_are_a_conversion_error_not_a_truncated_offset() {
+        // 13 offset/length pairs + fixed header take 75 bytes, and every
+        // UTF-16 code unit takes 2: 40_000 characters push the next offset
+        // past what a u16 offset field can hold (65_535).
+        let mut login = LoginMessage::new();
+        login.user_name("u".repeat(40_000));
+        login.password("p");
+        let err = login.encode_to_vec().unwrap_err();
+        assert_eq!(
+            err,
+            crate::Error::Conversion("login_offset: value does not fit the target type".into())
+        );
+    }
+
+    #[test]
+    fn a_login_that_fits_still_encodes_with_its_exact_length() {
+        let mut login = LoginMessage::new();
+        login.user_name("user");
+        login.password("pw");
+        let wire = login.encode_to_vec().unwrap();
+        let declared = u32::from_le_bytes([wire[0], wire[1], wire[2], wire[3]]);
+        assert_eq!(usize::try_from(declared).unwrap(), wire.len());
+    }
+
+    #[test]
+    fn upper_bound_covers_the_encoded_length() {
+        let mut login = LoginMessage::new();
+        login.user_name("user");
+        let bound = login.encoded_len_upper_bound().unwrap();
+        let wire = login.encode_to_vec().unwrap();
+        assert!(bound >= wire.len());
+    }
+
+    #[test]
+    fn feature_level_discriminants_and_ordering() {
+        assert_eq!(u32::from(FeatureLevel::SqlServer2008), 0x730A_0003);
+        assert!(FeatureLevel::SqlServer2005 < FeatureLevel::SqlServer2008);
+        assert_eq!(FeatureLevel::SqlServer2005.done_row_count_bytes(), 8);
+        assert_eq!(FeatureLevel::SqlServer2000.done_row_count_bytes(), 4);
+        assert_eq!(
+            FeatureLevel::try_from(0x7400_0004_u32),
+            Ok(FeatureLevel::SqlServerN)
+        );
+        assert_eq!(FeatureLevel::try_from(0x1234_u32), Err(()));
+    }
+
+    #[test]
+    fn uint_enum_u8_conversion_matches_the_low_byte_of_the_discriminant() {
+        // `TryFrom<u8>` compares against the discriminant's low byte (the
+        // truncation the macro has always documented).
+        assert_eq!(
+            FeatureLevel::try_from(0x00_u8),
+            Ok(FeatureLevel::SqlServerV7)
+        );
+        assert_eq!(
+            FeatureLevel::try_from(0x04_u8),
+            Ok(FeatureLevel::SqlServerN)
+        );
+        assert_eq!(FeatureLevel::try_from(0x05_u8), Err(()));
+    }
+
     use super::*;
     use crate::Decode;
     use byteorder::ReadBytesExt;

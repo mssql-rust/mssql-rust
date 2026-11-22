@@ -9,7 +9,7 @@ where
     let time = match rlen {
         0 => ColumnData::Time(None),
         _ => {
-            let time = Time::decode(src, len, rlen as usize).await?;
+            let time = Time::decode(src, len, usize::from(rlen)).await?;
             ColumnData::Time(Some(time))
         }
     };

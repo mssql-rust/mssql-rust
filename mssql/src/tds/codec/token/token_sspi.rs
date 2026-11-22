@@ -24,7 +24,7 @@ impl TokenSspi {
     where
         R: SqlReadBytes + Unpin,
     {
-        let len = src.read_u16_le().await? as usize;
+        let len = usize::from(src.read_u16_le().await?);
         let mut bytes = vec![0; len];
         src.read_exact(&mut bytes[0..len]).await?;
 

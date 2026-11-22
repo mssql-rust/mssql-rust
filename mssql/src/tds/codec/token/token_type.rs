@@ -83,3 +83,5 @@ uint_enum! {
         FeatureExtAck = 0xAE,
     }
 }
+
+enum_into_int!(TokenType => u8);

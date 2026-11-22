@@ -5,6 +5,10 @@ use crate::{tds::Collation, xml::XmlSchema, Error, SqlReadBytes};
 use std::{convert::TryFrom, sync::Arc};
 
 use super::Encode;
+use crate::num::{convert, convert_wire};
+
+/// The 2-byte length-field value that declares the `(max)` form of a type.
+const MAX_LENGTH_MARKER: u16 = 0xffff;
 
 /// A length of a column in bytes or characters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,7 +82,7 @@ impl VarLenContext {
 
 impl Encode<BytesMut> for VarLenContext {
     fn encode(self, dst: &mut BytesMut) -> crate::Result<()> {
-        dst.put_u8(self.r#type() as u8);
+        dst.put_u8(u8::from(self.r#type()));
 
         // length
         match self.r#type {
@@ -93,7 +97,7 @@ impl Encode<BytesMut> for VarLenContext {
             VarLenType::Daten => (),
             #[cfg(feature = "tds73")]
             VarLenType::Timen | VarLenType::DatetimeOffsetn | VarLenType::Datetime2 => {
-                dst.put_u8(self.len() as u8);
+                dst.put_u8(convert(self.len(), "type_length")?);
             }
             VarLenType::Bitn
             | VarLenType::Intn
@@ -103,7 +107,7 @@ impl Encode<BytesMut> for VarLenContext {
             | VarLenType::Guid
             | VarLenType::Money
             | VarLenType::Datetimen => {
-                dst.put_u8(self.len() as u8);
+                dst.put_u8(convert(self.len(), "type_length")?);
             }
             VarLenType::NChar
             | VarLenType::BigChar
@@ -111,15 +115,20 @@ impl Encode<BytesMut> for VarLenContext {
             | VarLenType::BigVarChar
             | VarLenType::BigBinary
             | VarLenType::BigVarBin => {
-                dst.put_u16_le(self.len() as u16);
+                // Fallback: MAX_LENGTH_MARKER - a 2-byte length field holds at
+                // most 0xFFFE bytes, and 0xFFFF declares the `(max)` form of
+                // the type (MS-TDS 2.2.5.5.1), the only way to declare any
+                // longer column. The driver itself passes `u32::MAX` for
+                // `VARCHAR(MAX)`.
+                dst.put_u16_le(u16::try_from(self.len()).unwrap_or(MAX_LENGTH_MARKER));
             }
             VarLenType::Image | VarLenType::Text | VarLenType::NText => {
-                dst.put_u32_le(self.len() as u32);
+                dst.put_u32_le(convert(self.len(), "type_length")?);
             }
             // sql_variant's TYPE_INFO is a u32 max length (bulk insert
             // COLMETADATA for a sql_variant column).
             VarLenType::SSVariant => {
-                dst.put_u32_le(self.len() as u32);
+                dst.put_u32_le(convert(self.len(), "type_length")?);
             }
             VarLenType::Xml => (),
             // Encode-side counterpart of the decode-side fix for SSVariant
@@ -240,11 +249,14 @@ uint_enum! {
     }
 }
 
+enum_into_int!(VarLenType => u8);
+enum_into_int!(FixedLenType => u8);
+
 impl Encode<BytesMut> for TypeInfo {
     fn encode(self, dst: &mut BytesMut) -> crate::Result<()> {
         match self {
             TypeInfo::FixedLen(ty) => {
-                dst.put_u8(ty as u8);
+                dst.put_u8(u8::from(ty));
             }
             TypeInfo::VarLenSized(ctx) => ctx.encode(dst)?,
             TypeInfo::VarLenSizedPrecision {
@@ -253,31 +265,34 @@ impl Encode<BytesMut> for TypeInfo {
                 precision,
                 scale,
             } => {
-                dst.put_u8(ty as u8);
-                dst.put_u8(size as u8);
+                dst.put_u8(u8::from(ty));
+                dst.put_u8(convert(size, "type_size")?);
                 dst.put_u8(precision);
                 dst.put_u8(scale);
             }
             TypeInfo::Xml { schema, .. } => {
-                dst.put_u8(VarLenType::Xml as u8);
+                dst.put_u8(u8::from(VarLenType::Xml));
 
                 if let Some(xs) = schema {
                     dst.put_u8(1);
 
                     let db_name_encoded: Vec<u16> = xs.db_name().encode_utf16().collect();
-                    dst.put_u8(db_name_encoded.len() as u8);
+                    dst.put_u8(convert(db_name_encoded.len(), "xml_schema_db_name_length")?);
                     for chr in db_name_encoded {
                         dst.put_u16_le(chr);
                     }
 
                     let owner_encoded: Vec<u16> = xs.owner().encode_utf16().collect();
-                    dst.put_u8(owner_encoded.len() as u8);
+                    dst.put_u8(convert(owner_encoded.len(), "xml_schema_owner_length")?);
                     for chr in owner_encoded {
                         dst.put_u16_le(chr);
                     }
 
                     let collection_encoded: Vec<u16> = xs.collection().encode_utf16().collect();
-                    dst.put_u16_le(collection_encoded.len() as u16);
+                    dst.put_u16_le(convert(
+                        collection_encoded.len(),
+                        "xml_schema_collection_length",
+                    )?);
                     for chr in collection_encoded {
                         dst.put_u16_le(chr);
                     }
@@ -328,7 +343,7 @@ impl TypeInfo {
                 let len = match ty {
                     #[cfg(feature = "tds73")]
                     VarLenType::Timen | VarLenType::DatetimeOffsetn | VarLenType::Datetime2 => {
-                        src.read_u8().await? as usize
+                        usize::from(src.read_u8().await?)
                     }
                     #[cfg(feature = "tds73")]
                     VarLenType::Daten => 3,
@@ -339,19 +354,19 @@ impl TypeInfo {
                     | VarLenType::Numericn
                     | VarLenType::Guid
                     | VarLenType::Money
-                    | VarLenType::Datetimen => src.read_u8().await? as usize,
+                    | VarLenType::Datetimen => usize::from(src.read_u8().await?),
                     VarLenType::NChar
                     | VarLenType::BigChar
                     | VarLenType::NVarchar
                     | VarLenType::BigVarChar
                     | VarLenType::BigBinary
-                    | VarLenType::BigVarBin => src.read_u16_le().await? as usize,
+                    | VarLenType::BigVarBin => usize::from(src.read_u16_le().await?),
                     VarLenType::Image | VarLenType::Text | VarLenType::NText => {
-                        src.read_u32_le().await? as usize
+                        convert_wire(src.read_u32_le().await?, "type_length")?
                     }
                     // sql_variant's TYPE_INFO is a u32 max length (8016).
                     // Decoded in column_data/sql_variant.rs.
-                    VarLenType::SSVariant => src.read_u32_le().await? as usize,
+                    VarLenType::SSVariant => convert_wire(src.read_u32_le().await?, "type_length")?,
                     // CLR UDT (geography, geometry, hierarchyid, ...): UDT_INFO,
                     // MS-TDS 2.2.5.5.4. A u16 max size, then the database,
                     // schema and type names (B_VARCHAR) and the assembly-
@@ -361,7 +376,7 @@ impl TypeInfo {
                     // Upstream Tiberius 7c1075c keeps them in a
                     // `TypeInfo::Udt(UdtInfo)`, which would be breaking here.
                     VarLenType::Udt => {
-                        let max_byte_size = src.read_u16_le().await? as usize;
+                        let max_byte_size = usize::from(src.read_u16_le().await?);
                         let _db_name = src.read_b_varchar().await?;
                         let _schema_name = src.read_b_varchar().await?;
                         let _type_name = src.read_b_varchar().await?;
@@ -439,6 +454,80 @@ impl TypeInfo {
 mod tests {
     use super::*;
     use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+
+    #[test]
+    fn encode_rejects_a_length_that_does_not_fit_a_one_byte_field() {
+        let err = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Intn, 256, None))
+            .encode(&mut BytesMut::new())
+            .unwrap_err();
+        assert_eq!(
+            err,
+            Error::Conversion("type_length: value does not fit the target type".into())
+        );
+
+        // The widest length the field holds still encodes.
+        let mut buf = BytesMut::new();
+        TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Intn, 255, None))
+            .encode(&mut buf)
+            .unwrap();
+        assert_eq!(&buf[..], &[u8::from(VarLenType::Intn), 255]);
+    }
+
+    #[test]
+    fn two_byte_length_past_its_field_falls_back_to_the_max_marker() {
+        for len in [65_535_usize, 65_536, 0xffff_ffff] {
+            let mut buf = BytesMut::new();
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::NVarchar, len, None))
+                .encode(&mut buf)
+                .unwrap();
+            assert_eq!(
+                &buf[..],
+                &[u8::from(VarLenType::NVarchar), 0xff, 0xff],
+                "{len}"
+            );
+        }
+        let mut buf = BytesMut::new();
+        TypeInfo::VarLenSized(VarLenContext::new(VarLenType::NVarchar, 65_534, None))
+            .encode(&mut buf)
+            .unwrap();
+        assert_eq!(&buf[..], &[u8::from(VarLenType::NVarchar), 0xfe, 0xff]);
+    }
+
+    #[test]
+    fn encode_rejects_an_oversized_precision_size_and_xml_schema_names() {
+        let err = TypeInfo::VarLenSizedPrecision {
+            ty: VarLenType::Numericn,
+            size: 256,
+            precision: 38,
+            scale: 0,
+        }
+        .encode(&mut BytesMut::new())
+        .unwrap_err();
+        assert_eq!(
+            err,
+            Error::Conversion("type_size: value does not fit the target type".into())
+        );
+
+        let err = TypeInfo::Xml {
+            schema: Some(XmlSchema::new("d".repeat(256), "o", "c").into()),
+            size: 0xfffffffffffffffe_usize,
+        }
+        .encode(&mut BytesMut::new())
+        .unwrap_err();
+        assert_eq!(
+            err,
+            Error::Conversion(
+                "xml_schema_db_name_length: value does not fit the target type".into()
+            )
+        );
+    }
+
+    #[test]
+    fn enum_discriminants_convert_to_their_wire_bytes() {
+        assert_eq!(u8::from(VarLenType::Intn), 0x26);
+        assert_eq!(u8::from(VarLenType::NVarchar), 0xE7);
+        assert_eq!(u8::from(FixedLenType::Null), 0x1F);
+    }
 
     #[tokio::test]
     async fn round_trip() {

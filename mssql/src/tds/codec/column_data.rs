@@ -24,6 +24,7 @@ mod var_len;
 mod xml;
 
 use super::{Encode, FixedLenType, TypeInfo, VarLenType};
+use crate::num::{convert, overflow};
 #[cfg(feature = "tds73")]
 use crate::tds::time::{Date, DateTime2, DateTimeOffset, Time};
 use crate::{
@@ -42,7 +43,7 @@ const MAX_NVARCHAR_SIZE: usize = 1 << 30;
 /// value has no chunk-count limit on the wire, so without this cap a hostile
 /// server could stream chunks until the client runs out of memory. Ported
 /// from upstream Tiberius 3e6afc3.
-pub(crate) const MAX_PLP_SIZE: usize = i32::MAX as usize;
+pub(crate) const MAX_PLP_SIZE: usize = 0x7fff_ffff; // i32::MAX
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -203,6 +204,21 @@ impl<'a> ColumnData<'a> {
     }
 }
 
+/// Re-expresses `increments` (10^-`from`-second units) in 10^-`to`-second
+/// units: exact integer scaling up, truncation toward zero scaling down.
+#[cfg(feature = "tds73")]
+fn rescale_increments(increments: u64, from: u8, to: u8) -> crate::Result<u64> {
+    let factor = |digits: u8| 10u64.checked_pow(u32::from(digits));
+    match to.checked_sub(from) {
+        Some(up) => factor(up).and_then(|factor| increments.checked_mul(factor)),
+        None => from
+            .checked_sub(to)
+            .and_then(factor)
+            .and_then(|factor| increments.checked_div(factor)),
+    }
+    .ok_or_else(|| overflow("time_increments"))
+}
+
 impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
     fn encode(self, dst: &mut BytesMutWithTypeInfo<'a>) -> crate::Result<()> {
         match (self, dst.type_info()) {
@@ -211,7 +227,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
             {
                 if let Some(val) = opt {
                     dst.put_u8(1);
-                    dst.put_u8(val as u8);
+                    dst.put_u8(u8::from(val));
                 } else {
                     dst.put_u8(0);
                 }
@@ -222,15 +238,15 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 sql_variant::encode(dst, value)?;
             }
             (ColumnData::Bit(Some(val)), Some(TypeInfo::FixedLen(FixedLenType::Bit))) => {
-                dst.put_u8(val as u8);
+                dst.put_u8(u8::from(val));
             }
             (ColumnData::Bit(Some(val)), None) => {
                 // if TypeInfo was not given, encode a TypeInfo
                 // the first 1 is part of TYPE_INFO
                 // the second 1 is part of TYPE_VARBYTE
-                let header = [VarLenType::Bitn as u8, 1, 1];
+                let header = [u8::from(VarLenType::Bitn), 1, 1];
                 dst.extend_from_slice(&header);
-                dst.put_u8(val as u8);
+                dst.put_u8(u8::from(val));
             }
             (ColumnData::U8(opt), Some(TypeInfo::VarLenSized(vlc)))
                 if vlc.r#type() == VarLenType::Intn =>
@@ -246,7 +262,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 dst.put_u8(val);
             }
             (ColumnData::U8(Some(val)), None) => {
-                let header = [VarLenType::Intn as u8, 1, 1];
+                let header = [u8::from(VarLenType::Intn), 1, 1];
                 dst.extend_from_slice(&header);
                 dst.put_u8(val);
             }
@@ -264,7 +280,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 }
             }
             (ColumnData::I16(Some(val)), None) => {
-                let header = [VarLenType::Intn as u8, 2, 2];
+                let header = [u8::from(VarLenType::Intn), 2, 2];
                 dst.extend_from_slice(&header);
 
                 dst.put_i16_le(val);
@@ -283,7 +299,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 }
             }
             (ColumnData::I32(Some(val)), None) => {
-                let header = [VarLenType::Intn as u8, 4, 4];
+                let header = [u8::from(VarLenType::Intn), 4, 4];
                 dst.extend_from_slice(&header);
                 dst.put_i32_le(val);
             }
@@ -301,7 +317,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 }
             }
             (ColumnData::I64(Some(val)), None) => {
-                let header = [VarLenType::Intn as u8, 8, 8];
+                let header = [u8::from(VarLenType::Intn), 8, 8];
                 dst.extend_from_slice(&header);
                 dst.put_i64_le(val);
             }
@@ -319,7 +335,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 }
             }
             (ColumnData::F32(Some(val)), None) => {
-                let header = [VarLenType::Floatn as u8, 4, 4];
+                let header = [u8::from(VarLenType::Floatn), 4, 4];
                 dst.extend_from_slice(&header);
                 dst.put_f32_le(val);
             }
@@ -337,7 +353,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 }
             }
             (ColumnData::F64(Some(val)), None) => {
-                let header = [VarLenType::Floatn as u8, 8, 8];
+                let header = [u8::from(VarLenType::Floatn), 8, 8];
                 dst.extend_from_slice(&header);
                 dst.put_f64_le(val);
             }
@@ -392,7 +408,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 }
             }
             (ColumnData::Guid(Some(uuid)), None) => {
-                let header = [VarLenType::Guid as u8, 16, 16];
+                let header = [u8::from(VarLenType::Guid), 16, 16];
                 dst.extend_from_slice(&header);
 
                 let mut data = *uuid.as_bytes();
@@ -427,7 +443,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                             ));
                         }
 
-                        dst.put_u16_le(bytes.len() as u16);
+                        dst.put_u16_le(convert(bytes.len(), "column_length")?);
                         dst.extend_from_slice(bytes.as_slice());
                     } else {
                         // unknown size
@@ -438,7 +454,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                             "if str longer than this, need to implement multiple blobs"
                         );
 
-                        dst.put_u32_le(bytes.len() as u32);
+                        dst.put_u32_le(convert(bytes.len(), "column_length")?);
                         dst.extend_from_slice(bytes.as_slice());
 
                         if !bytes.is_empty() {
@@ -464,7 +480,11 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                             dst.put_u16_le(chr);
                         }
 
-                        let length = dst.len() - len_pos - 2;
+                        let length = dst
+                            .len()
+                            .checked_sub(len_pos)
+                            .and_then(|written| written.checked_sub(2))
+                            .ok_or_else(|| overflow("column_length"))?;
 
                         if length > vlc.len() {
                             return Err(crate::Error::BulkInput(
@@ -477,9 +497,10 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                             ));
                         }
 
+                        let length: u16 = convert(length, "column_length")?;
                         let dst: &mut [u8] = dst.borrow_mut();
                         let mut dst = &mut dst[len_pos..];
-                        dst.put_u16_le(length as u16);
+                        dst.put_u16_le(length);
                     } else {
                         // unknown size
                         dst.put_u64_le(0xfffffffffffffffe);
@@ -496,7 +517,11 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                             dst.put_u16_le(chr);
                         }
 
-                        let length = dst.len() - len_pos - 4;
+                        let length = dst
+                            .len()
+                            .checked_sub(len_pos)
+                            .and_then(|written| written.checked_sub(4))
+                            .ok_or_else(|| overflow("column_length"))?;
 
                         // No column-limit check here: this is the unknown
                         // size (MAX column) branch, where `vlc.len()` is the
@@ -513,9 +538,10 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                             dst.put_u32_le(0u32);
                         }
 
+                        let length: u32 = convert(length, "column_length")?;
                         let dst: &mut [u8] = dst.borrow_mut();
                         let mut dst = &mut dst[len_pos..];
-                        dst.put_u32_le(length as u32);
+                        dst.put_u32_le(length);
                     }
                 } else if vlc.len() < 0xffff {
                     dst.put_u16_le(0xffff);
@@ -577,7 +603,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 }
             }
             (ColumnData::String(Some(ref s)), None) if s.len() <= 4000 => {
-                dst.put_u8(VarLenType::NVarchar as u8);
+                dst.put_u8(u8::from(VarLenType::NVarchar));
                 dst.put_u16_le(8000);
                 dst.extend_from_slice(&[0u8; 5][..]);
 
@@ -587,12 +613,17 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 dst.put_u16_le(length);
 
                 for chr in s.encode_utf16() {
-                    length += 1;
+                    length = length
+                        .checked_add(1)
+                        .ok_or_else(|| overflow("column_length"))?;
                     dst.put_u16_le(chr);
                 }
 
+                let byte_length = length
+                    .checked_mul(2)
+                    .ok_or_else(|| overflow("column_length"))?;
                 let dst: &mut [u8] = dst.borrow_mut();
-                let bytes = (length * 2).to_le_bytes(); // u16, two bytes
+                let bytes = byte_length.to_le_bytes(); // u16, two bytes
 
                 for (i, byte) in bytes.iter().enumerate() {
                     dst[len_pos + i] = *byte;
@@ -600,7 +631,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
             }
             (ColumnData::String(Some(ref s)), None) => {
                 // length: 0xffff and raw collation
-                dst.put_u8(VarLenType::NVarchar as u8);
+                dst.put_u8(u8::from(VarLenType::NVarchar));
                 dst.extend_from_slice(&[0xff_u8; 2]);
                 dst.extend_from_slice(&[0u8; 5]);
 
@@ -615,7 +646,9 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 dst.put_u32_le(length);
 
                 for chr in s.encode_utf16() {
-                    length += 1;
+                    length = length
+                        .checked_add(1)
+                        .ok_or_else(|| overflow("column_length"))?;
                     dst.put_u16_le(chr);
                 }
 
@@ -624,8 +657,11 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                     dst.put_u32_le(0);
                 }
 
+                let byte_length = length
+                    .checked_mul(2)
+                    .ok_or_else(|| overflow("column_length"))?;
                 let dst: &mut [u8] = dst.borrow_mut();
-                let bytes = (length * 2).to_le_bytes(); // u32, four bytes
+                let bytes = byte_length.to_le_bytes(); // u32, four bytes
 
                 for (i, byte) in bytes.iter().enumerate() {
                     dst[len_pos + i] = *byte;
@@ -651,12 +687,12 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                             ));
                         }
 
-                        dst.put_u16_le(bytes.len() as u16);
+                        dst.put_u16_le(convert(bytes.len(), "column_length")?);
                         dst.extend_from_slice(&bytes);
                     } else {
                         // unknown size
                         dst.put_u64_le(0xfffffffffffffffe);
-                        dst.put_u32_le(bytes.len() as u32);
+                        dst.put_u32_le(convert(bytes.len(), "column_length")?);
 
                         if !bytes.is_empty() {
                             dst.extend_from_slice(&bytes);
@@ -670,19 +706,19 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 }
             }
             (ColumnData::Binary(Some(bytes)), None) if bytes.len() <= 8000 => {
-                dst.put_u8(VarLenType::BigVarBin as u8);
+                dst.put_u8(u8::from(VarLenType::BigVarBin));
                 dst.put_u16_le(8000);
-                dst.put_u16_le(bytes.len() as u16);
+                dst.put_u16_le(convert(bytes.len(), "column_length")?);
                 dst.extend_from_slice(&bytes);
             }
             (ColumnData::Binary(Some(bytes)), None) => {
-                dst.put_u8(VarLenType::BigVarBin as u8);
+                dst.put_u8(u8::from(VarLenType::BigVarBin));
                 // Max length
                 dst.put_u16_le(0xffff_u16);
                 // Also the length is unknown
                 dst.put_u64_le(0xfffffffffffffffe_u64);
                 // We'll write in one chunk, length is the whole bytes length
-                dst.put_u32_le(bytes.len() as u32);
+                dst.put_u32_le(convert(bytes.len(), "column_length")?);
 
                 if !bytes.is_empty() {
                     // Payload
@@ -705,7 +741,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 dt.encode(dst)?;
             }
             (ColumnData::DateTime(Some(dt)), None) => {
-                dst.extend_from_slice(&[VarLenType::Datetimen as u8, 8, 8]);
+                dst.extend_from_slice(&[u8::from(VarLenType::Datetimen), 8, 8]);
                 dt.encode(&mut *dst)?;
             }
             (ColumnData::SmallDateTime(opt), Some(TypeInfo::VarLenSized(vlc)))
@@ -725,7 +761,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 dt.encode(dst)?;
             }
             (ColumnData::SmallDateTime(Some(dt)), None) => {
-                dst.extend_from_slice(&[VarLenType::Datetimen as u8, 4, 4]);
+                dst.extend_from_slice(&[u8::from(VarLenType::Datetimen), 4, 4]);
                 dt.encode(&mut *dst)?;
             }
             #[cfg(feature = "tds73")]
@@ -741,7 +777,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
             }
             #[cfg(feature = "tds73")]
             (ColumnData::Date(Some(date)), None) => {
-                dst.extend_from_slice(&[VarLenType::Daten as u8, 3]);
+                dst.extend_from_slice(&[u8::from(VarLenType::Daten), 3]);
                 date.encode(&mut *dst)?;
             }
             #[cfg(feature = "tds73")]
@@ -757,7 +793,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
             }
             #[cfg(feature = "tds73")]
             (ColumnData::Time(Some(time)), None) => {
-                dst.extend_from_slice(&[VarLenType::Timen as u8, time.scale(), time.len()?]);
+                dst.extend_from_slice(&[u8::from(VarLenType::Timen), time.scale(), time.len()?]);
                 time.encode(&mut *dst)?;
             }
             #[cfg(feature = "tds73")]
@@ -773,7 +809,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                     // algorithm it uses can represent unambiguously).
                     const DAYS_FROM_YEAR_ONE_TO_1753: i64 = 639_905;
 
-                    let days_since_year_one = dt2.date().days() as i64;
+                    let days_since_year_one = i64::from(dt2.date().days());
 
                     if days_since_year_one < DAYS_FROM_YEAR_ONE_TO_1753 {
                         return Err(crate::Error::Conversion(
@@ -786,13 +822,23 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                         ));
                     }
 
-                    let days = (days_since_year_one - DAYS_FROM_YEAR_ONE_TO_1900) as i32;
+                    let days: i32 = days_since_year_one
+                        .checked_sub(DAYS_FROM_YEAR_ONE_TO_1900)
+                        .ok_or_else(|| overflow("datetime_days"))
+                        .and_then(|days| convert(days, "datetime_days"))?;
 
                     // Convert this DateTime2's 10^-scale-second increments to
                     // the legacy `datetime` type's 1/300-of-a-second ones.
                     let time = dt2.time();
-                    let seconds_fragments =
-                        (time.increments() as u128 * 300 / 10u128.pow(time.scale() as u32)) as u32;
+                    let seconds_fragments: u32 = 10u128
+                        .checked_pow(u32::from(time.scale()))
+                        .and_then(|divisor| {
+                            u128::from(time.increments())
+                                .checked_mul(300)
+                                .and_then(|scaled| scaled.checked_div(divisor))
+                        })
+                        .ok_or_else(|| overflow("datetime_seconds_fragments"))
+                        .and_then(|fragments| convert(fragments, "datetime_seconds_fragments"))?;
 
                     dst.put_u8(8);
                     DateTime::new(days, seconds_fragments).encode(dst)?;
@@ -805,12 +851,12 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 if vlc.r#type() == VarLenType::Datetime2 =>
             {
                 if let Some(mut dt2) = opt {
-                    if dt2.time().scale() != vlc.len() as u8 {
+                    let target_scale: u8 = convert(vlc.len(), "time_scale")?;
+                    if dt2.time().scale() != target_scale {
                         let time = dt2.time();
-                        let increments = (time.increments() as f64
-                            * 10_f64.powi(vlc.len() as i32 - time.scale() as i32))
-                            as u64;
-                        dt2 = DateTime2::new(dt2.date(), Time::new(increments, vlc.len() as u8));
+                        let increments =
+                            rescale_increments(time.increments(), time.scale(), target_scale)?;
+                        dt2 = DateTime2::new(dt2.date(), Time::new(increments, target_scale));
                     }
                     dst.put_u8(dt2.time().len()? + 3);
                     dt2.encode(dst)?;
@@ -821,7 +867,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
             #[cfg(feature = "tds73")]
             (ColumnData::DateTime2(Some(dt)), None) => {
                 let len = dt.time().len()? + 3;
-                dst.extend_from_slice(&[VarLenType::Datetime2 as u8, dt.time().scale(), len]);
+                dst.extend_from_slice(&[u8::from(VarLenType::Datetime2), dt.time().scale(), len]);
                 dt.encode(&mut *dst)?;
             }
             #[cfg(feature = "tds73")]
@@ -838,7 +884,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
             #[cfg(feature = "tds73")]
             (ColumnData::DateTimeOffset(Some(dto)), None) => {
                 let headers = [
-                    VarLenType::DatetimeOffsetn as u8,
+                    u8::from(VarLenType::DatetimeOffsetn),
                     dto.datetime2().time().scale(),
                     dto.datetime2().time().len()? + 5,
                 ];
@@ -854,7 +900,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
                 }
             }
             (ColumnData::Xml(Some(xml)), None) => {
-                dst.put_u8(VarLenType::Xml as u8);
+                dst.put_u8(u8::from(VarLenType::Xml));
                 dst.put_u8(0);
                 xml.into_owned().encode(&mut *dst)?;
             }
@@ -884,7 +930,7 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
             }
             (ColumnData::Numeric(Some(num)), None) => {
                 let headers = &[
-                    VarLenType::Numericn as u8,
+                    u8::from(VarLenType::Numericn),
                     num.len(),
                     num.precision(),
                     num.scale(),
@@ -898,23 +944,33 @@ impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
             // Server accepts a typed NULL as an RPC OUTPUT placeholder, so
             // `call_procedure` can take e.g. `&None::<i32>`. Ported from
             // upstream Tiberius 73e79d4.
-            (ColumnData::Bit(None), None) => dst.extend_from_slice(&[VarLenType::Bitn as u8, 1, 0]),
-            (ColumnData::U8(None), None) => dst.extend_from_slice(&[VarLenType::Intn as u8, 1, 0]),
-            (ColumnData::I16(None), None) => dst.extend_from_slice(&[VarLenType::Intn as u8, 2, 0]),
-            (ColumnData::I32(None), None) => dst.extend_from_slice(&[VarLenType::Intn as u8, 4, 0]),
-            (ColumnData::I64(None), None) => dst.extend_from_slice(&[VarLenType::Intn as u8, 8, 0]),
+            (ColumnData::Bit(None), None) => {
+                dst.extend_from_slice(&[u8::from(VarLenType::Bitn), 1, 0])
+            }
+            (ColumnData::U8(None), None) => {
+                dst.extend_from_slice(&[u8::from(VarLenType::Intn), 1, 0])
+            }
+            (ColumnData::I16(None), None) => {
+                dst.extend_from_slice(&[u8::from(VarLenType::Intn), 2, 0])
+            }
+            (ColumnData::I32(None), None) => {
+                dst.extend_from_slice(&[u8::from(VarLenType::Intn), 4, 0])
+            }
+            (ColumnData::I64(None), None) => {
+                dst.extend_from_slice(&[u8::from(VarLenType::Intn), 8, 0])
+            }
             (ColumnData::F32(None), None) => {
-                dst.extend_from_slice(&[VarLenType::Floatn as u8, 4, 0])
+                dst.extend_from_slice(&[u8::from(VarLenType::Floatn), 4, 0])
             }
             (ColumnData::F64(None), None) => {
-                dst.extend_from_slice(&[VarLenType::Floatn as u8, 8, 0])
+                dst.extend_from_slice(&[u8::from(VarLenType::Floatn), 8, 0])
             }
             (ColumnData::Guid(None), None) => {
-                dst.extend_from_slice(&[VarLenType::Guid as u8, 16, 0])
+                dst.extend_from_slice(&[u8::from(VarLenType::Guid), 16, 0])
             }
             (_, None) => {
                 // Any other None/null: the untyped NULLTYPE.
-                dst.put_u8(FixedLenType::Null as u8);
+                dst.put_u8(u8::from(FixedLenType::Null));
             }
             (v, ref ti) => {
                 return Err(crate::Error::BulkInput(
@@ -956,6 +1012,25 @@ impl<'a> IntoSql<'a> for ColumnData<'a> {
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(feature = "tds73")]
+    #[test]
+    fn rescale_increments_scales_up_exactly_and_down_by_truncation() {
+        assert_eq!(rescale_increments(15, 1, 3).unwrap(), 1500);
+        assert_eq!(rescale_increments(15, 3, 3).unwrap(), 15);
+        assert_eq!(rescale_increments(1599, 3, 1).unwrap(), 15);
+        assert_eq!(rescale_increments(0, 0, 7).unwrap(), 0);
+    }
+
+    #[cfg(feature = "tds73")]
+    #[test]
+    fn rescale_increments_overflow_is_an_error() {
+        let overflow = crate::Error::Conversion("time_increments: arithmetic overflow".into());
+        assert_eq!(rescale_increments(u64::MAX, 0, 7).unwrap_err(), overflow);
+        assert_eq!(rescale_increments(1, 0, 20).unwrap_err(), overflow);
+        assert_eq!(rescale_increments(1, 20, 0).unwrap_err(), overflow);
+    }
+
     use super::*;
 
     #[test]

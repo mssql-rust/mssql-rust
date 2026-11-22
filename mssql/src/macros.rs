@@ -15,15 +15,31 @@ macro_rules! uint_enum {
             $( $( #[$attr ])* $variant = $val, )*
         }
 
+        impl $ty {
+            #[expect(
+                clippy::as_conversions,
+                reason = "RCA-EXC-2: fieldless enum whose discriminants are at most 32 bits wide; the cast returns the declared discriminant exactly"
+            )]
+            const fn discriminant(self) -> u32 {
+                self as u32
+            }
+
+            /// Lowest byte of the discriminant. Some enums using this macro
+            /// (e.g. FeatureLevel) have discriminants wider than u8; the
+            /// truncation to one byte is intentional: matching input `n`
+            /// never accidentally succeeds against a differently-valued
+            /// variant.
+            const fn low_byte(self) -> u8 {
+                let [low, _, _, _] = self.discriminant().to_le_bytes();
+                low
+            }
+        }
+
         impl ::std::convert::TryFrom<u8> for $ty {
             type Error = ();
             fn try_from(n: u8) -> ::std::result::Result<$ty, ()> {
                 match n {
-                    // Some enums using this macro (e.g. FeatureLevel) have
-                    // discriminants wider than u8; the truncating cast below
-                    // is intentional: matching input `n` never accidentally
-                    // succeeds against a differently-valued variant.
-                    $( #[allow(clippy::cast_enum_truncation)] x if x == $ty::$variant as u8 => Ok($ty::$variant), )*
+                    $( x if x == $ty::$variant.low_byte() => Ok($ty::$variant), )*
                     _ => Err(()),
                 }
             }
@@ -33,12 +49,30 @@ macro_rules! uint_enum {
             type Error = ();
             fn try_from(n: u32) -> ::std::result::Result<$ty, ()> {
                 match n {
-                    $( x if x == $ty::$variant as u32 => Ok($ty::$variant), )*
+                    $( x if x == $ty::$variant.discriminant() => Ok($ty::$variant), )*
                     _ => Err(()),
                 }
             }
         }
     }
+}
+
+/// `impl From<$ty> for $int` for a fieldless enum whose discriminants fit `$int`: the one
+/// place its discriminant is read (RCA-CONV-1), so no call site needs `as`.
+macro_rules! enum_into_int {
+    ($ty:ty => $int:ty) => {
+        impl ::std::convert::From<$ty> for $int {
+            fn from(value: $ty) -> $int {
+                // RCA-EXC-2: fieldless enum whose declared discriminants all
+                // fit the target integer type, so the cast returns the
+                // declared discriminant exactly. (Clippy's `as_conversions`
+                // does not report a cast whose target type comes from a macro
+                // argument, so no `#[expect]` can record it; this comment
+                // and the per-enum tests do.)
+                value as $int
+            }
+        }
+    };
 }
 
 macro_rules! to_sql {

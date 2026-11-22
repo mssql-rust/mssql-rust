@@ -16,7 +16,7 @@
 #[cfg(not(feature = "tds73"))]
 use super::DateTime as DateTime1;
 #[cfg(feature = "tds73")]
-use super::{Date, DateTime2, DateTimeOffset, Time};
+use super::{DateTime2, DateTimeOffset, Time};
 use crate::tds::codec::ColumnData;
 pub use jiff::civil::{Date as CivilDate, DateTime as CivilDateTime, Time as CivilTime};
 #[cfg(feature = "tds73")]
@@ -58,46 +58,57 @@ fn from_nanos(nanos: i64) -> crate::Result<civil::Time> {
 
 #[inline]
 fn from_sec_fragments(sec_fragments: i64) -> crate::Result<civil::Time> {
-    from_nanos(sec_fragments * (1e9 as i64) / 300)
+    // 1/300 s is 10^9 / 300 ns; multiply first, divide once (RCA-DIV-4).
+    let nanos = sec_fragments
+        .checked_mul(1_000_000_000)
+        .and_then(|scaled| scaled.checked_div(300))
+        .ok_or_else(|| out_of_range("time of day"))?;
+    from_nanos(nanos)
 }
 
 #[inline]
 #[cfg(feature = "tds73")]
 fn from_mins(mins: u32) -> crate::Result<civil::Time> {
-    from_nanos(mins as i64 * 60 * 1_000_000_000)
+    let nanos = i64::from(mins)
+        .checked_mul(60 * 1_000_000_000)
+        .ok_or_else(|| out_of_range("time of day"))?;
+    from_nanos(nanos)
 }
 
 #[inline]
 fn to_days(date: civil::Date, start_year: i16) -> i64 {
-    (date - civil::date(start_year, 1, 1)).get_days() as i64
+    i64::from((date - civil::date(start_year, 1, 1)).get_days())
 }
 
 #[inline]
 fn to_nanos(time: civil::Time) -> u64 {
-    time.hour() as u64 * 3_600_000_000_000
-        + time.minute() as u64 * 60_000_000_000
-        + time.second() as u64 * 1_000_000_000
-        + time.subsec_nanosecond() as u64
+    // jiff's hour, minute, second and sub-second nanosecond are never
+    // negative (`unsigned_abs` is the identity there), and the total is
+    // below 86 400 * 10^9, far inside u64 (RCA-EXC-2).
+    u64::from(time.hour().unsigned_abs()) * 3_600_000_000_000
+        + u64::from(time.minute().unsigned_abs()) * 60_000_000_000
+        + u64::from(time.second().unsigned_abs()) * 1_000_000_000
+        + u64::from(time.subsec_nanosecond().unsigned_abs())
 }
 
 #[inline]
 #[cfg(not(feature = "tds73"))]
-fn to_sec_fragments(time: civil::Time) -> i64 {
-    to_nanos(time) as i64 * 300 / (1e9 as i64)
+fn to_sec_fragments(time: civil::Time) -> u32 {
+    super::legacy_fragments(to_nanos(time))
 }
 
 #[cfg(feature = "tds73")]
 fn dt2_to_civil(dt2: &DateTime2) -> crate::Result<civil::DateTime> {
-    let ns = dt2.time.increments as i64 * 10i64.pow(9 - dt2.time.scale as u32);
+    let ns = i64::try_from(dt2.time.nanoseconds()?).map_err(|_| out_of_range("time of day"))?;
     Ok(civil::DateTime::from_parts(
-        from_days(dt2.date.days() as i64, 1)?,
+        from_days(i64::from(dt2.date.days()), 1)?,
         from_nanos(ns)?,
     ))
 }
 
 #[cfg(feature = "tds73")]
 fn civil_to_dt2(dt: civil::DateTime) -> DateTime2 {
-    let date = Date::new(to_days(dt.date(), 1) as u32);
+    let date = super::date_from_days(to_days(dt.date(), 1));
     let time = Time {
         increments: to_nanos(dt.time()) / 100,
         scale: 7,
@@ -121,14 +132,17 @@ fn timestamp_to_dt2(ts: &Timestamp) -> DateTime2 {
 
 #[cfg(feature = "tds73")]
 fn zoned_to_dto(z: &Zoned) -> DateTimeOffset {
-    let offset = (z.offset().seconds() / 60) as i16;
+    let offset = super::offset_minutes(z.offset().seconds());
     DateTimeOffset::new(timestamp_to_dt2(&z.timestamp()), offset)
 }
 
 #[cfg(feature = "tds73")]
 fn dto_to_zoned(dto: &DateTimeOffset) -> crate::Result<Zoned> {
     let ts = dto_to_timestamp(dto)?;
-    let off = jiff::tz::Offset::from_seconds(dto.offset as i32 * 60)
+    let seconds = i32::from(dto.offset)
+        .checked_mul(60)
+        .ok_or_else(|| out_of_range("datetimeoffset offset"))?;
+    let off = jiff::tz::Offset::from_seconds(seconds)
         .map_err(|e| crate::Error::Conversion(e.to_string().into()))?;
     Ok(ts.to_zoned(jiff::tz::TimeZone::fixed(off)))
 }
@@ -183,25 +197,25 @@ impl crate::FromSqlOwned for Zoned {
 from_sql!(
     civil::DateTime:
         ColumnData::SmallDateTime(ref dt) => dt.map(|dt| Ok::<_, crate::Error>(civil::DateTime::from_parts(
-            from_days(dt.days as i64, 1900)?,
-            from_mins(dt.seconds_fragments as u32)?,
+            from_days(i64::from(dt.days), 1900)?,
+            from_mins(u32::from(dt.seconds_fragments))?,
         ))).transpose()?,
         ColumnData::DateTime2(ref dt) => dt.map(|dt| dt2_to_civil(&dt)).transpose()?,
         ColumnData::DateTime(ref dt) => dt.map(|dt| Ok::<_, crate::Error>(civil::DateTime::from_parts(
-            from_days(dt.days as i64, 1900)?,
-            from_sec_fragments(dt.seconds_fragments as i64)?
+            from_days(i64::from(dt.days), 1900)?,
+            from_sec_fragments(i64::from(dt.seconds_fragments))?
         ))).transpose()?;
     civil::Time:
         ColumnData::Time(ref time) => time.map(|time| {
-            from_nanos(time.increments as i64 * 10i64.pow(9 - time.scale as u32))
+            from_nanos(i64::try_from(time.nanoseconds()?).map_err(|_| out_of_range("time of day"))?)
         }).transpose()?;
     civil::Date:
-        ColumnData::Date(ref date) => date.map(|date| from_days(date.days() as i64, 1)).transpose()?
+        ColumnData::Date(ref date) => date.map(|date| from_days(i64::from(date.days()), 1)).transpose()?
 );
 
 #[cfg(feature = "tds73")]
 to_sql!(self_,
-        civil::Date: (ColumnData::Date, Date::new(to_days(*self_, 1) as u32));
+        civil::Date: (ColumnData::Date, super::date_from_days(to_days(*self_, 1)));
         civil::Time: (ColumnData::Time, Time { increments: to_nanos(*self_) / 100, scale: 7 });
         civil::DateTime: (ColumnData::DateTime2, civil_to_dt2(*self_));
         Timestamp: (ColumnData::DateTime2, timestamp_to_dt2(self_));
@@ -210,7 +224,7 @@ to_sql!(self_,
 
 #[cfg(feature = "tds73")]
 into_sql!(self_,
-        civil::Date: (ColumnData::Date, Date::new(to_days(self_, 1) as u32));
+        civil::Date: (ColumnData::Date, super::date_from_days(to_days(self_, 1)));
         civil::Time: (ColumnData::Time, Time { increments: to_nanos(self_) / 100, scale: 7 });
         civil::DateTime: (ColumnData::DateTime2, civil_to_dt2(self_));
         Timestamp: (ColumnData::DateTime2, timestamp_to_dt2(&self_));
@@ -220,16 +234,16 @@ into_sql!(self_,
 #[cfg(not(feature = "tds73"))]
 to_sql!(self_,
         civil::DateTime: (ColumnData::DateTime, {
-            let days = to_days(self_.date(), 1900) as i32;
-            DateTime1::new(days, to_sec_fragments(self_.time()) as u32)
+            let days = super::legacy_days(to_days(self_.date(), 1900));
+            DateTime1::new(days, to_sec_fragments(self_.time()))
         });
 );
 
 #[cfg(not(feature = "tds73"))]
 into_sql!(self_,
         civil::DateTime: (ColumnData::DateTime, {
-            let days = to_days(self_.date(), 1900) as i32;
-            DateTime1::new(days, to_sec_fragments(self_.time()) as u32)
+            let days = super::legacy_days(to_days(self_.date(), 1900));
+            DateTime1::new(days, to_sec_fragments(self_.time()))
         });
 );
 
@@ -237,14 +251,15 @@ into_sql!(self_,
 from_sql!(
     civil::DateTime:
         ColumnData::DateTime(ref dt) => dt.map(|dt| Ok::<_, crate::Error>(civil::DateTime::from_parts(
-            from_days(dt.days as i64, 1900)?,
-            from_sec_fragments(dt.seconds_fragments as i64)?
+            from_days(i64::from(dt.days), 1900)?,
+            from_sec_fragments(i64::from(dt.seconds_fragments))?
         ))).transpose()?
 );
 
 #[cfg(all(test, feature = "tds73"))]
 mod tests {
     use super::*;
+    use crate::tds::time::Date;
     use crate::{FromSql, FromSqlOwned, IntoSql};
     use jiff::tz::{Offset, TimeZone};
 

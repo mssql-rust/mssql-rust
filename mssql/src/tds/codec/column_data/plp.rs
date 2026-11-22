@@ -8,7 +8,7 @@ where
     match len {
         // Fixed size
         len if len < 0xffff => {
-            let len = src.read_u16_le().await? as u64;
+            let len = usize::from(src.read_u16_le().await?);
 
             match len {
                 // NULL
@@ -19,7 +19,7 @@ where
                     // reporters measured a 3x slowdown on varchar(max)-heavy
                     // workloads from the old per-byte version (#226).
                     let mut data = Vec::new();
-                    crate::sql_read_bytes::read_bytes_into(src, &mut data, len as usize).await?;
+                    crate::sql_read_bytes::read_bytes_into(src, &mut data, len).await?;
 
                     Ok(Some(data))
                 }
@@ -37,11 +37,19 @@ where
                 // Known size. `len` is an untrusted 64-bit wire value: cap the
                 // up-front reservation (a value near u64::MAX used to be a
                 // capacity-overflow panic, and anything large an OOM abort).
-                _ => Vec::with_capacity((len as usize).min(crate::sql_read_bytes::MAX_PREALLOC)),
+                _ => Vec::with_capacity(
+                    // Fallback: MAX_PREALLOC - the reservation is capped at
+                    // MAX_PREALLOC by design, so a length that does not even
+                    // fit `usize` is simply "more than the cap".
+                    usize::try_from(len).map_or(crate::sql_read_bytes::MAX_PREALLOC, |len| {
+                        len.min(crate::sql_read_bytes::MAX_PREALLOC)
+                    }),
+                ),
             };
 
             loop {
-                let chunk_size = src.read_u32_le().await? as usize;
+                let chunk_size: usize =
+                    crate::num::convert_wire(src.read_u32_le().await?, "plp_chunk_size")?;
 
                 if chunk_size == 0 {
                     break; // found a sentinel, we're done
@@ -49,7 +57,12 @@ where
 
                 // The chunk count of an "unknown length" PLP value is unbounded
                 // on the wire, so cap the running total.
-                if data.len().saturating_add(chunk_size) > super::MAX_PLP_SIZE {
+                // A total that overflows `usize` is also over the cap.
+                let over_cap = data
+                    .len()
+                    .checked_add(chunk_size)
+                    .is_none_or(|total| total > super::MAX_PLP_SIZE);
+                if over_cap {
                     return Err(crate::Error::Protocol(
                         format!(
                             "PLP value exceeds the maximum supported size of {} bytes",

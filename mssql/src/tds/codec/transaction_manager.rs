@@ -4,7 +4,7 @@
 //! Tiberius (tiberius-rs/tiberius 8338bb8 and 89cab5d, by Matthew Jackson).
 //! Thanks to the Tiberius team.
 
-use super::{AllHeaderTy, Encode, ALL_HEADERS_LEN_TX};
+use super::{AllHeaderTy, Encode, ALL_HEADERS_LEN_TX, ALL_HEADERS_LEN_TX_HEADER};
 use bytes::{BufMut, BytesMut};
 use std::borrow::Cow;
 
@@ -17,6 +17,8 @@ enum RequestType {
     Rollback = 8,
     Save = 9,
 }
+
+enum_into_int!(RequestType => u16);
 
 /// The isolation level for [`Client::begin_transaction_with_isolation`].
 ///
@@ -38,6 +40,8 @@ pub enum IsolationLevel {
     /// `SNAPSHOT` (the database must allow snapshot isolation).
     Snapshot = 0x05,
 }
+
+enum_into_int!(IsolationLevel => u8);
 
 #[derive(Debug, Clone)]
 pub(crate) struct TransactionManagerRequest<'a> {
@@ -91,16 +95,16 @@ impl<'a> TransactionManagerRequest<'a> {
 
 impl Encode<BytesMut> for TransactionManagerRequest<'_> {
     fn encode(self, dst: &mut BytesMut) -> crate::Result<()> {
-        dst.put_u32_le(ALL_HEADERS_LEN_TX as u32);
-        dst.put_u32_le(ALL_HEADERS_LEN_TX as u32 - 4);
-        dst.put_u16_le(AllHeaderTy::TransactionDescriptor as u16);
+        dst.put_u32_le(ALL_HEADERS_LEN_TX);
+        dst.put_u32_le(ALL_HEADERS_LEN_TX_HEADER);
+        dst.put_u16_le(u16::from(AllHeaderTy::TransactionDescriptor));
         dst.put_slice(&self.transaction_desc);
         dst.put_u32_le(1);
 
-        dst.put_u16_le(self.ty as u16);
+        dst.put_u16_le(u16::from(self.ty));
 
         if self.ty == RequestType::Begin {
-            dst.put_u8(self.isolation_level as u8);
+            dst.put_u8(u8::from(self.isolation_level));
         }
 
         // The transaction (or savepoint) name: a one-byte length, then
@@ -109,9 +113,17 @@ impl Encode<BytesMut> for TransactionManagerRequest<'_> {
         // ("The transaction name has the odd length 3"), found by live
         // testing. Upstream sends the character count. So names are capped
         // at 127 characters; overflow is an error rather than a wrap.
-        let bytes = u8::try_from(self.name.encode_utf16().count() * 2).map_err(|_| {
-            crate::Error::Conversion("transaction name is longer than 127 UTF-16 code units".into())
-        })?;
+        let bytes = self
+            .name
+            .encode_utf16()
+            .count()
+            .checked_mul(2)
+            .and_then(|bytes| u8::try_from(bytes).ok())
+            .ok_or_else(|| {
+                crate::Error::Conversion(
+                    "transaction name is longer than 127 UTF-16 code units".into(),
+                )
+            })?;
         dst.put_u8(bytes);
         for u in self.name.encode_utf16() {
             dst.put_u16_le(u);

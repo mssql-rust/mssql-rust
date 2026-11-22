@@ -27,7 +27,12 @@ where
         }
         Datetimen => {
             let rlen = src.read_u8().await?;
-            super::datetimen::decode(src, rlen, len as u8).await?
+            super::datetimen::decode(
+                src,
+                rlen,
+                crate::num::convert_wire(len, "datetimen_length")?,
+            )
+            .await?
         }
         #[cfg(feature = "tds73")]
         Daten => super::date::decode(src).await?,

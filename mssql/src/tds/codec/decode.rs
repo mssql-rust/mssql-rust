@@ -21,7 +21,7 @@ impl Decoder for PacketCodec {
         }
 
         let header = PacketHeader::decode(&mut BytesMut::from(&src[0..HEADER_BYTES]))?;
-        let length = header.length() as usize;
+        let length = usize::from(header.length());
 
         if src.len() < length {
             src.reserve(length);

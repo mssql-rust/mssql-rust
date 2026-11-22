@@ -37,6 +37,8 @@ uint_enum! {
 
 }
 
+enum_into_int!(EncryptionLevel => u8);
+
 impl EncryptionLevel {
     /// The value actually placed on the wire in the PRELOGIN packet's
     /// `ENCRYPTION` field. `Strict`'s PRELOGIN exchange happens *inside* an
@@ -49,8 +51,8 @@ impl EncryptionLevel {
     /// PRELOGIN field to mean.
     pub(crate) fn as_wire_value(self) -> u8 {
         match self {
-            EncryptionLevel::Strict => EncryptionLevel::Required as u8,
-            other => other as u8,
+            EncryptionLevel::Strict => u8::from(EncryptionLevel::Required),
+            other => u8::from(other),
         }
     }
 }

@@ -53,7 +53,9 @@ impl Numeric {
 
     #[inline]
     fn pow_scale(self) -> i128 {
-        10i128.pow(self.scale as u32)
+        // Proven bound (RCA-EXC-2): the constructor asserts scale <= 38, and
+        // 10^38 < i128::MAX.
+        10i128.pow(u32::from(self.scale))
     }
 
     /// The scale (where is the decimal point) of the value.
@@ -95,14 +97,19 @@ impl Numeric {
         match target_scale.cmp(&self.scale) {
             Ordering::Equal => Some(self),
             Ordering::Greater => {
-                let factor = 10i128.checked_pow((target_scale - self.scale) as u32)?;
+                let factor =
+                    10i128.checked_pow(u32::from(target_scale.checked_sub(self.scale)?))?;
                 let value = self.value.checked_mul(factor)?;
                 Some(Numeric::new_with_scale(value, target_scale))
             }
             Ordering::Less => {
-                let divisor = 10i128.pow((self.scale - target_scale) as u32);
-                if self.value % divisor == 0 {
-                    Some(Numeric::new_with_scale(self.value / divisor, target_scale))
+                let divisor =
+                    10i128.checked_pow(u32::from(self.scale.checked_sub(target_scale)?))?;
+                if self.value.checked_rem(divisor)? == 0 {
+                    Some(Numeric::new_with_scale(
+                        self.value.checked_div(divisor)?,
+                        target_scale,
+                    ))
                 } else {
                     None
                 }
@@ -123,25 +130,37 @@ impl Numeric {
     where
         R: SqlReadBytes + Unpin,
     {
-        fn decode_d128(buf: &[u8]) -> u128 {
-            let low_part = LittleEndian::read_u64(&buf[0..]) as u128;
+        fn decode_d128(buf: &[u8]) -> crate::Result<u128> {
+            let low_part = u128::from(LittleEndian::read_u64(&buf[0..]));
 
             if !buf[8..].iter().any(|x| *x != 0) {
-                return low_part;
+                return Ok(low_part);
             }
 
             let high_part = match buf.len() {
-                12 => LittleEndian::read_u32(&buf[8..]) as u128,
-                16 => LittleEndian::read_u64(&buf[8..]) as u128,
-                _ => unreachable!(),
+                12 => u128::from(LittleEndian::read_u32(&buf[8..])),
+                16 => u128::from(LittleEndian::read_u64(&buf[8..])),
+                other => {
+                    return Err(Error::Protocol(
+                        format!("decimal/numeric: invalid magnitude length of {other}").into(),
+                    ))
+                }
             };
 
             // No big-endian swap: `LittleEndian::read_*` already yields host
             // values. The former `cfg(target_endian = "big")` swap corrupted
             // values on big-endian hosts (removed upstream in 3e6afc3).
 
-            let high_part = high_part * (u64::MAX as u128 + 1);
-            low_part + high_part
+            // 2^64: the weight of the high part (a constant, RCA-EXC-1).
+            const TWO_POW_64: u128 = 1 << 64;
+            high_part
+                .checked_mul(TWO_POW_64)
+                .and_then(|high_part| low_part.checked_add(high_part))
+                .ok_or_else(|| Error::Protocol("decimal/numeric: magnitude out of range".into()))
+        }
+
+        fn magnitude_error() -> Error {
+            Error::Protocol("decimal/numeric: magnitude out of range".into())
         }
 
         let len = src.read_u8().await?;
@@ -156,14 +175,22 @@ impl Numeric {
             };
 
             let value = match len {
-                5 => src.read_u32_le().await? as i128 * sign,
-                9 => src.read_u64_le().await? as i128 * sign,
+                5 => i128::from(src.read_u32_le().await?)
+                    .checked_mul(sign)
+                    .ok_or_else(magnitude_error)?,
+                9 => i128::from(src.read_u64_le().await?)
+                    .checked_mul(sign)
+                    .ok_or_else(magnitude_error)?,
                 13 => {
                     let mut bytes = [0u8; 12]; //u96
                     for item in &mut bytes {
                         *item = src.read_u8().await?;
                     }
-                    decode_d128(&bytes) as i128 * sign
+                    // 96 bits at most, so it always fits an i128.
+                    i128::try_from(decode_d128(&bytes)?)
+                        .map_err(|_| magnitude_error())?
+                        .checked_mul(sign)
+                        .ok_or_else(magnitude_error)?
                 }
                 17 => {
                     let mut bytes = [0u8; 16];
@@ -173,10 +200,9 @@ impl Numeric {
                     // A 16-byte magnitude above i128::MAX would wrap (and
                     // `i128::MIN * -1` overflows), so reject it. Valid
                     // DECIMAL(38) values are below 10^38 < i128::MAX.
-                    let magnitude = i128::try_from(decode_d128(&bytes)).map_err(|_| {
-                        Error::Protocol("decimal/numeric: magnitude out of range".into())
-                    })?;
-                    magnitude * sign
+                    let magnitude =
+                        i128::try_from(decode_d128(&bytes)?).map_err(|_| magnitude_error())?;
+                    magnitude.checked_mul(sign).ok_or_else(magnitude_error)?
                 }
                 x => {
                     return Err(Error::Protocol(
@@ -208,13 +234,14 @@ impl Encode<BytesMut> for Numeric {
 
         let value = self.value().unsigned_abs();
 
+        // The magnitude is written little-endian in the width `len()` picked
+        // for its precision: the low 4, 8 or 12 of its 16 bytes (a bit-field
+        // encoding, RCA-BIT-2), or all 16.
+        let [b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, ..] = value.to_le_bytes();
         match self.len() {
-            5 => dst.put_u32_le(value as u32),
-            9 => dst.put_u64_le(value as u64),
-            13 => {
-                dst.put_u64_le(value as u64);
-                dst.put_u32_le((value >> 64) as u32)
-            }
+            5 => dst.put_slice(&[b0, b1, b2, b3]),
+            9 => dst.put_slice(&[b0, b1, b2, b3, b4, b5, b6, b7]),
+            13 => dst.put_slice(&[b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11]),
             _ => dst.put_u128_le(value),
         }
 
@@ -231,7 +258,7 @@ impl Debug for Numeric {
             // `unsigned_abs`, not `abs`: `i128::MIN.abs()` panics.
             self.int_part().unsigned_abs(),
             self.dec_part().unsigned_abs(),
-            pad = self.scale as usize
+            pad = usize::from(self.scale)
         )
     }
 }
@@ -244,9 +271,22 @@ impl Display for Numeric {
 
 impl Eq for Numeric {}
 
+/// Rounds `value` to the nearest `f64`. `From<Numeric> for f64` is a public,
+/// infallible conversion whose documented meaning is "the nearest float", so
+/// the rounding of magnitudes above 2^53 is that API's contract, not a
+/// silent loss (the caller opts into a float by asking for one).
+fn i128_to_f64(value: i128) -> f64 {
+    #[expect(
+        clippy::as_conversions,
+        reason = "RCA-EXC-2: infallible public `From<Numeric> for f64`; rounding to the nearest f64 is its documented meaning"
+    )]
+    let float = value as f64;
+    float
+}
+
 impl From<Numeric> for f64 {
     fn from(n: Numeric) -> f64 {
-        n.dec_part() as f64 / n.pow_scale() as f64 + n.int_part() as f64
+        i128_to_f64(n.dec_part()) / i128_to_f64(n.pow_scale()) + i128_to_f64(n.int_part())
     }
 }
 
@@ -258,19 +298,26 @@ impl From<Numeric> for i128 {
 
 impl From<Numeric> for u128 {
     fn from(n: Numeric) -> u128 {
-        n.int_part() as u128
+        // Two's-complement reinterpretation, as the former `as u128` did:
+        // a negative integer part yields the same bit pattern as before.
+        u128::from_le_bytes(n.int_part().to_le_bytes())
     }
+}
+
+/// `n.value` rescaled to `scale` (which must be at least `n.scale`), or
+/// `None` if that does not fit an i128.
+fn scaled_value(n: &Numeric, scale: u8) -> Option<i128> {
+    let factor = 10i128.checked_pow(u32::from(scale.checked_sub(n.scale)?))?;
+    factor.checked_mul(n.value)
 }
 
 impl PartialEq for Numeric {
     fn eq(&self, other: &Self) -> bool {
         match self.scale.cmp(&other.scale) {
-            Ordering::Greater => {
-                10i128.pow((self.scale - other.scale) as u32) * other.value == self.value
-            }
-            Ordering::Less => {
-                10i128.pow((other.scale - self.scale) as u32) * self.value == other.value
-            }
+            // A product that overflows i128 is out of range, so it cannot
+            // equal the other (in-range) value: unequal.
+            Ordering::Greater => scaled_value(other, self.scale) == Some(self.value),
+            Ordering::Less => scaled_value(self, other.scale) == Some(other.value),
             Ordering::Equal => self.value == other.value,
         }
     }
@@ -293,7 +340,7 @@ mod decimal {
             num
         };
 
-        Decimal::try_from_i128_with_scale(num.value(), num.scale() as u32).map_err(|e| {
+        Decimal::try_from_i128_with_scale(num.value(), u32::from(num.scale())).map_err(|e| {
             crate::Error::Conversion(
                 format!("{num} does not fit in a rust_decimal::Decimal: {e}").into(),
             )
@@ -324,15 +371,21 @@ mod decimal {
             Decimal: (ColumnData::Numeric, {
                 let unpacked = self_.unpack();
 
-                let mut value = (((unpacked.hi as u128) << 64)
-                                 + ((unpacked.mid as u128) << 32)
-                                 + unpacked.lo as u128) as i128;
+                // Three 32-bit words laid out as a 96-bit magnitude (a bit
+                // field, RCA-BIT-2).
+                let mut value = (i128::from(unpacked.hi) << 64)
+                    | (i128::from(unpacked.mid) << 32)
+                    | i128::from(unpacked.lo);
 
                 if self_.is_sign_negative() {
+                    // Proven bound (RCA-EXC-2): value < 2^96, so negation
+                    // cannot overflow.
                     value = -value;
                 }
 
-                Numeric::new_with_scale(value, self_.scale() as u8)
+                // `Decimal`'s scale is at most 28, so its low byte is the scale.
+                let [scale, ..] = self_.scale().to_le_bytes();
+                Numeric::new_with_scale(value, scale)
             });
     );
 
@@ -341,15 +394,21 @@ mod decimal {
             Decimal: (ColumnData::Numeric, {
                 let unpacked = self_.unpack();
 
-                let mut value = (((unpacked.hi as u128) << 64)
-                                 + ((unpacked.mid as u128) << 32)
-                                 + unpacked.lo as u128) as i128;
+                // Three 32-bit words laid out as a 96-bit magnitude (a bit
+                // field, RCA-BIT-2).
+                let mut value = (i128::from(unpacked.hi) << 64)
+                    | (i128::from(unpacked.mid) << 32)
+                    | i128::from(unpacked.lo);
 
                 if self_.is_sign_negative() {
+                    // Proven bound (RCA-EXC-2): value < 2^96, so negation
+                    // cannot overflow.
                     value = -value;
                 }
 
-                Numeric::new_with_scale(value, self_.scale() as u8)
+                // `Decimal`'s scale is at most 28, so its low byte is the scale.
+                let [scale, ..] = self_.scale().to_le_bytes();
+                Numeric::new_with_scale(value, scale)
             });
     );
 }
@@ -365,7 +424,7 @@ mod bigdecimal_ {
     from_sql!(BigDecimal: ColumnData::Numeric(ref num) => num.map(|num| {
         let int = BigInt::from(num.value());
 
-        BigDecimal::new(int, num.scale() as i64)
+        BigDecimal::new(int, i64::from(num.scale()))
     }));
 
     #[cfg(feature = "tds73")]
@@ -421,6 +480,119 @@ mod bigdecimal_ {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+
+    #[test]
+    fn equality_across_scales_is_exact_and_overflow_is_unequal() {
+        assert_eq!(
+            Numeric::new_with_scale(150, 2),
+            Numeric::new_with_scale(15, 1)
+        );
+        assert_eq!(
+            Numeric::new_with_scale(15, 1),
+            Numeric::new_with_scale(150, 2)
+        );
+        assert_ne!(
+            Numeric::new_with_scale(151, 2),
+            Numeric::new_with_scale(15, 1)
+        );
+        // 10^38 * i128::MAX overflows i128, so it cannot equal anything.
+        assert_ne!(
+            Numeric::new_with_scale(i128::MAX, 0),
+            Numeric::new_with_scale(1, 38)
+        );
+        assert_ne!(
+            Numeric::new_with_scale(1, 38),
+            Numeric::new_with_scale(i128::MAX, 0)
+        );
+    }
+
+    #[test]
+    fn try_rescale_widens_exactly_and_narrows_only_without_loss() {
+        let n = Numeric::new_with_scale(15, 1);
+        assert_eq!(n.try_rescale(3).unwrap().value(), 1500);
+        assert_eq!(n.try_rescale(1).unwrap().value(), 15);
+        assert_eq!(
+            Numeric::new_with_scale(1500, 3)
+                .try_rescale(1)
+                .unwrap()
+                .value(),
+            15
+        );
+        assert!(Numeric::new_with_scale(1501, 3).try_rescale(1).is_none());
+        // Widening past i128 is None, not a wrapped value.
+        assert!(Numeric::new_with_scale(i128::MAX, 0)
+            .try_rescale(1)
+            .is_none());
+    }
+
+    #[test]
+    fn integer_part_of_a_negative_numeric_keeps_its_bit_pattern() {
+        let n = Numeric::new_with_scale(-5, 0);
+        assert_eq!(u128::from(n), u128::MAX - 4);
+        assert_eq!(i128::from(n), -5);
+        assert_eq!(f64::from(Numeric::new_with_scale(-125, 2)), -1.25);
+    }
+
+    #[test]
+    fn encode_writes_the_width_len_calls_for() {
+        for (value, scale, expected) in [
+            (1_i128, 0_u8, vec![5_u8, 1, 1, 0, 0, 0]),
+            (-1, 0, vec![5, 0, 1, 0, 0, 0]),
+            (
+                10_000_000_000,
+                0,
+                vec![9, 1, 0, 0xE4, 0x0B, 0x54, 0x02, 0, 0, 0],
+            ),
+        ] {
+            let mut buf = BytesMut::new();
+            Numeric::new_with_scale(value, scale)
+                .encode(&mut buf)
+                .unwrap();
+            assert_eq!(&buf[..], &expected[..], "{value}");
+        }
+
+        // 13 bytes: precision 20..=28, the low 12 bytes of the magnitude.
+        let mut buf = BytesMut::new();
+        Numeric::new_with_scale(1 << 70, 0)
+            .encode(&mut buf)
+            .unwrap();
+        assert_eq!(buf.len(), 14);
+        assert_eq!(&buf[..2], &[13, 1]);
+        assert_eq!(&buf[2..], &(1_u128 << 70).to_le_bytes()[..12]);
+
+        // 17 bytes: the whole magnitude.
+        let mut buf = BytesMut::new();
+        Numeric::new_with_scale(10_i128.pow(30), 0)
+            .encode(&mut buf)
+            .unwrap();
+        assert_eq!(buf.len(), 18);
+        assert_eq!(&buf[2..], &10_u128.pow(30).to_le_bytes()[..]);
+    }
+
+    #[tokio::test]
+    async fn decode_round_trips_each_width_and_rejects_an_out_of_range_magnitude() {
+        for value in [1_i128, -1, 10_000_000_000, -(1 << 70), 10_i128.pow(30)] {
+            let n = Numeric::new_with_scale(value, 0);
+            let mut buf = BytesMut::new();
+            n.encode(&mut buf).unwrap();
+            // `decode` reads after the leading length byte `Numeric::encode`
+            // wrote, which the caller consumes first; so feed the rest back.
+            let len = buf[0];
+            let mut reader = BytesMut::from(&buf[..]).into_sql_read_bytes();
+            let decoded = Numeric::decode(&mut reader, 0).await.unwrap().unwrap();
+            assert_eq!(decoded, n, "len {len}");
+        }
+
+        // A 16-byte magnitude above i128::MAX is a protocol error.
+        let mut wire = vec![17_u8, 1];
+        wire.extend_from_slice(&u128::MAX.to_le_bytes());
+        let mut reader = BytesMut::from(&wire[..]).into_sql_read_bytes();
+        assert_eq!(
+            Numeric::decode(&mut reader, 0).await.unwrap_err(),
+            Error::Protocol("decimal/numeric: magnitude out of range".into())
+        );
+    }
 
     #[test]
     fn numeric_eq() {

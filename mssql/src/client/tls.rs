@@ -229,7 +229,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> AsyncRead for TlsPreloginWrapper<
             }
 
             // And we know from this point on how much data we should expect.
-            inner.read_remaining = (header.length() as usize)
+            inner.read_remaining = usize::from(header.length())
                 .checked_sub(HEADER_BYTES)
                 .ok_or_else(|| {
                     io::Error::new(
@@ -292,7 +292,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> AsyncWrite for TlsPreloginWrapper
         // If on handshake mode, wraps the data to a TDS packet before sending.
         if inner.pending_handshake && inner.wr_buf.len() > HEADER_BYTES {
             if !inner.header_written {
-                let mut header = PacketHeader::new(inner.wr_buf.len(), 0);
+                let length = u16::try_from(inner.wr_buf.len()).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "TLS handshake record does not fit one TDS packet",
+                    )
+                })?;
+                let mut header = PacketHeader::new(length, 0);
 
                 header.set_type(PacketType::PreLogin);
                 header.set_status(PacketStatus::EndOfMessage);

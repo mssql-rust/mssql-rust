@@ -46,12 +46,20 @@ fn from_nanos(nanos: u64) -> crate::Result<Time> {
 #[inline]
 #[cfg(feature = "tds73")]
 fn from_secs(secs: u64) -> crate::Result<Time> {
-    from_nanos(secs.saturating_mul(1_000_000_000))
+    let nanos = secs
+        .checked_mul(1_000_000_000)
+        .ok_or_else(|| out_of_range("time of day"))?;
+    from_nanos(nanos)
 }
 
 #[inline]
 fn from_sec_fragments(sec_fragments: u64) -> crate::Result<Time> {
-    from_nanos(sec_fragments * (1e9 as u64) / 300)
+    // 1/300 s is 10^9 / 300 ns; multiply first, divide once (RCA-DIV-4).
+    let nanos = sec_fragments
+        .checked_mul(1_000_000_000)
+        .and_then(|scaled| scaled.checked_div(300))
+        .ok_or_else(|| out_of_range("time of day"))?;
+    from_nanos(nanos)
 }
 
 #[inline]
@@ -61,44 +69,48 @@ fn to_days(date: Date, start_year: i32) -> i64 {
 
 #[inline]
 #[cfg(not(feature = "tds73"))]
-fn to_sec_fragments(from: Time) -> i64 {
-    let nanos: i64 = (from - Time::from_hms(0, 0, 0).unwrap())
+fn to_sec_fragments(from: Time) -> u32 {
+    let nanos: u64 = (from - Time::from_hms(0, 0, 0).unwrap())
         .whole_nanoseconds()
         .try_into()
         .unwrap();
 
-    nanos * 300 / (1e9 as i64)
+    super::legacy_fragments(nanos)
 }
 
 #[cfg(feature = "tds73")]
 from_sql!(
     PrimitiveDateTime:
         ColumnData::SmallDateTime(ref dt) => dt.map(|dt| Ok::<_, crate::Error>(PrimitiveDateTime::new(
-            from_days(dt.days as i64, 1900)?,
-            from_secs(dt.seconds_fragments as u64 * 60)?,
+            from_days(i64::from(dt.days), 1900)?,
+            from_secs(u64::from(dt.seconds_fragments).checked_mul(60).ok_or_else(|| out_of_range("time of day"))?)?,
         ))).transpose()?,
         ColumnData::DateTime2(ref dt) => dt.map(|dt| Ok::<_, crate::Error>(PrimitiveDateTime::new(
-            from_days(dt.date.days() as i64, 1)?,
-            from_nanos(dt.time.increments * 10u64.pow(9 - dt.time.scale as u32))?
+            from_days(i64::from(dt.date.days()), 1)?,
+            from_nanos(dt.time.nanoseconds()?)?
         ))).transpose()?,
         ColumnData::DateTime(ref dt) => dt.map(|dt| Ok::<_, crate::Error>(PrimitiveDateTime::new(
-            from_days(dt.days as i64, 1900)?,
-            from_sec_fragments(dt.seconds_fragments as u64)?
+            from_days(i64::from(dt.days), 1900)?,
+            from_sec_fragments(u64::from(dt.seconds_fragments))?
         ))).transpose()?;
     Time:
         ColumnData::Time(ref time) => time.map(|time| {
-            from_nanos(time.increments * 10u64.pow(9 - time.scale as u32))
+            from_nanos(time.nanoseconds()?)
         }).transpose()?;
     Date:
-        ColumnData::Date(ref date) => date.map(|date| from_days(date.days() as i64, 1)).transpose()?;
+        ColumnData::Date(ref date) => date.map(|date| from_days(i64::from(date.days()), 1)).transpose()?;
     OffsetDateTime:
         ColumnData::DateTimeOffset(ref dto) => dto.map(|dto| {
-            let date = from_days(dto.datetime2.date.days() as i64, 1)?;
+            let date = from_days(i64::from(dto.datetime2.date.days()), 1)?;
             let dt = dto.datetime2;
 
-            let time = from_nanos(dt.time.increments * 10u64.pow(9 - dt.time.scale as u32))?;
+            let time = from_nanos(dt.time.nanoseconds()?)?;
 
-            let offset = UtcOffset::from_whole_seconds(dto.offset as i32 * 60)
+            let offset = UtcOffset::from_whole_seconds(
+                i32::from(dto.offset)
+                    .checked_mul(60)
+                    .ok_or_else(|| out_of_range("datetimeoffset offset"))?,
+            )
                 .map_err(|_| out_of_range("datetimeoffset offset"))?;
 
             // The wire date/time is UTC. Shift to local wall-clock time with a
@@ -106,7 +118,7 @@ from_sql!(
             // shifted value leaves the supported year range.
             let local = date
                 .with_time(time)
-                .checked_add(time::Duration::seconds(offset.whole_seconds() as i64))
+                .checked_add(time::Duration::seconds(i64::from(offset.whole_seconds())))
                 .ok_or_else(|| out_of_range("datetimeoffset"))?;
 
             Ok::<_, crate::Error>(local.assume_offset(offset))
@@ -115,7 +127,7 @@ from_sql!(
 
 #[cfg(feature = "tds73")]
 to_sql!(self_,
-        Date: (ColumnData::Date, super::Date::new(to_days(*self_, 1) as u32));
+        Date: (ColumnData::Date, super::date_from_days(to_days(*self_, 1)));
         Time: (ColumnData::Time, {
             let nanos: u64 = (*self_ - Time::from_hms(0, 0, 0).unwrap()).whole_nanoseconds().try_into().unwrap();
             let increments = nanos / 100;
@@ -127,20 +139,20 @@ to_sql!(self_,
             let nanos: u64 = (time - Time::from_hms(0, 0, 0).unwrap()).whole_nanoseconds().try_into().unwrap();
             let increments = nanos / 100;
 
-            let date = super::Date::new(to_days(self_.date(), 1) as u32);
+            let date = super::date_from_days(to_days(self_.date(), 1));
             let time = super::Time {increments, scale: 7};
 
             super::DateTime2::new(date, time)
         });
         OffsetDateTime: (ColumnData::DateTimeOffset, {
             let tz = self_.offset();
-            let offset = (tz.whole_seconds() / 60) as i16;
+            let offset = super::offset_minutes(tz.whole_seconds());
 
             let utc_date = self_.to_offset(UtcOffset::UTC);
 
             let nanos: u64 = (utc_date.time() - Time::from_hms(0, 0, 0).unwrap()).whole_nanoseconds().try_into().unwrap();
 
-            let date = super::Date::new(to_days(utc_date.date(), 1) as u32);
+            let date = super::date_from_days(to_days(utc_date.date(), 1));
             let time = super::Time { increments: nanos / 100, scale: 7 };
 
             super::DateTimeOffset::new(super::DateTime2::new(date, time), offset)
@@ -153,10 +165,10 @@ to_sql!(self_,
             let date = self_.date();
             let time = self_.time();
 
-            let days = to_days(date, 1900) as i32;
+            let days = super::legacy_days(to_days(date, 1900));
             let seconds_fragments = to_sec_fragments(time);
 
-            super::DateTime::new(days, seconds_fragments as u32)
+            super::DateTime::new(days, seconds_fragments)
         });
 );
 
@@ -164,7 +176,7 @@ to_sql!(self_,
 from_sql!(
     PrimitiveDateTime:
     ColumnData::DateTime(ref dt) => dt.map(|dt| {
-        Ok::<_, crate::Error>(from_days(dt.days as i64, 1900)?.with_time(from_sec_fragments(dt.seconds_fragments as u64)?))
+        Ok::<_, crate::Error>(from_days(i64::from(dt.days), 1900)?.with_time(from_sec_fragments(u64::from(dt.seconds_fragments))?))
     }).transpose()?
 );
 

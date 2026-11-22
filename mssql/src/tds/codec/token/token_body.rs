@@ -25,7 +25,7 @@ impl TokenBody {
     where
         R: SqlReadBytes + Unpin,
     {
-        let len = src.read_u16_le().await? as usize;
+        let len = usize::from(src.read_u16_le().await?);
         let mut buf = vec![0u8; len];
         src.read_exact(&mut buf).await?;
         Ok(Self { token, buf, pos: 0 })
@@ -64,7 +64,10 @@ impl TokenBody {
 
     fn utf16(&mut self, units: usize) -> crate::Result<String> {
         let token = self.token;
-        let bytes = self.take(units * 2)?;
+        let byte_len = units
+            .checked_mul(2)
+            .ok_or_else(|| crate::num::overflow("utf16_length"))?;
+        let bytes = self.take(byte_len)?;
         let units: Vec<u16> = bytes
             .as_chunks::<2>()
             .0
@@ -77,13 +80,13 @@ impl TokenBody {
 
     /// A B_VARCHAR: u8 count of UTF-16 code units, then the units.
     pub(crate) fn b_varchar(&mut self) -> crate::Result<String> {
-        let units = self.u8()? as usize;
+        let units = usize::from(self.u8()?);
         self.utf16(units)
     }
 
     /// A US_VARCHAR: u16 count of UTF-16 code units, then the units.
     pub(crate) fn us_varchar(&mut self) -> crate::Result<String> {
-        let units = self.u16_le()? as usize;
+        let units = usize::from(self.u16_le()?);
         self.utf16(units)
     }
 }

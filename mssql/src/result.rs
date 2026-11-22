@@ -7,6 +7,10 @@ use futures_util::io::{AsyncRead, AsyncWrite};
 use futures_util::stream::TryStreamExt;
 use std::fmt::Debug;
 
+/// What [`ExecuteResult::total`] reports when the affected-row total does not
+/// fit a `u64`: the largest representable count.
+const TOTAL_ROWS_UPPER_BOUND: u64 = u64::MAX;
+
 /// A result from a query execution, listing the number of affected rows.
 ///
 /// If executing multiple queries, the resulting counts will be come separately,
@@ -97,7 +101,21 @@ impl<'a> ExecuteResult {
     /// # Ok(())
     /// # }
     pub fn total(self) -> u64 {
-        self.rows_affected.into_iter().sum()
+        // Fallback: u64::MAX - this public method is infallible, and a
+        // total past `u64::MAX` rows is not representable, so it reports the
+        // largest representable count. Use [`checked_total`] to detect that.
+        //
+        // [`checked_total`]: Self::checked_total
+        self.checked_total().unwrap_or(TOTAL_ROWS_UPPER_BOUND)
+    }
+
+    /// Like [`total`](Self::total), but `None` when the total number of
+    /// affected rows does not fit a `u64`, rather than reporting the
+    /// largest representable count.
+    pub fn checked_total(&self) -> Option<u64> {
+        self.rows_affected
+            .iter()
+            .try_fold(0_u64, |total, rows| total.checked_add(*rows))
     }
 }
 
@@ -107,5 +125,35 @@ impl IntoIterator for ExecuteResult {
 
     fn into_iter(self) -> Self::IntoIter {
         self.rows_affected.into_iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn result(rows: &[u64]) -> ExecuteResult {
+        ExecuteResult {
+            rows_affected: rows.to_vec(),
+        }
+    }
+
+    #[test]
+    fn total_sums_every_statement() {
+        assert_eq!(result(&[]).total(), 0);
+        assert_eq!(result(&[1, 2, 3]).total(), 6);
+        assert_eq!(result(&[u64::MAX]).total(), u64::MAX);
+    }
+
+    #[test]
+    fn checked_total_is_none_on_overflow() {
+        assert_eq!(result(&[u64::MAX, 0]).checked_total(), Some(u64::MAX));
+        assert_eq!(result(&[u64::MAX, 1]).checked_total(), None);
+    }
+
+    #[test]
+    fn total_falls_back_to_the_upper_bound_on_overflow() {
+        assert_eq!(result(&[u64::MAX, 1]).total(), TOTAL_ROWS_UPPER_BOUND);
+        assert_eq!(result(&[u64::MAX, u64::MAX]).total(), u64::MAX);
     }
 }

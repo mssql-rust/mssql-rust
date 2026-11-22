@@ -1,4 +1,4 @@
-use super::{AllHeaderTy, Encode, ALL_HEADERS_LEN_TX};
+use super::{AllHeaderTy, Encode, ALL_HEADERS_LEN_TX, ALL_HEADERS_LEN_TX_HEADER};
 use bytes::{BufMut, BytesMut};
 use std::borrow::Cow;
 
@@ -18,9 +18,9 @@ impl<'a> BatchRequest<'a> {
 
 impl<'a> Encode<BytesMut> for BatchRequest<'a> {
     fn encode(self, dst: &mut BytesMut) -> crate::Result<()> {
-        dst.put_u32_le(ALL_HEADERS_LEN_TX as u32);
-        dst.put_u32_le(ALL_HEADERS_LEN_TX as u32 - 4);
-        dst.put_u16_le(AllHeaderTy::TransactionDescriptor as u16);
+        dst.put_u32_le(ALL_HEADERS_LEN_TX);
+        dst.put_u32_le(ALL_HEADERS_LEN_TX_HEADER);
+        dst.put_u16_le(u16::from(AllHeaderTy::TransactionDescriptor));
         dst.put_slice(&self.transaction_descriptor);
         dst.put_u32_le(1);
 

@@ -42,6 +42,9 @@ uint_enum! {
     }
 }
 
+enum_into_int!(PacketType => u8);
+enum_into_int!(PacketStatus => u8);
+
 /// packet header consisting of 8 bytes [2.2.3.1]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PacketHeader {
@@ -60,12 +63,11 @@ pub(crate) struct PacketHeader {
 }
 
 impl PacketHeader {
-    pub fn new(length: usize, id: u8) -> PacketHeader {
-        assert!(length <= u16::MAX as usize);
+    pub fn new(length: u16, id: u8) -> PacketHeader {
         PacketHeader {
             ty: PacketType::TDSv7Login,
             status: PacketStatus::ResetConnection,
-            length: length as u16,
+            length,
             spid: 0,
             id,
             window: 0,
@@ -182,8 +184,8 @@ where
     B: BufMut,
 {
     fn encode(self, dst: &mut B) -> crate::Result<()> {
-        dst.put_u8(self.ty as u8);
-        dst.put_u8(self.status as u8);
+        dst.put_u8(u8::from(self.ty));
+        dst.put_u8(u8::from(self.status));
         dst.put_u16(self.length);
         dst.put_u16(self.spid);
         dst.put_u8(self.id);
@@ -242,14 +244,8 @@ mod tests {
 
     #[test]
     fn new_accepts_max_length() {
-        let header = PacketHeader::new(u16::MAX as usize, 0);
+        let header = PacketHeader::new(u16::MAX, 0);
         assert_eq!(header.length, u16::MAX);
-    }
-
-    #[test]
-    #[should_panic]
-    fn new_rejects_oversized_length() {
-        let _ = PacketHeader::new(u16::MAX as usize + 1, 0);
     }
 
     #[test]
@@ -439,9 +435,9 @@ mod tests {
 
     #[test]
     fn round_trip_length_boundaries() {
-        for length in [0usize, 1, 8, 255, 256, u16::MAX as usize] {
+        for length in [0u16, 1, 8, 255, 256, u16::MAX] {
             let header = PacketHeader::new(length, 0);
-            assert_eq!(round_trip(header).length(), length as u16);
+            assert_eq!(round_trip(header).length(), length);
         }
     }
 

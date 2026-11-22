@@ -219,14 +219,85 @@ pub struct Time {
 #[cfg_attr(feature = "docs", doc(cfg(feature = "tds73")))]
 impl PartialEq for Time {
     fn eq(&self, t: &Time) -> bool {
-        self.increments as f64 / 10f64.powi(self.scale as i32)
-            == t.increments as f64 / 10f64.powi(t.scale as i32)
+        // Compare exactly, in integers, at the finer of the two scales. An
+        // increment count that does not fit u128 at that scale is out of
+        // range, so it is never equal.
+        let scale = self.scale.max(t.scale);
+        match (self.increments_at(scale), t.increments_at(scale)) {
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        }
     }
+}
+
+/// Minutes of a UTC offset given in seconds. Both date/time crates bound an
+/// offset to +-25:59:59 (93 599 s), so the result is within +-1559 minutes.
+#[cfg(all(feature = "tds73", any(feature = "jiff", feature = "time")))]
+pub(crate) fn offset_minutes(seconds: i32) -> i16 {
+    #[expect(
+        clippy::as_conversions,
+        reason = "RCA-EXC-2: jiff and time both bound a UTC offset to +-93599 s, so seconds / 60 is within +-1559, well inside i16"
+    )]
+    let minutes = (seconds / 60) as i16;
+    minutes
+}
+
+/// A day count since 0001-01-01 as the 3-byte wire [`Date`].
+///
+/// `ToSql` is infallible, and [`Date::new`] documents a panic for a day count
+/// outside 0..2^24. A negative day count (a date before year 1) is not
+/// representable as a `date`; it maps to `u32::MAX`, which `Date::new`
+/// rejects exactly as the former wrapping cast did.
+#[cfg(all(feature = "tds73", any(feature = "jiff", feature = "time")))]
+pub(crate) fn date_from_days(days: i64) -> Date {
+    Date::new(u32::try_from(days).unwrap_or(u32::MAX))
+}
+
+/// A legacy `datetime` day count (days since 1900-01-01). Both date/time
+/// crates bound years to +-9999 (or +-999999 with `large-dates`), i.e. at
+/// most about 365 million days, inside i32.
+#[cfg(all(not(feature = "tds73"), any(feature = "jiff", feature = "time")))]
+pub(crate) fn legacy_days(days: i64) -> i32 {
+    #[expect(
+        clippy::as_conversions,
+        reason = "RCA-EXC-2: day counts since 1900 are bounded by the date crates' year range (< 365 million days), inside i32"
+    )]
+    let days = days as i32;
+    days
+}
+
+/// A legacy `datetime` second-fraction count (1/300 s since midnight), from
+/// nanoseconds since midnight (always below 86 400 * 10^9).
+#[cfg(all(not(feature = "tds73"), any(feature = "jiff", feature = "time")))]
+pub(crate) fn legacy_fragments(nanos_since_midnight: u64) -> u32 {
+    #[expect(
+        clippy::as_conversions,
+        reason = "RCA-EXC-2: nanos < 86_400 * 10^9, so nanos * 300 / 10^9 < 25_920_000, inside u32"
+    )]
+    let fragments = (nanos_since_midnight * 300 / 1_000_000_000) as u32;
+    fragments
 }
 
 #[cfg(feature = "tds73")]
 #[cfg_attr(feature = "docs", doc(cfg(feature = "tds73")))]
 impl Time {
+    /// `increments` re-expressed at `scale` (which must be at least this
+    /// time's own scale), or `None` if that does not fit.
+    fn increments_at(&self, scale: u8) -> Option<u128> {
+        let factor = 10u128.checked_pow(u32::from(scale.checked_sub(self.scale)?))?;
+        u128::from(self.increments).checked_mul(factor)
+    }
+
+    /// Nanoseconds since midnight: `increments` of 10^-`scale` second.
+    /// A scale above 9 or an overflowing count is out of range.
+    #[cfg(any(feature = "jiff", feature = "time"))]
+    pub(crate) fn nanoseconds(self) -> crate::Result<u64> {
+        9u8.checked_sub(self.scale)
+            .and_then(|digits| 10u64.checked_pow(u32::from(digits)))
+            .and_then(|factor| self.increments.checked_mul(factor))
+            .ok_or_else(|| crate::num::overflow("time_increments"))
+    }
+
     /// Construct a new `Time`
     pub fn new(increments: u64, scale: u8) -> Self {
         Self { increments, scale }
@@ -268,15 +339,15 @@ impl Time {
     {
         let val = match (n, rlen) {
             (0..=2, 3) => {
-                let hi = src.read_u16_le().await? as u64;
-                let lo = src.read_u8().await? as u64;
+                let hi = u64::from(src.read_u16_le().await?);
+                let lo = u64::from(src.read_u8().await?);
 
                 hi | lo << 16
             }
-            (3..=4, 4) => src.read_u32_le().await? as u64,
+            (3..=4, 4) => u64::from(src.read_u32_le().await?),
             (5..=7, 5) => {
-                let hi = src.read_u32_le().await? as u64;
-                let lo = src.read_u8().await? as u64;
+                let hi = u64::from(src.read_u32_le().await?);
+                let lo = u64::from(src.read_u8().await?);
 
                 hi | lo << 32
             }
@@ -289,7 +360,7 @@ impl Time {
 
         Ok(Time {
             increments: val,
-            scale: n as u8,
+            scale: crate::num::convert_wire(n, "time_scale")?,
         })
     }
 }
@@ -298,22 +369,36 @@ impl Time {
 #[cfg_attr(feature = "docs", doc(cfg(feature = "tds73")))]
 impl Encode<BytesMut> for Time {
     fn encode(self, dst: &mut BytesMut) -> crate::Result<()> {
+        // The increments are written little-endian in the 3, 4 or 5 bytes
+        // the scale calls for (a bit-field encoding, RCA-BIT-2); any set bit
+        // above that width means the value does not fit its wire field.
+        let [b0, b1, b2, b3, b4, b5, b6, b7] = self.increments.to_le_bytes();
+        let too_wide = |high: &[u8]| high.iter().any(|byte| *byte != 0);
+        let out_of_range = || crate::num::overflow("time_increments");
         match self.len()? {
             3 => {
-                assert_eq!(self.increments >> 24, 0);
-                dst.put_u16_le(self.increments as u16);
-                dst.put_u8((self.increments >> 16) as u8);
+                if too_wide(&[b3, b4, b5, b6, b7]) {
+                    return Err(out_of_range());
+                }
+                dst.put_slice(&[b0, b1, b2]);
             }
             4 => {
-                assert_eq!(self.increments >> 32, 0);
-                dst.put_u32_le(self.increments as u32);
+                if too_wide(&[b4, b5, b6, b7]) {
+                    return Err(out_of_range());
+                }
+                dst.put_slice(&[b0, b1, b2, b3]);
             }
             5 => {
-                assert_eq!(self.increments >> 40, 0);
-                dst.put_u32_le(self.increments as u32);
-                dst.put_u8((self.increments >> 32) as u8);
+                if too_wide(&[b5, b6, b7]) {
+                    return Err(out_of_range());
+                }
+                dst.put_slice(&[b0, b1, b2, b3, b4]);
             }
-            _ => unreachable!(),
+            other => {
+                return Err(crate::Error::Protocol(
+                    format!("timen: invalid encoded length {other}").into(),
+                ))
+            }
         }
 
         Ok(())
@@ -422,7 +507,7 @@ impl DateTimeOffset {
     where
         R: SqlReadBytes + Unpin,
     {
-        let datetime2 = DateTime2::decode(src, n, rlen as usize).await?;
+        let datetime2 = DateTime2::decode(src, n, usize::from(rlen)).await?;
         let offset = src.read_i16_le().await?;
 
         Ok(Self { datetime2, offset })
@@ -447,6 +532,89 @@ mod coverage_tests {
     use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
     #[cfg(feature = "tds73")]
     use bytes::BytesMut;
+
+    #[cfg(feature = "tds73")]
+    #[test]
+    fn time_equality_is_exact_across_scales() {
+        assert_eq!(Time::new(5, 1), Time::new(50, 2));
+        assert_eq!(Time::new(0, 0), Time::new(0, 7));
+        assert_ne!(Time::new(5, 1), Time::new(51, 2));
+        // 2^53 + 1 increments is not representable as an f64; exact integer
+        // comparison still tells them apart.
+        assert_ne!(Time::new((1 << 53) + 1, 7), Time::new(1 << 53, 7));
+        // An increment count that overflows at the common scale is unequal.
+        assert_ne!(Time::new(u64::MAX, 0), Time::new(u64::MAX, 255));
+    }
+
+    #[cfg(all(feature = "tds73", any(feature = "jiff", feature = "time")))]
+    #[test]
+    fn time_nanoseconds_scales_and_rejects_overflow() {
+        assert_eq!(Time::new(1, 7).nanoseconds().unwrap(), 100);
+        assert_eq!(Time::new(1, 9).nanoseconds().unwrap(), 1);
+        assert_eq!(Time::new(1, 0).nanoseconds().unwrap(), 1_000_000_000);
+        let overflow = crate::Error::Conversion("time_increments: arithmetic overflow".into());
+        assert_eq!(Time::new(1, 10).nanoseconds().unwrap_err(), overflow);
+        assert_eq!(Time::new(u64::MAX, 0).nanoseconds().unwrap_err(), overflow);
+    }
+
+    #[cfg(feature = "tds73")]
+    #[test]
+    fn time_encode_is_little_endian_and_rejects_values_wider_than_the_field() {
+        let mut buf = BytesMut::new();
+        Time::new(0x56_1234, 2).encode(&mut buf).unwrap();
+        assert_eq!(&buf[..], &[0x34, 0x12, 0x56]);
+
+        let mut buf = BytesMut::new();
+        Time::new(0xDEAD_BEEF, 4).encode(&mut buf).unwrap();
+        assert_eq!(&buf[..], &[0xEF, 0xBE, 0xAD, 0xDE]);
+
+        let mut buf = BytesMut::new();
+        Time::new(0x12_3456_789A, 7).encode(&mut buf).unwrap();
+        assert_eq!(&buf[..], &[0x9A, 0x78, 0x56, 0x34, 0x12]);
+
+        let overflow = crate::Error::Conversion("time_increments: arithmetic overflow".into());
+        assert_eq!(
+            Time::new(1 << 24, 2)
+                .encode(&mut BytesMut::new())
+                .unwrap_err(),
+            overflow
+        );
+        assert_eq!(
+            Time::new(1 << 32, 4)
+                .encode(&mut BytesMut::new())
+                .unwrap_err(),
+            overflow
+        );
+        assert_eq!(
+            Time::new(1 << 40, 7)
+                .encode(&mut BytesMut::new())
+                .unwrap_err(),
+            overflow
+        );
+    }
+
+    #[cfg(all(feature = "tds73", any(feature = "jiff", feature = "time")))]
+    #[test]
+    fn date_from_days_accepts_the_wire_range() {
+        assert_eq!(date_from_days(0).days(), 0);
+        assert_eq!(date_from_days((1 << 24) - 1).days(), (1 << 24) - 1);
+    }
+
+    #[cfg(all(feature = "tds73", any(feature = "jiff", feature = "time")))]
+    #[test]
+    #[should_panic]
+    fn date_from_days_of_a_date_before_year_one_is_rejected_by_date_new() {
+        let _ = date_from_days(-1);
+    }
+
+    #[cfg(all(feature = "tds73", any(feature = "jiff", feature = "time")))]
+    #[test]
+    fn offset_minutes_covers_the_full_offset_range() {
+        assert_eq!(offset_minutes(0), 0);
+        assert_eq!(offset_minutes(3600), 60);
+        assert_eq!(offset_minutes(-93_599), -1559);
+        assert_eq!(offset_minutes(93_599), 1559);
+    }
 
     #[test]
     fn legacy_and_offset_accessors_return_constructor_values() {

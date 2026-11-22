@@ -335,7 +335,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
     {
         self.ensure_not_poisoned()?;
         self.flushed = false;
-        let packet_size = (self.context.packet_size() as usize) - HEADER_BYTES;
+        let packet_size = self.context.payload_size()?;
 
         let mut payload = BytesMut::new();
         item.encode(&mut payload)?;
@@ -390,7 +390,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
         self.ensure_not_poisoned()?;
         self.poisoned = true;
         self.flushed = false;
-        let packet_size = (self.context.packet_size() as usize) - HEADER_BYTES;
+        let packet_size = self.context.payload_size()?;
         let mut offset = 0;
 
         while offset < payload.len() {
@@ -406,7 +406,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Connection<S> {
             header.encode(&mut *frame)?;
             frame.extend_from_slice(&payload[offset..end]);
 
-            let size = (frame.len() as u16).to_be_bytes();
+            let size = crate::num::convert::<_, u16>(frame.len(), "packet_length")?.to_be_bytes();
             frame[2] = size[0];
             frame[3] = size[1];
 
@@ -936,7 +936,7 @@ const DONE_STATUS_ATTENTION: u16 = 1 << 5;
 /// robust against the message's own start being misaligned, which
 /// packet-blind draining doesn't rule out.
 fn ends_in_attention_ack(tail: &[u8], version: FeatureLevel) -> bool {
-    let done_len = 1 + 2 + 2 + version.done_row_count_bytes() as usize;
+    let done_len = 1 + 2 + 2 + usize::from(version.done_row_count_bytes());
 
     let Some(done) = tail.len().checked_sub(done_len).map(|start| &tail[start..]) else {
         return false;

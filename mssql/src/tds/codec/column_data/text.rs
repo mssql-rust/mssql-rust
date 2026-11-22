@@ -7,7 +7,7 @@ pub(crate) async fn decode<R>(
 where
     R: SqlReadBytes + Unpin,
 {
-    let ptr_len = src.read_u8().await? as usize;
+    let ptr_len = usize::from(src.read_u8().await?);
 
     if ptr_len == 0 {
         return Ok(ColumnData::String(None));
@@ -26,7 +26,8 @@ where
             let codec = collation.codec()?;
             // `text_len` is an untrusted u32: read in bounded windows
             // instead of reserving up to 4 GiB up front.
-            let text_len = src.read_u32_le().await? as usize;
+            let text_len: usize =
+                crate::num::convert_wire(src.read_u32_le().await?, "text_length")?;
             let mut buf = Vec::new();
             crate::sql_read_bytes::read_bytes_into(src, &mut buf, text_len).await?;
 
@@ -34,7 +35,8 @@ where
         }
         // NTEXT
         None => {
-            let text_len = src.read_u32_le().await? as usize;
+            let text_len: usize =
+                crate::num::convert_wire(src.read_u32_le().await?, "text_length")?;
             if !text_len.is_multiple_of(2) {
                 return Err(Error::Protocol("ntext: invalid length".into()));
             }

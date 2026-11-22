@@ -319,6 +319,11 @@
 #![recursion_limit = "512"]
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations, rust_2018_idioms)]
+// spec/rust-checked-arithmetic RCA-CONV-2: no numeric `as` in production code.
+// Tests may use it (RCA-EXC-5); a production exception uses a statement-level
+// `#[expect(clippy::as_conversions, reason = "RCA-EXC-n: ...")]`.
+#![deny(clippy::as_conversions)]
+#![cfg_attr(test, allow(clippy::as_conversions))]
 #![doc(test(attr(deny(rust_2018_idioms, warnings))))]
 #![doc(test(attr(allow(unused_extern_crates, unused_variables))))]
 
@@ -330,6 +335,7 @@ mod macros;
 
 mod client;
 mod from_sql;
+mod num;
 mod proc_param;
 mod query;
 mod sql_read_bytes;
@@ -371,11 +377,49 @@ use tds::codec::*;
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub(crate) fn get_driver_version() -> u64 {
-    env!("CARGO_PKG_VERSION")
+    pack_version(env!("CARGO_PKG_VERSION"))
+}
+
+/// Packs the dotted parts of `version` one byte each, first part lowest.
+fn pack_version(version: &str) -> u64 {
+    version
         .splitn(6, '.')
         .enumerate()
-        .fold(0u64, |acc, part| match part.1.parse::<u64>() {
-            Ok(num) => acc | num << (part.0 * 8),
-            _ => acc | 0 << (part.0 * 8),
+        .fold(0u64, |acc, (index, part)| {
+            // Fallback: 0 - a part that is not a plain number (a pre-release
+            // suffix such as `0-rc1`) contributes no bits to the packed
+            // version.
+            let num = part.parse::<u64>().unwrap_or(0);
+            // One byte per version part: bit-field packing (RCA-BIT-2). The
+            // parts are at most six, so the shift is at most 40 bits; a shift
+            // that could not be made contributes no bits either.
+            let packed = u32::try_from(index)
+                .ok()
+                .and_then(|index| index.checked_mul(8))
+                .and_then(|shift| num.checked_shl(shift))
+                .unwrap_or(0);
+            acc | packed
         })
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::pack_version;
+
+    #[test]
+    fn packs_one_byte_per_part() {
+        assert_eq!(pack_version("2.1.0"), 0x0102);
+        assert_eq!(pack_version("1.2.3"), 0x0003_0201);
+    }
+
+    #[test]
+    fn non_numeric_part_falls_back_to_zero_bits() {
+        assert_eq!(pack_version("1.2.3-rc1"), 0x0000_0201);
+        assert_eq!(pack_version("x.2.3"), 0x0003_0200);
+    }
+
+    #[test]
+    fn at_most_six_parts_are_packed() {
+        assert_eq!(pack_version("1.1.1.1.1.1"), 0x0101_0101_0101);
+    }
 }

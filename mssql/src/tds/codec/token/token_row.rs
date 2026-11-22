@@ -25,7 +25,7 @@ impl<'a> IntoIterator for TokenRow<'a> {
 
 impl<'a> Encode<BytesMutWithDataColumns<'a>> for TokenRow<'a> {
     fn encode(self, dst: &mut BytesMutWithDataColumns<'a>) -> crate::Result<()> {
-        dst.put_u8(TokenType::Row as u8);
+        dst.put_u8(u8::from(TokenType::Row));
 
         if self.data.len() != dst.data_columns().len() {
             return Err(crate::Error::BulkInput(

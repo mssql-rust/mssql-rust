@@ -1216,7 +1216,7 @@ fn table_collations_sql(table: &str, version: codec::FeatureLevel) -> String {
         }
     };
 
-    let procedure = if version as u32 >= codec::FeatureLevel::SqlServer2008 as u32 {
+    let procedure = if version >= codec::FeatureLevel::SqlServer2008 {
         "sp_tablecollations_100"
     } else {
         "sp_tablecollations_90"

@@ -6,12 +6,14 @@ where
 {
     let res = match len {
         0 => ColumnData::F64(None),
-        4 => ColumnData::F64(Some(src.read_i32_le().await? as f64 / 1e4)),
+        4 => ColumnData::F64(Some(f64::from(src.read_i32_le().await?) / 1e4)),
         8 => ColumnData::F64(Some({
-            let high = src.read_i32_le().await? as i64;
-            let low = src.read_u32_le().await? as f64;
+            let high = f64::from(src.read_i32_le().await?);
+            let low = f64::from(src.read_u32_le().await?);
 
-            ((high << 32) as f64 + low) / 1e4
+            // `high` is a 32-bit value, so `high * 2^32` is exact in an f64
+            // (RCA-CONV-4); only the final sum rounds, once.
+            (high * 4_294_967_296.0 + low) / 1e4
         })),
         _ => {
             return Err(Error::Protocol(
@@ -60,8 +62,11 @@ fn put_scaled(
             if length_prefixed {
                 dst.put_u8(8);
             }
-            dst.put_i32_le((v >> 32) as i32);
-            dst.put_u32_le(v as u32);
+            // Bit-pattern split (RCA-BIT-2) into the wire's two 32-bit
+            // halves: the high i32, then the low u32.
+            let [l0, l1, l2, l3, h0, h1, h2, h3] = v.to_le_bytes();
+            dst.put_i32_le(i32::from_le_bytes([h0, h1, h2, h3]));
+            dst.put_u32_le(u32::from_le_bytes([l0, l1, l2, l3]));
         }
         len => {
             return Err(Error::BulkInput(
@@ -88,7 +93,23 @@ pub(crate) fn encode_f64(
             format!("money: value {val} is not finite").into(),
         ));
     }
-    let scaled = (val * 1e4).round() as i128;
+    let scaled_f = (val * 1e4).round();
+    // RCA-CONV-3: only a finite value below 2^63 in magnitude is converted;
+    // anything larger is out of range for money (i64) and smallmoney (i32)
+    // alike, and `val * 1e4` can overflow to infinity even when `val` is
+    // finite.
+    const TWO_POW_63: f64 = 9_223_372_036_854_775_808.0;
+    if !(scaled_f.is_finite() && scaled_f.abs() < TWO_POW_63) {
+        let column = if len == 4 { "smallmoney" } else { "money" };
+        return Err(Error::BulkInput(
+            format!("value {val} out of range for {column}").into(),
+        ));
+    }
+    #[expect(
+        clippy::as_conversions,
+        reason = "RCA-CONV-3: scaled_f is finite and below 2^63 in magnitude (checked above), and already rounded to an integral value"
+    )]
+    let scaled = scaled_f as i128;
     put_scaled(dst, len, scaled, &val, length_prefixed)
 }
 
@@ -101,20 +122,31 @@ pub(crate) fn encode_numeric(
     num: crate::tds::Numeric,
     length_prefixed: bool,
 ) -> crate::Result<()> {
-    let scale = num.scale() as u32;
+    let scale = u32::from(num.scale());
     let mantissa = num.value();
     let overflow = || Error::BulkInput(format!("value {num} out of range for money").into());
 
     let scaled = if scale <= MONEY_SCALE {
-        mantissa
-            .checked_mul(10i128.pow(MONEY_SCALE - scale))
-            .ok_or_else(overflow)?
+        let factor = MONEY_SCALE
+            .checked_sub(scale)
+            .and_then(|digits| 10i128.checked_pow(digits))
+            .ok_or_else(overflow)?;
+        mantissa.checked_mul(factor).ok_or_else(overflow)?
     } else {
-        let divisor = 10i128.pow(scale - MONEY_SCALE);
-        let quotient = mantissa / divisor;
-        let remainder = (mantissa % divisor).unsigned_abs();
-        if remainder * 2 >= divisor.unsigned_abs() {
-            quotient + mantissa.signum()
+        let divisor = scale
+            .checked_sub(MONEY_SCALE)
+            .and_then(|digits| 10i128.checked_pow(digits))
+            .ok_or_else(overflow)?;
+        let quotient = mantissa.checked_div(divisor).ok_or_else(overflow)?;
+        let remainder = mantissa
+            .checked_rem(divisor)
+            .ok_or_else(overflow)?
+            .unsigned_abs();
+        let doubled = remainder.checked_mul(2).ok_or_else(overflow)?;
+        if doubled >= divisor.unsigned_abs() {
+            quotient
+                .checked_add(mantissa.signum())
+                .ok_or_else(overflow)?
         } else {
             quotient
         }

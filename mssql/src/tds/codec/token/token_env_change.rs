@@ -115,7 +115,7 @@ impl TokenEnvChange {
     where
         R: SqlReadBytes + Unpin,
     {
-        let len = src.read_u16_le().await? as usize;
+        let len = usize::from(src.read_u16_le().await?);
 
         // We read all the bytes now, due to whatever environment change tokens
         // we read, they might contain padding zeroes in the end we must
@@ -131,7 +131,7 @@ impl TokenEnvChange {
 
         let token = match ty {
             EnvChangeTy::Database => {
-                let len = buf.read_u8()? as usize;
+                let len = usize::from(buf.read_u8()?);
                 let mut bytes = vec![0; len];
 
                 for item in bytes.iter_mut().take(len) {
@@ -140,7 +140,7 @@ impl TokenEnvChange {
 
                 let new_value = String::from_utf16(&bytes[..])?;
 
-                let len = buf.read_u8()? as usize;
+                let len = usize::from(buf.read_u8()?);
                 let mut bytes = vec![0; len];
 
                 for item in bytes.iter_mut().take(len) {
@@ -152,7 +152,7 @@ impl TokenEnvChange {
                 TokenEnvChange::Database(new_value, old_value)
             }
             EnvChangeTy::PacketSize => {
-                let len = buf.read_u8()? as usize;
+                let len = usize::from(buf.read_u8()?);
                 let mut bytes = vec![0; len];
 
                 for item in bytes.iter_mut().take(len) {
@@ -161,7 +161,7 @@ impl TokenEnvChange {
 
                 let new_value = String::from_utf16(&bytes[..])?;
 
-                let len = buf.read_u8()? as usize;
+                let len = usize::from(buf.read_u8()?);
                 let mut bytes = vec![0; len];
 
                 for item in bytes.iter_mut().take(len) {
@@ -173,7 +173,7 @@ impl TokenEnvChange {
                 TokenEnvChange::PacketSize(new_value.parse()?, old_value.parse()?)
             }
             EnvChangeTy::SqlCollation => {
-                let len = buf.read_u8()? as usize;
+                let len = usize::from(buf.read_u8()?);
                 let mut new_value = vec![0; len];
                 buf.read_exact(&mut new_value[0..len])?;
 
@@ -191,7 +191,7 @@ impl TokenEnvChange {
                     None
                 };
 
-                let len = buf.read_u8()? as usize;
+                let len = usize::from(buf.read_u8()?);
                 let mut old_value = vec![0; len];
                 buf.read_exact(&mut old_value[0..len])?;
 
@@ -242,7 +242,7 @@ impl TokenEnvChange {
 
                 let port = buf.read_u16::<LittleEndian>()?;
 
-                let len = buf.read_u16::<LittleEndian>()? as usize; // hostname string length
+                let len = usize::from(buf.read_u16::<LittleEndian>()?); // hostname string length
                 let mut bytes = vec![0; len];
 
                 for item in bytes.iter_mut().take(len) {
@@ -254,7 +254,7 @@ impl TokenEnvChange {
                 TokenEnvChange::Routing { host, port }
             }
             EnvChangeTy::Rtls => {
-                let len = buf.read_u8()? as usize;
+                let len = usize::from(buf.read_u8()?);
                 let mut bytes = vec![0; len];
 
                 for item in bytes.iter_mut().take(len) {

@@ -300,7 +300,9 @@ impl<'a> QueryStream<'a> {
     fn note_return_token(&mut self, token: ReceivedToken) {
         match token {
             ReceivedToken::ReturnValue(rv) => self.return_values.push(rv),
-            ReceivedToken::ReturnStatus(status) => self.return_status = Some(status as i32),
+            ReceivedToken::ReturnStatus(status) => {
+                self.return_status = Some(i32::from_le_bytes(status.to_le_bytes()))
+            }
             _ => (),
         }
     }

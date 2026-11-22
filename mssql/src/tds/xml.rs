@@ -103,16 +103,21 @@ impl Encode<BytesMut> for XmlData {
         dst.put_u32_le(length);
 
         for chr in self.data.encode_utf16() {
-            length += 1;
+            length = length
+                .checked_add(1)
+                .ok_or_else(|| crate::num::overflow("xml_length"))?;
             dst.put_u16_le(chr);
         }
 
         // PLP_TERMINATOR, no next blobs
         dst.put_u32_le(0);
 
+        let byte_length = length
+            .checked_mul(2)
+            .ok_or_else(|| crate::num::overflow("xml_length"))?;
         let dst: &mut [u8] = dst.borrow_mut();
         let mut dst = &mut dst[len_pos..];
-        dst.put_u32_le(length * 2);
+        dst.put_u32_le(byte_length);
 
         Ok(())
     }

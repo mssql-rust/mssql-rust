@@ -40,8 +40,12 @@ impl TokenDone {
 
         let done_rows = match done_row_count_bytes {
             8 => src.read_u64_le().await?,
-            4 => src.read_u32_le().await? as u64,
-            _ => unreachable!(),
+            4 => u64::from(src.read_u32_le().await?),
+            other => {
+                return Err(crate::Error::Protocol(
+                    format!("DONE: unsupported row count width {other}").into(),
+                ))
+            }
         };
 
         Ok(TokenDone {
@@ -62,7 +66,7 @@ impl TokenDone {
 
 impl Encode<BytesMut> for TokenDone {
     fn encode(self, dst: &mut BytesMut) -> crate::Result<()> {
-        dst.put_u8(TokenType::Done as u8);
+        dst.put_u8(u8::from(TokenType::Done));
         dst.put_u16_le(BitFlags::bits(self.status));
 
         dst.put_u16_le(self.cur_cmd);

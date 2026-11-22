@@ -36,7 +36,7 @@ impl TokenError {
         let line = if wide_line {
             body.u32_le()?
         } else {
-            body.u16_le()? as u32
+            u32::from(body.u16_le()?)
         };
 
         let token = TokenError {

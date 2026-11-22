@@ -43,10 +43,11 @@ pub struct PreloginMessage {
 
 impl PreloginMessage {
     pub fn new() -> PreloginMessage {
-        let driver_version = crate::get_driver_version();
+        // The low 32 bits are the version, the next 16 the sub-build.
+        let [b0, b1, b2, b3, b4, b5, _, _] = crate::get_driver_version().to_le_bytes();
         PreloginMessage {
-            version: driver_version as u32,
-            sub_build: (driver_version >> 32) as u16,
+            version: u32::from_le_bytes([b0, b1, b2, b3]),
+            sub_build: u16::from_le_bytes([b4, b5]),
             encryption: EncryptionLevel::NotSupported,
             instance_name: None,
             thread_id: 0,
@@ -123,7 +124,7 @@ impl Encode<BytesMut> for PreloginMessage {
 
         // MARS
         fields.push((PRELOGIN_MARS, 0x01)); // MARS
-        data_cursor.write_u8(self.mars as u8)?;
+        data_cursor.write_u8(u8::from(self.mars))?;
 
         // fed auth
         if self.fed_auth_required {
@@ -133,7 +134,13 @@ impl Encode<BytesMut> for PreloginMessage {
 
         // build the packet-body
         // offset = PL_OPTION_TOKEN + PL_OFFSET + PL_OPTION_LENGTH = 5 bytes + the terminator (0xFF)
-        let mut data_offset = (fields.len() * 5 + 1) as u16;
+        let mut data_offset = u16::try_from(fields.len())
+            .ok()
+            .and_then(|count| count.checked_mul(5))
+            .and_then(|table| table.checked_add(1))
+            .ok_or_else(|| {
+                Error::Conversion("prelogin_offset: value does not fit the target type".into())
+            })?;
 
         // write the offset table
         for (token, length) in fields {
@@ -141,7 +148,9 @@ impl Encode<BytesMut> for PreloginMessage {
             dst.put_u16(data_offset);
             dst.put_u16(length);
 
-            data_offset += length;
+            data_offset = data_offset.checked_add(length).ok_or_else(|| {
+                Error::Conversion("prelogin_offset: value does not fit the target type".into())
+            })?;
         }
 
         dst.put_u8(PRELOGIN_TERMINATOR);
@@ -172,7 +181,7 @@ impl Decode<BytesMut> for PreloginMessage {
             let length = cursor.read_u16::<BigEndian>()?;
             let old_pos = cursor.position();
 
-            cursor.set_position(offset as u64);
+            cursor.set_position(u64::from(offset));
 
             // verify whether the server acts in accordance to what we requested
             // and if we can handle on what we seemingly agreed to
@@ -260,6 +269,14 @@ impl Decode<BytesMut> for PreloginMessage {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn new_splits_the_packed_driver_version_into_version_and_sub_build() {
+        let packed = crate::get_driver_version();
+        let msg = PreloginMessage::new();
+        assert_eq!(u64::from(msg.version), packed & 0xffff_ffff);
+        assert_eq!(u64::from(msg.sub_build), (packed >> 32) & 0xffff);
+    }
+
     use super::*;
 
     fn packet(fields: &[(u8, &[u8])]) -> BytesMut {

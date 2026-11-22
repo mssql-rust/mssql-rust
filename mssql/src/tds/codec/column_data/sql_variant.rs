@@ -18,6 +18,7 @@
 //! size, and the numeric path validates precision/scale and uses checked
 //! magnitude arithmetic.
 
+use crate::num::convert;
 use std::convert::TryFrom;
 
 use crate::{
@@ -77,7 +78,8 @@ pub(crate) async fn decode<R>(src: &mut R) -> crate::Result<ColumnData<'static>>
 where
     R: SqlReadBytes + Unpin,
 {
-    let total_len = src.read_u32_le().await? as usize;
+    let total_len: usize =
+        crate::num::convert_wire(src.read_u32_le().await?, "sql_variant_length")?;
 
     if total_len == 0 {
         return Ok(ColumnData::String(None));
@@ -88,7 +90,7 @@ where
     }
 
     let base_type = src.read_u8().await?;
-    let prop_bytes = src.read_u8().await? as usize;
+    let prop_bytes = usize::from(src.read_u8().await?);
 
     let data_len = total_len.checked_sub(2 + prop_bytes).ok_or_else(|| {
         protocol(format!(
@@ -175,7 +177,7 @@ where
         #[cfg(feature = "tds73")]
         VarLenType::Timen => {
             expect("property bytes", prop_bytes, 1)?;
-            let scale = src.read_u8().await? as usize;
+            let scale = usize::from(src.read_u8().await?);
             ColumnData::Time(Some(
                 crate::tds::time::Time::decode(src, scale, data_len).await?,
             ))
@@ -183,7 +185,7 @@ where
         #[cfg(feature = "tds73")]
         VarLenType::Datetime2 => {
             expect("property bytes", prop_bytes, 1)?;
-            let scale = src.read_u8().await? as usize;
+            let scale = usize::from(src.read_u8().await?);
             let time_len = data_len
                 .checked_sub(3)
                 .ok_or_else(|| protocol("datetime2 value too short".into()))?;
@@ -194,7 +196,7 @@ where
         #[cfg(feature = "tds73")]
         VarLenType::DatetimeOffsetn => {
             expect("property bytes", prop_bytes, 1)?;
-            let scale = src.read_u8().await? as usize;
+            let scale = usize::from(src.read_u8().await?);
             let time_len = data_len
                 .checked_sub(5)
                 .and_then(|n| u8::try_from(n).ok())
@@ -266,14 +268,14 @@ pub(crate) fn encode(dst: &mut bytes::BytesMut, value: ColumnData<'_>) -> crate:
 
     let mut body = bytes::BytesMut::new();
     let fixed = |body: &mut bytes::BytesMut, ty: FixedLenType| {
-        body.put_u8(ty as u8);
+        body.put_u8(u8::from(ty));
         body.put_u8(0);
     };
 
     match value {
         ColumnData::Bit(Some(v)) => {
             fixed(&mut body, FixedLenType::Bit);
-            body.put_u8(v as u8);
+            body.put_u8(u8::from(v));
         }
         ColumnData::U8(Some(v)) => {
             fixed(&mut body, FixedLenType::Int1);
@@ -308,14 +310,14 @@ pub(crate) fn encode(dst: &mut bytes::BytesMut, value: ColumnData<'_>) -> crate:
             crate::tds::codec::Encode::encode(dt, &mut body)?;
         }
         ColumnData::Guid(Some(uuid)) => {
-            body.put_u8(VarLenType::Guid as u8);
+            body.put_u8(u8::from(VarLenType::Guid));
             body.put_u8(0);
             let mut bytes = *uuid.as_bytes();
             crate::tds::codec::guid::reorder_bytes(&mut bytes);
             body.extend_from_slice(&bytes);
         }
         ColumnData::Numeric(Some(num)) => {
-            body.put_u8(VarLenType::Numericn as u8);
+            body.put_u8(u8::from(VarLenType::Numericn));
             body.put_u8(2);
             body.put_u8(num.precision());
             body.put_u8(num.scale());
@@ -330,7 +332,7 @@ pub(crate) fn encode(dst: &mut bytes::BytesMut, value: ColumnData<'_>) -> crate:
             if utf16.len() > MAX_VARIANT_PAYLOAD {
                 return Err(too_long("string", utf16.len()));
             }
-            body.put_u8(VarLenType::NVarchar as u8);
+            body.put_u8(u8::from(VarLenType::NVarchar));
             body.put_u8(7);
             // A real collation is required: SQL Server rejects upstream's
             // all-zero one with error 8001 ("Meta-information is invalid
@@ -340,41 +342,41 @@ pub(crate) fn encode(dst: &mut bytes::BytesMut, value: ColumnData<'_>) -> crate:
             // ID 52), SQL Server's own default.
             body.put_u32_le(0x00D0_0409);
             body.put_u8(52);
-            body.put_u16_le(MAX_VARIANT_PAYLOAD as u16);
+            body.put_u16_le(convert(MAX_VARIANT_PAYLOAD, "sql_variant_max_length")?);
             body.extend_from_slice(&utf16);
         }
         ColumnData::Binary(Some(b)) => {
             if b.len() > MAX_VARIANT_PAYLOAD {
                 return Err(too_long("binary value", b.len()));
             }
-            body.put_u8(VarLenType::BigVarBin as u8);
+            body.put_u8(u8::from(VarLenType::BigVarBin));
             body.put_u8(2);
-            body.put_u16_le(MAX_VARIANT_PAYLOAD as u16);
+            body.put_u16_le(convert(MAX_VARIANT_PAYLOAD, "sql_variant_max_length")?);
             body.extend_from_slice(&b);
         }
         #[cfg(feature = "tds73")]
         ColumnData::Date(Some(date)) => {
-            body.put_u8(VarLenType::Daten as u8);
+            body.put_u8(u8::from(VarLenType::Daten));
             body.put_u8(0);
             crate::tds::codec::Encode::encode(date, &mut body)?;
         }
         #[cfg(feature = "tds73")]
         ColumnData::Time(Some(time)) => {
-            body.put_u8(VarLenType::Timen as u8);
+            body.put_u8(u8::from(VarLenType::Timen));
             body.put_u8(1);
             body.put_u8(time.scale());
             crate::tds::codec::Encode::encode(time, &mut body)?;
         }
         #[cfg(feature = "tds73")]
         ColumnData::DateTime2(Some(dt)) => {
-            body.put_u8(VarLenType::Datetime2 as u8);
+            body.put_u8(u8::from(VarLenType::Datetime2));
             body.put_u8(1);
             body.put_u8(dt.time().scale());
             crate::tds::codec::Encode::encode(dt, &mut body)?;
         }
         #[cfg(feature = "tds73")]
         ColumnData::DateTimeOffset(Some(dto)) => {
-            body.put_u8(VarLenType::DatetimeOffsetn as u8);
+            body.put_u8(u8::from(VarLenType::DatetimeOffsetn));
             body.put_u8(1);
             body.put_u8(dto.datetime2().time().scale());
             crate::tds::codec::Encode::encode(dto, &mut body)?;
@@ -390,7 +392,7 @@ pub(crate) fn encode(dst: &mut bytes::BytesMut, value: ColumnData<'_>) -> crate:
         }
     }
 
-    dst.put_u32_le(body.len() as u32);
+    dst.put_u32_le(convert(body.len(), "sql_variant_length")?);
     dst.extend_from_slice(&body);
     Ok(())
 }

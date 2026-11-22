@@ -32,7 +32,9 @@ impl Collation {
 
     /// return the locale id part of the LCID (the specification here uses ambiguous terms)
     pub fn lcid(&self) -> u16 {
-        (self.info & 0xffff) as u16
+        // The low 16 bits of the LCID/flags word: a bit-field read (RCA-BIT-2).
+        let [low, high, _, _] = self.info.to_le_bytes();
+        u16::from_le_bytes([low, high])
     }
 
     pub fn sort_id(&self) -> u8 {
@@ -206,13 +208,19 @@ fn decode_single_byte(bytes: &[u8], high: &[char; 128]) -> String {
 fn encode_single_byte(text: &str, high: &[char; 128]) -> Result<Vec<u8>, char> {
     let mut bytes = Vec::with_capacity(text.len());
     for character in text.chars() {
-        let byte = match character {
-            '\0'..='\u{7f}' => character as u8,
+        let byte = match u8::try_from(character) {
+            Ok(ascii) if ascii <= 0x7f => ascii,
             _ => {
-                high.iter()
+                let index = high
+                    .iter()
                     .position(|&mapped| mapped == character)
-                    .ok_or(character)? as u8
-                    + 0x80
+                    .ok_or(character)?;
+                // `high` has 128 entries, so `index` < 128 and 0x80 + index
+                // fits a byte; a failure is reported as unmappable.
+                u8::try_from(index)
+                    .ok()
+                    .and_then(|index| index.checked_add(0x80))
+                    .ok_or(character)?
             }
         };
         bytes.push(byte);
