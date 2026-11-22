@@ -14,6 +14,21 @@ forward.
 
 ## Unreleased
 
+### Changed (breaking)
+
+- `ExecuteResult::total` now returns `Result<u64>` and fails with
+  `Error::Conversion` when the affected-row total does not fit a `u64`,
+  instead of reporting `u64::MAX` (rust-checked-arithmetic RCA-IN-6). Use
+  `checked_total` for an `Option`.
+
+### Fixed
+
+- Encoding a two-byte-length column type (`NVARCHAR`, `VARCHAR`, `VARBINARY`,
+  `CHAR`, `NCHAR`, `BINARY`) whose length is above 65 534 bytes now fails with
+  `Error::Conversion` naming `type_length`, instead of silently declaring the
+  column `(max)`. The driver's own `(max)` length (`u32::MAX`) is unchanged
+  (RCA-IN-2).
+
 ### Performance
 
 - Copy packet and column payloads into `BytesMut` in one operation instead of

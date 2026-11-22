@@ -58,7 +58,7 @@ macro_rules! test_bulk_type {
 
                 let res = req.finalize().await?;
 
-                assert_eq!($total_generated, res.total());
+                assert_eq!($total_generated, res.total()?);
 
                 Ok(())
             }
@@ -90,7 +90,7 @@ macro_rules! test_bulk_type {
 
                 let res = req.finalize().await?;
 
-                assert_eq!($total_generated, res.total());
+                assert_eq!($total_generated, res.total()?);
 
                 Ok(())
             }
@@ -274,7 +274,7 @@ macro_rules! test_bulk_columns {
                     }
 
                     let res = req.finalize().await?;
-                    count += res.total();
+                    count += res.total()?;
                 )+
                 assert_eq!($total_generated, count);
 
@@ -310,7 +310,7 @@ macro_rules! test_bulk_columns {
                     }
 
                     let res = req.finalize().await?;
-                    count += res.total();
+                    count += res.total()?;
                 )+
                 assert_eq!($total_generated, count);
 
@@ -734,7 +734,7 @@ where
     row.push(expected.into_sql());
     row.push(expected.into_sql());
     req.send(row).await?;
-    assert_eq!(1, req.finalize().await?.total());
+    assert_eq!(1, req.finalize().await?.total()?);
 
     let row = conn
         .query(
@@ -847,7 +847,7 @@ where
         row.push(img.into_sql());
         req.send(row).await?;
     }
-    assert_eq!(req.finalize().await?.total(), 3);
+    assert_eq!(req.finalize().await?.total()?, 3);
 
     let rows = conn
         .query(
@@ -926,7 +926,7 @@ where
     row.push(ColumnData::F64(None));
     req.send(row).await?;
 
-    assert_eq!(req.finalize().await?.total(), 2);
+    assert_eq!(req.finalize().await?.total()?, 2);
 
     let rows = conn
         .query(
@@ -1021,7 +1021,7 @@ where
         row.push(text.clone().into_sql());
     }
     req.send(row).await?;
-    assert_eq!(1, req.finalize().await?.total());
+    assert_eq!(1, req.finalize().await?.total()?);
 
     let row = conn
         .simple_query(format!(
@@ -1107,7 +1107,7 @@ where
         row.push(v.clone());
         req.send(row).await?;
     }
-    assert_eq!(req.finalize().await?.total(), 5);
+    assert_eq!(req.finalize().await?.total()?, 5);
 
     let rows = conn
         .query(

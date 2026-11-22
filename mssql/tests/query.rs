@@ -221,7 +221,7 @@ where
         )
         .await?;
 
-    assert_eq!(2, res.total());
+    assert_eq!(2, res.total()?);
 
     let rows = conn
         .query(format!("SELECT content FROM ##{}", table), &[])
@@ -258,7 +258,7 @@ where
         )
         .await?;
 
-    assert_eq!(2, res.total());
+    assert_eq!(2, res.total()?);
 
     let rows = conn
         .query(format!("SELECT content FROM ##{}", table), &[])
@@ -294,7 +294,7 @@ where
         )
         .await?;
 
-    assert_eq!(1, res.total());
+    assert_eq!(1, res.total()?);
 
     let rows = conn
         .query(format!("SELECT content FROM ##{}", table), &[])
@@ -329,7 +329,7 @@ where
         )
         .await?;
 
-    assert_eq!(1, res.total());
+    assert_eq!(1, res.total()?);
 
     let row = conn
         .query(format!("SELECT content FROM ##{}", table), &[])
@@ -413,7 +413,7 @@ where
         .execute(format!("INSERT INTO {} ([End]) VALUES (5)", table), &[])
         .await?;
 
-    assert_eq!(1, res.total());
+    assert_eq!(1, res.total()?);
 
     let rows = conn
         .query(format!("SELECT [End] FROM {}", table), &[])
@@ -442,7 +442,7 @@ where
             &[&1i32, &2i32, &3i32],
         )
         .await?
-        .total();
+        .total()?;
 
     assert_eq!(3, insert_count);
 
@@ -452,14 +452,14 @@ where
             &[&2i32, &1i32],
         )
         .await?
-        .total();
+        .total()?;
 
     assert_eq!(1, update_count);
 
     let delete_count = conn
         .execute(format!("DELETE ##{} WHERE id <> @P1", table), &[&3i32])
         .await?
-        .total();
+        .total()?;
 
     assert_eq!(2, delete_count);
 
@@ -509,7 +509,7 @@ where
         )
         .await?;
 
-    let result = insert_count.total();
+    let result = insert_count.total()?;
     assert_eq!(3, result);
 
     Ok(())
@@ -650,7 +650,7 @@ where
     let mut req = conn.bulk_insert(&table).await?;
     req.send(token_row).await?;
     let res = req.finalize().await?;
-    assert_eq!(1, res.total());
+    assert_eq!(1, res.total()?);
 
     let rows = conn
         .query(format!("SELECT a, b FROM {table} ORDER BY a"), &[])
@@ -1718,7 +1718,7 @@ where
             &[&Option::<Vec<u8>>::None],
         )
         .await?
-        .total();
+        .total()?;
 
     assert_eq!(1, total);
 
@@ -1756,7 +1756,7 @@ where
             &[&binary.as_slice()],
         )
         .await?
-        .total();
+        .total()?;
 
     assert_eq!(1, inserted);
 
@@ -1797,7 +1797,7 @@ where
             &[&binary.as_slice()],
         )
         .await?
-        .total();
+        .total()?;
 
     assert_eq!(1, inserted);
 
@@ -1835,7 +1835,7 @@ where
             &[&binary.as_slice()],
         )
         .await?
-        .total();
+        .total()?;
 
     assert_eq!(1, inserted);
 
@@ -1913,7 +1913,7 @@ where
             &[&binary.as_slice()],
         )
         .await?
-        .total();
+        .total()?;
 
     assert_eq!(1, inserted);
 
@@ -2306,7 +2306,7 @@ where
         &[&dt],
     )
     .await?
-    .total();
+    .total()?;
 
     let row = conn
         .query(format!("SELECT date FROM ##{}", table), &[])
@@ -2337,7 +2337,7 @@ where
         &[&dt],
     )
     .await?
-    .total();
+    .total()?;
 
     let row = conn
         .query(format!("SELECT date FROM ##{}", table), &[])
@@ -2367,7 +2367,7 @@ where
         &[&dt],
     )
     .await?
-    .total();
+    .total()?;
 
     let row = conn
         .query(format!("SELECT date FROM ##{}", table), &[])
@@ -2618,7 +2618,7 @@ where
         &[&dt],
     )
     .await?
-    .total();
+    .total()?;
 
     let row = conn
         .query(format!("SELECT date FROM ##{}", table), &[])
@@ -2651,7 +2651,7 @@ where
         &[&dt],
     )
     .await?
-    .total();
+    .total()?;
 
     let row = conn
         .query(format!("SELECT date FROM ##{}", table), &[])
@@ -2847,7 +2847,7 @@ where
         )
         .await?;
 
-    assert_eq!(1, res.total());
+    assert_eq!(1, res.total()?);
 
     let row = conn
         .query(format!("SELECT m1, m2, m3, m4 FROM ##{}", table), &[])
@@ -3364,7 +3364,7 @@ where
     query.bind(&data);
 
     let res = query.execute(&mut conn).await?;
-    assert_eq!(1, res.total());
+    assert_eq!(1, res.total()?);
 
     Ok(())
 }

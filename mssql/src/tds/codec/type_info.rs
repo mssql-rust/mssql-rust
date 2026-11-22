@@ -10,6 +10,10 @@ use crate::num::{convert, convert_wire};
 /// The 2-byte length-field value that declares the `(max)` form of a type.
 const MAX_LENGTH_MARKER: u16 = 0xffff;
 
+/// The in-memory length that declares the `(max)` form of a type, as the
+/// driver passes it for `VARCHAR(MAX)` and similar columns.
+const MAX_LENGTH_DECLARED: usize = 0xffff_ffff;
+
 /// A length of a column in bytes or characters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeLength {
@@ -115,12 +119,18 @@ impl Encode<BytesMut> for VarLenContext {
             | VarLenType::BigVarChar
             | VarLenType::BigBinary
             | VarLenType::BigVarBin => {
-                // Fallback: MAX_LENGTH_MARKER - a 2-byte length field holds at
-                // most 0xFFFE bytes, and 0xFFFF declares the `(max)` form of
-                // the type (MS-TDS 2.2.5.5.1), the only way to declare any
-                // longer column. The driver itself passes `u32::MAX` for
-                // `VARCHAR(MAX)`.
-                dst.put_u16_le(u16::try_from(self.len()).unwrap_or(MAX_LENGTH_MARKER));
+                // A 2-byte length field holds at most 0xFFFE bytes, and
+                // 0xFFFF declares the `(max)` form of the type (MS-TDS
+                // 2.2.5.5.1). Only the declared `(max)` length (the driver
+                // passes `u32::MAX` for `VARCHAR(MAX)`) selects that form; any
+                // other length that does not fit the field is rejected, not
+                // replaced by `(max)` (RCA-IN-2).
+                let field = if self.len() == MAX_LENGTH_DECLARED {
+                    MAX_LENGTH_MARKER
+                } else {
+                    convert(self.len(), "type_length")?
+                };
+                dst.put_u16_le(field);
             }
             VarLenType::Image | VarLenType::Text | VarLenType::NText => {
                 dst.put_u32_le(convert(self.len(), "type_length")?);
@@ -474,17 +484,28 @@ mod tests {
     }
 
     #[test]
-    fn two_byte_length_past_its_field_falls_back_to_the_max_marker() {
-        for len in [65_535_usize, 65_536, 0xffff_ffff] {
+    fn two_byte_length_past_its_field_is_rejected_unless_declared_max() {
+        // 0xFFFF is the decoded `(max)` marker itself; one past it and above
+        // are errors, and nothing is written (RCA-TEST-8).
+        for len in [65_536_usize, 0xffff_fffe] {
+            let mut buf = BytesMut::new();
+            let err = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::NVarchar, len, None))
+                .encode(&mut buf)
+                .unwrap_err();
+            assert_eq!(
+                err,
+                Error::Conversion("type_length: value does not fit the target type".into()),
+                "{len}"
+            );
+            assert_eq!(&buf[..], &[u8::from(VarLenType::NVarchar)], "{len}");
+        }
+        // The declared `(max)` length and the decoded marker select the marker.
+        for len in [0xffff_usize, 0xffff_ffff] {
             let mut buf = BytesMut::new();
             TypeInfo::VarLenSized(VarLenContext::new(VarLenType::NVarchar, len, None))
                 .encode(&mut buf)
                 .unwrap();
-            assert_eq!(
-                &buf[..],
-                &[u8::from(VarLenType::NVarchar), 0xff, 0xff],
-                "{len}"
-            );
+            assert_eq!(&buf[..], &[u8::from(VarLenType::NVarchar), 0xff, 0xff]);
         }
         let mut buf = BytesMut::new();
         TypeInfo::VarLenSized(VarLenContext::new(VarLenType::NVarchar, 65_534, None))

@@ -562,7 +562,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     ///
     /// // The request must be finalized.
     /// let res = req.finalize().await?;
-    /// assert_eq!(3, res.total());
+    /// assert_eq!(3, res.total()?);
     /// # Ok(())
     /// # }
     /// ```
@@ -725,7 +725,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     ///
     /// // The request must be finalized.
     /// let res = req.finalize().await?;
-    /// assert_eq!(3, res.total());
+    /// assert_eq!(3, res.total()?);
     /// # Ok(())
     /// # }
     /// ```
@@ -772,7 +772,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
     /// }
     ///
     /// let res = req.finalize().await?;
-    /// assert_eq!(3, res.total());
+    /// assert_eq!(3, res.total()?);
     /// # Ok(())
     /// # }
     /// ```

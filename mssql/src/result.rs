@@ -7,10 +7,6 @@ use futures_util::io::{AsyncRead, AsyncWrite};
 use futures_util::stream::TryStreamExt;
 use std::fmt::Debug;
 
-/// What [`ExecuteResult::total`] reports when the affected-row total does not
-/// fit a `u64`: the largest representable count.
-const TOTAL_ROWS_UPPER_BOUND: u64 = u64::MAX;
-
 /// A result from a query execution, listing the number of affected rows.
 ///
 /// If executing multiple queries, the resulting counts will be come separately,
@@ -97,21 +93,18 @@ impl<'a> ExecuteResult {
     ///     )
     ///     .await?;
     ///
-    /// assert_eq!(3, rows_affected.total());
+    /// assert_eq!(3, rows_affected.total()?);
     /// # Ok(())
     /// # }
-    pub fn total(self) -> u64 {
-        // Fallback: u64::MAX - this public method is infallible, and a
-        // total past `u64::MAX` rows is not representable, so it reports the
-        // largest representable count. Use [`checked_total`] to detect that.
-        //
-        // [`checked_total`]: Self::checked_total
-        self.checked_total().unwrap_or(TOTAL_ROWS_UPPER_BOUND)
+    pub fn total(self) -> crate::Result<u64> {
+        // A total past `u64::MAX` rows is not representable; it is an error,
+        // not a bound (RCA-IN-6).
+        self.checked_total()
+            .ok_or_else(|| crate::num::overflow("rows_affected_total"))
     }
 
-    /// Like [`total`](Self::total), but `None` when the total number of
-    /// affected rows does not fit a `u64`, rather than reporting the
-    /// largest representable count.
+    /// Like [`total`](Self::total), but `None` rather than an error when the
+    /// total number of affected rows does not fit a `u64`.
     pub fn checked_total(&self) -> Option<u64> {
         self.rows_affected
             .iter()
@@ -140,9 +133,9 @@ mod tests {
 
     #[test]
     fn total_sums_every_statement() {
-        assert_eq!(result(&[]).total(), 0);
-        assert_eq!(result(&[1, 2, 3]).total(), 6);
-        assert_eq!(result(&[u64::MAX]).total(), u64::MAX);
+        assert_eq!(result(&[]).total().unwrap(), 0);
+        assert_eq!(result(&[1, 2, 3]).total().unwrap(), 6);
+        assert_eq!(result(&[u64::MAX]).total().unwrap(), u64::MAX);
     }
 
     #[test]
@@ -152,8 +145,12 @@ mod tests {
     }
 
     #[test]
-    fn total_falls_back_to_the_upper_bound_on_overflow() {
-        assert_eq!(result(&[u64::MAX, 1]).total(), TOTAL_ROWS_UPPER_BOUND);
-        assert_eq!(result(&[u64::MAX, u64::MAX]).total(), u64::MAX);
+    fn total_rejects_an_overflowing_sum() {
+        for rows in [&[u64::MAX, 1][..], &[u64::MAX, u64::MAX][..]] {
+            assert_eq!(
+                result(rows).total().unwrap_err(),
+                crate::Error::Conversion("rows_affected_total: arithmetic overflow".into())
+            );
+        }
     }
 }

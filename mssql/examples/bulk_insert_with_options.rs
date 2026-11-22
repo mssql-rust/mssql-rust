@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let res = req.finalize().await?;
-    println!("inserted {} rows", res.total());
+    println!("inserted {} rows", res.total()?);
 
     Ok(())
 }
