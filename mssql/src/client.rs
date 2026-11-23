@@ -393,6 +393,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
             ));
         }
 
+        // Reject a value whose ToSql conversion failed before anything is sent
+        // (including the extra round trip a table parameter needs).
+        crate::tds::codec::reject_invalid_values(params.iter().map(|p| &p.value))?;
+        for table in params.iter().filter_map(|p| p.table.as_ref()) {
+            for row in &table.rows {
+                crate::tds::codec::reject_invalid_values(row.iter())?;
+            }
+        }
+
         self.connection.flush_stream().await?;
 
         let rpc_params = params
@@ -1037,6 +1046,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> Client<S> {
         let mut param_str = String::new();
 
         for (i, param) in params.enumerate() {
+            // A value whose ToSql/IntoSql conversion failed (e.g. a date
+            // before 0001-01-01) is rejected before anything is sent. This
+            // is the single choke point of execute, query, into_query,
+            // Query::execute/query and the sp_executesql helpers.
+            param.reject_invalid()?;
+
             // SQL Server has no documented wire encoding for a NaN or
             // infinite float parameter - sending one round-trips to a
             // cryptic server-side error 8023. Reject it client-side with a
@@ -1734,5 +1749,116 @@ mod identifier_tests {
         ] {
             assert!(validate_sql_identifier("x", ident).is_err(), "{ident:?}");
         }
+    }
+}
+
+/// RCA: a value whose `ToSql`/`IntoSql` conversion failed
+/// ([`ColumnData::Invalid`]) is rejected by every public entry that sends
+/// values, before anything reaches the wire. The connection is in memory, so
+/// any byte written would show.
+#[cfg(test)]
+mod invalid_value_tests {
+    use super::*;
+    use crate::{ProcParam, Query, TokenRow};
+    use futures_util::io::Cursor;
+
+    const MESSAGE: &str = "date out of range for SQL Server date (0001-01-01..9999-12-31)";
+
+    fn invalid() -> ColumnData<'static> {
+        ColumnData::Invalid(MESSAGE.into())
+    }
+
+    fn client() -> Client<Cursor<Vec<u8>>> {
+        Client {
+            connection: Connection::in_memory(),
+        }
+    }
+
+    fn assert_rejected<T: std::fmt::Debug>(
+        result: crate::Result<T>,
+        client: &Client<Cursor<Vec<u8>>>,
+    ) {
+        match result {
+            Err(crate::Error::Conversion(message)) => assert_eq!(message, MESSAGE),
+            other => panic!("expected Error::Conversion, got {other:?}"),
+        }
+        assert_eq!(client.connection.bytes_written(), 0);
+    }
+
+    #[tokio::test]
+    async fn execute_rejects_an_invalid_parameter() {
+        let mut client = client();
+        let bad = invalid();
+        let result = client.execute("SELECT @P1", &[&1i32, &bad]).await;
+        assert_rejected(result, &client);
+    }
+
+    #[tokio::test]
+    async fn query_and_into_query_reject_an_invalid_parameter() {
+        let mut client = client();
+        let bad = invalid();
+        let result = client.query("SELECT @P1", &[&bad]).await.map(|_| ());
+        assert_rejected(result, &client);
+
+        let client = self::client();
+        let result = client.into_query("SELECT @P1", &[&bad]).await.map(|_| ());
+        assert!(
+            matches!(result, Err(crate::Error::Conversion(ref m)) if m == MESSAGE),
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn query_object_rejects_an_invalid_parameter() {
+        let mut client = client();
+        let mut query = Query::new("SELECT @P1");
+        query.bind(invalid());
+        assert_rejected(query.execute(&mut client).await, &client);
+
+        let mut query = Query::new("SELECT @P1");
+        query.bind(invalid());
+        assert_rejected(query.query(&mut client).await.map(|_| ()), &client);
+    }
+
+    #[tokio::test]
+    async fn stored_procedure_parameters_reject_an_invalid_value() {
+        let mut client = client();
+        let bad = invalid();
+        let params = [ProcParam::input("@a", &1i32), ProcParam::input("@b", &bad)];
+        assert_rejected(
+            client.call_procedure("p", &params).await.map(|_| ()),
+            &client,
+        );
+
+        let params = [ProcParam::output("@out", &bad)];
+        assert_rejected(
+            client.call_procedure("p", &params).await.map(|_| ()),
+            &client,
+        );
+
+        let mut row = TokenRow::new();
+        row.push(ColumnData::I32(Some(1)));
+        row.push(invalid());
+        let params = [ProcParam::table("@t", "dbo.T", vec![row])];
+        assert_rejected(
+            client.call_procedure("p", &params).await.map(|_| ()),
+            &client,
+        );
+    }
+
+    #[test]
+    fn the_shared_helper_finds_an_invalid_value_anywhere() {
+        use crate::tds::codec::reject_invalid_values;
+        let values = [
+            ColumnData::I32(Some(1)),
+            ColumnData::String(None),
+            invalid(),
+        ];
+        assert!(matches!(
+            reject_invalid_values(values.iter()),
+            Err(crate::Error::Conversion(m)) if m == MESSAGE
+        ));
+        assert!(reject_invalid_values(values.iter().take(2)).is_ok());
+        assert!(!invalid().is_null());
     }
 }

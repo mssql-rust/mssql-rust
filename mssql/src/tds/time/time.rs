@@ -70,12 +70,7 @@ fn to_days(date: Date, start_year: i32) -> i64 {
 #[inline]
 #[cfg(not(feature = "tds73"))]
 fn to_sec_fragments(from: Time) -> u32 {
-    let nanos: u64 = (from - Time::from_hms(0, 0, 0).unwrap())
-        .whole_nanoseconds()
-        .try_into()
-        .unwrap();
-
-    super::legacy_fragments(nanos)
+    super::legacy_fragments(to_nanos(from))
 }
 
 #[cfg(feature = "tds73")]
@@ -125,51 +120,62 @@ from_sql!(
         }).transpose()?
 );
 
+/// Nanoseconds since midnight of a time of day.
+fn to_nanos(time: Time) -> u64 {
+    super::nanos_of_day(time.hour(), time.minute(), time.second(), time.nanosecond())
+}
+
+#[cfg(feature = "tds73")]
+fn time_to_wire(time: Time) -> super::Time {
+    super::Time {
+        increments: to_nanos(time) / 100,
+        scale: 7,
+    }
+}
+
+#[cfg(feature = "tds73")]
+fn datetime_to_dt2(dt: PrimitiveDateTime) -> crate::Result<super::DateTime2> {
+    let date = super::try_date_from_days(to_days(dt.date(), 1))?;
+    Ok(super::DateTime2::new(date, time_to_wire(dt.time())))
+}
+
+#[cfg(feature = "tds73")]
+fn offset_to_dto(odt: OffsetDateTime) -> crate::Result<super::DateTimeOffset> {
+    let offset = super::offset_minutes(odt.offset().whole_seconds());
+    let utc = odt.checked_to_offset(UtcOffset::UTC).ok_or_else(|| {
+        crate::Error::Conversion(
+            "date out of range for SQL Server datetimeoffset (0001-01-01..9999-12-31 in UTC)"
+                .into(),
+        )
+    })?;
+    Ok(super::DateTimeOffset::new(
+        datetime_to_dt2(PrimitiveDateTime::new(utc.date(), utc.time()))?,
+        offset,
+    ))
+}
+
+// A value that cannot be represented (a date before 0001-01-01, or a UTC
+// instant outside 0001-01-01..9999-12-31) becomes `ColumnData::Invalid`
+// carrying the error, which every send path rejects with `Error::Conversion`
+// before anything is written. `ToSql` cannot return an error, and a date is
+// never clamped or substituted.
 #[cfg(feature = "tds73")]
 to_sql!(self_,
-        Date: (ColumnData::Date, super::date_from_days(to_days(*self_, 1)));
-        Time: (ColumnData::Time, {
-            let nanos: u64 = (*self_ - Time::from_hms(0, 0, 0).unwrap()).whole_nanoseconds().try_into().unwrap();
-            let increments = nanos / 100;
-
-            super::Time {increments, scale: 7}
-        });
-        PrimitiveDateTime: (ColumnData::DateTime2, {
-            let time = self_.time();
-            let nanos: u64 = (time - Time::from_hms(0, 0, 0).unwrap()).whole_nanoseconds().try_into().unwrap();
-            let increments = nanos / 100;
-
-            let date = super::date_from_days(to_days(self_.date(), 1));
-            let time = super::Time {increments, scale: 7};
-
-            super::DateTime2::new(date, time)
-        });
-        OffsetDateTime: (ColumnData::DateTimeOffset, {
-            let tz = self_.offset();
-            let offset = super::offset_minutes(tz.whole_seconds());
-
-            let utc_date = self_.to_offset(UtcOffset::UTC);
-
-            let nanos: u64 = (utc_date.time() - Time::from_hms(0, 0, 0).unwrap()).whole_nanoseconds().try_into().unwrap();
-
-            let date = super::date_from_days(to_days(utc_date.date(), 1));
-            let time = super::Time { increments: nanos / 100, scale: 7 };
-
-            super::DateTimeOffset::new(super::DateTime2::new(date, time), offset)
-        });
+        Date: (super::fallible(ColumnData::Date), super::try_date_from_days(to_days(*self_, 1)));
+        Time: (ColumnData::Time, time_to_wire(*self_));
+        PrimitiveDateTime: (super::fallible(ColumnData::DateTime2), datetime_to_dt2(*self_));
+        OffsetDateTime: (super::fallible(ColumnData::DateTimeOffset), offset_to_dto(*self_));
 );
 
 #[cfg(not(feature = "tds73"))]
+fn datetime_to_legacy(dt: PrimitiveDateTime) -> crate::Result<super::DateTime> {
+    let days = super::try_legacy_days(to_days(dt.date(), 1900))?;
+    Ok(super::DateTime::new(days, to_sec_fragments(dt.time())))
+}
+
+#[cfg(not(feature = "tds73"))]
 to_sql!(self_,
-        PrimitiveDateTime: (ColumnData::DateTime, {
-            let date = self_.date();
-            let time = self_.time();
-
-            let days = super::legacy_days(to_days(date, 1900));
-            let seconds_fragments = to_sec_fragments(time);
-
-            super::DateTime::new(days, seconds_fragments)
-        });
+        PrimitiveDateTime: (super::fallible(ColumnData::DateTime), datetime_to_legacy(*self_));
 );
 
 #[cfg(not(feature = "tds73"))]
@@ -184,7 +190,7 @@ from_sql!(
 mod tests {
     use super::*;
     use crate::tds::time as tds;
-    use crate::FromSql;
+    use crate::{FromSql, ToSql};
 
     // Hostile/out-of-range wire values must be conversion errors, not panics
     // or silent wrap-around.
@@ -236,6 +242,99 @@ mod tests {
             14 * 60,
         )));
         assert!(OffsetDateTime::from_sql(&dto).is_err());
+    }
+
+    fn invalid_message(data: &ColumnData<'_>) -> String {
+        match data {
+            ColumnData::Invalid(message) => message.to_string(),
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    fn day(year: i32, month: Month, day: u8) -> Date {
+        Date::from_calendar_date(year, month, day).unwrap()
+    }
+
+    #[test]
+    fn dates_before_year_one_become_invalid_not_a_panic() {
+        let before = day(0, Month::December, 31);
+        let midnight = Time::from_hms(0, 0, 0).unwrap();
+        let pdt = PrimitiveDateTime::new(before, midnight);
+        let odt = pdt.assume_utc();
+
+        for data in [
+            before.to_sql(),
+            Some(before).to_sql(),
+            pdt.to_sql(),
+            odt.to_sql(),
+            day(-4000, Month::January, 1).to_sql(),
+        ] {
+            assert!(
+                invalid_message(&data).contains("0001-01-01..9999-12-31"),
+                "{data:?}"
+            );
+        }
+        assert!(matches!(Some(before).to_sql(), ColumnData::Invalid(_)));
+    }
+
+    #[test]
+    fn year_one_and_year_9999_boundaries() {
+        let first = day(1, Month::January, 1);
+        let last = day(9999, Month::December, 31);
+        assert_eq!(first.to_sql(), ColumnData::Date(Some(tds::Date::new(0))));
+        assert_eq!(
+            last.to_sql(),
+            ColumnData::Date(Some(tds::Date::new(3_652_058)))
+        );
+        let midnight = Time::from_hms(0, 0, 0).unwrap();
+        assert!(matches!(
+            PrimitiveDateTime::new(first, midnight).to_sql(),
+            ColumnData::DateTime2(Some(_))
+        ));
+        assert!(matches!(
+            PrimitiveDateTime::new(last, Time::from_hms_nano(23, 59, 59, 999_999_900).unwrap())
+                .to_sql(),
+            ColumnData::DateTime2(Some(_))
+        ));
+        // In UTC the instant is in range, whatever the offset.
+        assert!(matches!(
+            PrimitiveDateTime::new(first, midnight)
+                .assume_utc()
+                .to_sql(),
+            ColumnData::DateTimeOffset(Some(_))
+        ));
+        assert!(matches!(Some(first).to_sql(), ColumnData::Date(Some(_))));
+    }
+
+    #[test]
+    fn offset_conversion_outside_the_supported_range_is_invalid() {
+        // 9999-12-31T23:00 at -01:00 is 10000-01-01T00:00 in UTC.
+        let odt = PrimitiveDateTime::new(
+            day(9999, Month::December, 31),
+            Time::from_hms(23, 0, 0).unwrap(),
+        )
+        .assume_offset(UtcOffset::from_hms(-1, 0, 0).unwrap());
+        assert!(invalid_message(&odt.to_sql()).contains("datetimeoffset"));
+
+        // 0001-01-01T00:30 at +01:00 is 0000-12-31T23:30 in UTC.
+        let odt =
+            PrimitiveDateTime::new(day(1, Month::January, 1), Time::from_hms(0, 30, 0).unwrap())
+                .assume_offset(UtcOffset::from_hms(1, 0, 0).unwrap());
+        assert!(matches!(odt.to_sql(), ColumnData::Invalid(_)));
+    }
+
+    #[test]
+    fn valid_values_encode_to_the_same_wire_values() {
+        let pdt = PrimitiveDateTime::new(
+            day(2020, Month::April, 20),
+            Time::from_hms_nano(16, 20, 5, 123_456_700).unwrap(),
+        );
+        let ColumnData::DateTime2(Some(dt2)) = pdt.to_sql() else {
+            panic!("not datetime2")
+        };
+        assert_eq!(dt2.date().days(), 737_534);
+        assert_eq!(dt2.time().increments(), 58_805 * 10_000_000 + 1_234_567);
+        assert_eq!(dt2.time().scale(), 7);
     }
 
     #[test]

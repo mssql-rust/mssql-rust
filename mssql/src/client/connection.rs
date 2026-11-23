@@ -1054,6 +1054,35 @@ where
     }
 }
 
+/// An in-memory connection for tests that must prove a request is rejected
+/// before anything is written to the wire.
+#[cfg(test)]
+impl Connection<futures_util::io::Cursor<Vec<u8>>> {
+    pub(crate) fn in_memory() -> Self {
+        Connection {
+            transport: Framed::new(
+                MaybeTlsStream::Raw(futures_util::io::Cursor::new(Vec::new())),
+                PacketCodec,
+            ),
+            // Nothing is pending to drain, so `flush_stream` is a no-op.
+            flushed: true,
+            context: Context::new(),
+            buf: BytesMut::new(),
+            poisoned: false,
+            command_desync: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Bytes the transport has received so far.
+    pub(crate) fn bytes_written(&self) -> usize {
+        match std::ops::Deref::deref(&self.transport) {
+            MaybeTlsStream::Raw(cursor) => cursor.get_ref().len(),
+            #[allow(unreachable_patterns)]
+            _ => usize::MAX,
+        }
+    }
+}
+
 #[cfg(test)]
 mod timeout_tests {
     use super::*;

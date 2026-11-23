@@ -47,6 +47,16 @@ use uuid::Uuid;
 ///
 /// See the [`time`](crate::time) module for more information about the date
 /// and time structs.
+///
+/// # Out-of-range dates
+///
+/// `to_sql` cannot return an error. A `time` or `jiff` date outside what SQL
+/// Server can store (before 0001-01-01 or after 9999-12-31, and for a
+/// `datetimeoffset` judged in UTC; before 1753-01-01 for the legacy
+/// `datetime` without `tds73`) yields a hidden `ColumnData::Invalid` carrying
+/// the message. Sending it (`execute`, `query`, `call_procedure`, `Query`,
+/// bulk insert) fails with `Error::Conversion` before anything is written;
+/// the date is never clamped and nothing panics.
 pub trait ToSql: Send + Sync {
     /// Convert to a value understood by the SQL Server. Conversion
     /// by-reference.

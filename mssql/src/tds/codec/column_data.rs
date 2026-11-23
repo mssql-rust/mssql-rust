@@ -47,7 +47,10 @@ pub(crate) const MAX_PLP_SIZE: usize = 0x7fff_ffff; // i32::MAX
 
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 /// A container of a value that can be represented as a TDS value.
+///
+/// This enum is `#[non_exhaustive]`: match it with a wildcard arm.
 pub enum ColumnData<'a> {
     /// 8-bit integer, unsigned.
     U8(Option<u8>),
@@ -93,9 +96,43 @@ pub enum ColumnData<'a> {
     #[cfg_attr(feature = "docs", doc(cfg(feature = "tds73")))]
     /// DateTime2 value with an offset.
     DateTimeOffset(Option<DateTimeOffset>),
+    /// A value that could not be converted to a SQL Server value, for
+    /// example a date before 0001-01-01 given to a [`ToSql`] or [`IntoSql`]
+    /// implementation (which cannot return an error). It carries the
+    /// conversion error message.
+    ///
+    /// It is never encoded onto the wire: every entry point that sends a
+    /// value (`Client::execute`, `query`, `call_procedure`, `Query`, bulk
+    /// insert, table-valued parameters) fails with [`Error::Conversion`]
+    /// carrying this message before anything is written. No date is ever
+    /// clamped or substituted. Not part of the stable API; do not construct
+    /// it.
+    ///
+    /// [`Error::Conversion`]: crate::Error::Conversion
+    #[doc(hidden)]
+    Invalid(Cow<'static, str>),
 }
 
 impl<'a> ColumnData<'a> {
+    /// A [`ColumnData::Invalid`] carrying the message of a failed conversion.
+    #[cfg(any(feature = "jiff", feature = "time"))]
+    pub(crate) fn invalid(error: crate::Error) -> ColumnData<'a> {
+        ColumnData::Invalid(match error {
+            crate::Error::Conversion(message) => message,
+            other => other.to_string().into(),
+        })
+    }
+
+    /// The single pre-send check for [`ColumnData::Invalid`]: every site that
+    /// turns parameter or row values into wire bytes calls this (or
+    /// [`reject_invalid_values`]) before anything is sent.
+    pub(crate) fn reject_invalid(&self) -> crate::Result<()> {
+        match self {
+            ColumnData::Invalid(message) => Err(crate::Error::Conversion(message.clone())),
+            _ => Ok(()),
+        }
+    }
+
     pub(crate) fn type_name(&self) -> Cow<'static, str> {
         match self {
             ColumnData::U8(_) => "tinyint".into(),
@@ -129,6 +166,7 @@ impl<'a> ColumnData<'a> {
             ColumnData::DateTime2(_) => "datetime2".into(),
             #[cfg(feature = "tds73")]
             ColumnData::DateTimeOffset(_) => "datetimeoffset".into(),
+            ColumnData::Invalid(_) => "invalid".into(),
         }
     }
 
@@ -179,6 +217,7 @@ impl<'a> ColumnData<'a> {
             ColumnData::DateTime2(v) => v.is_none(),
             #[cfg(feature = "tds73")]
             ColumnData::DateTimeOffset(v) => v.is_none(),
+            ColumnData::Invalid(_) => false,
         }
     }
 
@@ -219,9 +258,19 @@ fn rescale_increments(increments: u64, from: u8, to: u8) -> crate::Result<u64> {
     .ok_or_else(|| overflow("time_increments"))
 }
 
+/// Fails with the first [`ColumnData::Invalid`] message among `values`.
+pub(crate) fn reject_invalid_values<'v, 'a: 'v>(
+    values: impl IntoIterator<Item = &'v ColumnData<'a>>,
+) -> crate::Result<()> {
+    values.into_iter().try_for_each(ColumnData::reject_invalid)
+}
+
 impl<'a> Encode<BytesMutWithTypeInfo<'a>> for ColumnData<'a> {
     fn encode(self, dst: &mut BytesMutWithTypeInfo<'a>) -> crate::Result<()> {
         match (self, dst.type_info()) {
+            // Defensive: every send path rejects this before encoding (see
+            // `reject_invalid`), and it must never reach the wire.
+            (ColumnData::Invalid(message), _) => return Err(crate::Error::Conversion(message)),
             (ColumnData::Bit(opt), Some(TypeInfo::VarLenSized(vlc)))
                 if vlc.r#type() == VarLenType::Bitn =>
             {

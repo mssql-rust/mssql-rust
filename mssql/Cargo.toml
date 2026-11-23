@@ -126,8 +126,9 @@ optional = true
 default-features = false
 features = ["std"]
 
+# 0.3.35 added `OffsetDateTime::checked_to_offset`, used by the ToSql conversion.
 [dependencies.time]
-version = "0.3"
+version = "0.3.35"
 optional = true
 
 # Runtime-agnostic timer behind `Config::handshake_timeout` and

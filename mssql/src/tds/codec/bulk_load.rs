@@ -60,6 +60,10 @@ where
         // bytes in the buffer, to be flushed later and desync the bulk-load
         // stream. Roll back to the row boundary instead, so the caller can
         // skip the bad row and carry on. Ported from upstream Tiberius 991702f.
+        // A value whose ToSql/IntoSql conversion failed is rejected before
+        // any of the row is encoded.
+        super::reject_invalid_values(row.iter())?;
+
         let row_start = self.buf.len();
         let mut buf_with_columns = BytesMutWithDataColumns::new(&mut self.buf, &self.columns);
 
@@ -134,5 +138,33 @@ where
         self.connection.unpoison();
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tds::codec::ColumnData;
+
+    #[test]
+    fn a_row_with_an_invalid_value_is_rejected_before_any_encoding() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let mut connection = Connection::in_memory();
+            let mut request = BulkLoadRequest::new(&mut connection, Vec::new(), "t").unwrap();
+            let buffered = request.buf.len();
+
+            let mut row = TokenRow::new();
+            row.push(ColumnData::I32(Some(1)));
+            row.push(ColumnData::Invalid("date out of range".into()));
+            let err = request.send(row).await.unwrap_err();
+
+            assert!(matches!(err, crate::Error::Conversion(m) if m == "date out of range"));
+            assert_eq!(request.buf.len(), buffered);
+            drop(request);
+            assert_eq!(connection.bytes_written(), 0);
+        });
     }
 }

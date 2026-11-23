@@ -16,6 +16,16 @@ forward.
 
 ### Changed (breaking)
 
+- `ColumnData` is now `#[non_exhaustive]` and has a new `#[doc(hidden)]`
+  variant, `Invalid(Cow<'static, str>)`. Downstream code that matches
+  `ColumnData` exhaustively (without a wildcard arm) no longer compiles. This
+  is a breaking change and implies a **major** version bump (2.x to 3.0.0)
+  when released. `Invalid` is never sent: `ToSql` /
+  `IntoSql` cannot return an error, so a failed conversion yields `Invalid`
+  carrying the message, and `Client::execute`, `query`, `into_query`,
+  `call_procedure` (including table-valued parameter rows), `Query` and bulk
+  insert `send` reject it with `Error::Conversion` before anything is written
+  (RCA-P-1, RCA-IN-7).
 - `ExecuteResult::total` now returns `Result<u64>` and fails with
   `Error::Conversion` when the affected-row total does not fit a `u64`,
   instead of reporting `u64::MAX` (rust-checked-arithmetic RCA-IN-6). Use
@@ -23,6 +33,15 @@ forward.
 
 ### Fixed
 
+- Writing a date before 0001-01-01 (or a `datetimeoffset` whose UTC instant is
+  outside 0001-01-01..9999-12-31) through the `time` or `jiff` `ToSql`
+  /`IntoSql` conversions no longer panics: the parameter is rejected with
+  `Error::Conversion` ("date out of range for SQL Server date
+  (0001-01-01..9999-12-31)") when the statement is sent; no date is clamped.
+  Without `tds73`, `PrimitiveDateTime`/`civil::DateTime` before 1753-01-01 or
+  after 9999-12-31 are rejected the same way instead of being sent unvalidated.
+  `OffsetDateTime` uses `checked_to_offset`, so the minimum `time` version is
+  now 0.3.35.
 - The login driver version is packed at compile time; a pre-release or build
   suffix (`-rc1`, `+meta`) is stripped instead of zeroing that part, and a
   malformed crate version fails the build rather than packing zero bits

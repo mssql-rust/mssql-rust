@@ -28,6 +28,8 @@ pub mod jiff;
 #[cfg_attr(feature = "docs", doc(cfg(feature = "time")))]
 pub mod time;
 
+#[cfg(any(feature = "jiff", feature = "time"))]
+use crate::tds::codec::ColumnData;
 use crate::{tds::codec::Encode, SqlReadBytes};
 #[cfg(feature = "tds73")]
 use byteorder::{ByteOrder, LittleEndian};
@@ -165,7 +167,9 @@ impl Date {
     /// Construct a new `Date`
     ///
     /// # Panics
-    /// max value of 3 bytes (`u32::max_value() > 8`)
+    /// max value of 3 bytes (`u32::max_value() > 8`). The `ToSql`/`IntoSql`
+    /// conversions never reach this: a date outside 0001-01-01..9999-12-31
+    /// becomes [`ColumnData::Invalid`](crate::ColumnData::Invalid) instead.
     pub fn new(days: u32) -> Date {
         assert_eq!(days >> 24, 0);
         Date(days)
@@ -244,26 +248,57 @@ pub(crate) fn offset_minutes(seconds: i32) -> i16 {
 
 /// A day count since 0001-01-01 as the 3-byte wire [`Date`].
 ///
-/// `ToSql` is infallible, and [`Date::new`] documents a panic for a day count
-/// outside 0..2^24. A negative day count (a date before year 1) is not
-/// representable as a `date`; it maps to `u32::MAX`, which `Date::new`
-/// rejects exactly as the former wrapping cast did.
+/// A negative day count (a date before 0001-01-01) or one past 2^24 - 1
+/// (after 9999-12-31) is not representable as a `date`/`datetime2`; it is an
+/// `Error::Conversion`, never a panic and never a substituted date.
 #[cfg(all(feature = "tds73", any(feature = "jiff", feature = "time")))]
-pub(crate) fn date_from_days(days: i64) -> Date {
-    Date::new(u32::try_from(days).unwrap_or(u32::MAX))
+pub(crate) fn try_date_from_days(days: i64) -> crate::Result<Date> {
+    match u32::try_from(days) {
+        Ok(days) if days < (1 << 24) => Ok(Date::new(days)),
+        _ => Err(crate::Error::Conversion(
+            "date out of range for SQL Server date (0001-01-01..9999-12-31)".into(),
+        )),
+    }
 }
 
-/// A legacy `datetime` day count (days since 1900-01-01). Both date/time
-/// crates bound years to +-9999 (or +-999999 with `large-dates`), i.e. at
-/// most about 365 million days, inside i32.
+/// Turns the result of a fallible `ToSql`/`IntoSql` conversion into a
+/// [`ColumnData`]: the value in `ctor` on success, [`ColumnData::Invalid`]
+/// carrying the error message on failure. `ToSql` cannot return an error, and
+/// a value must never be clamped or substituted, so the failure travels in the
+/// parameter and is rejected before anything is sent.
+#[cfg(any(feature = "jiff", feature = "time"))]
+pub(crate) fn fallible<'a, T>(
+    ctor: fn(Option<T>) -> ColumnData<'a>,
+) -> impl Fn(Option<crate::Result<T>>) -> ColumnData<'a> {
+    move |value| match value {
+        None => ctor(None),
+        Some(Ok(value)) => ctor(Some(value)),
+        Some(Err(error)) => ColumnData::invalid(error),
+    }
+}
+
+/// Nanoseconds since midnight from the clock fields of a time of day. Total:
+/// the fields are bounded (hour < 24, minute and second < 60, nanosecond <
+/// 10^9), so the sum is below 86 400 * 10^9, far inside u64.
+#[cfg(feature = "time")]
+pub(crate) fn nanos_of_day(hour: u8, minute: u8, second: u8, nanosecond: u32) -> u64 {
+    u64::from(hour) * 3_600_000_000_000
+        + u64::from(minute) * 60_000_000_000
+        + u64::from(second) * 1_000_000_000
+        + u64::from(nanosecond)
+}
+
+/// A legacy `datetime` day count (days since 1900-01-01) after range
+/// checking: SQL Server's `datetime` spans 1753-01-01 (-53 690) to 9999-12-31
+/// (2 958 463).
 #[cfg(all(not(feature = "tds73"), any(feature = "jiff", feature = "time")))]
-pub(crate) fn legacy_days(days: i64) -> i32 {
-    #[expect(
-        clippy::as_conversions,
-        reason = "RCA-EXC-2: day counts since 1900 are bounded by the date crates' year range (< 365 million days), inside i32"
-    )]
-    let days = days as i32;
-    days
+pub(crate) fn try_legacy_days(days: i64) -> crate::Result<i32> {
+    match i32::try_from(days) {
+        Ok(days) if (-53_690..=2_958_463).contains(&days) => Ok(days),
+        _ => Err(crate::Error::Conversion(
+            "date out of range for SQL Server datetime (1753-01-01..9999-12-31)".into(),
+        )),
+    }
 }
 
 /// A legacy `datetime` second-fraction count (1/300 s since midnight), from
@@ -595,16 +630,44 @@ mod coverage_tests {
 
     #[cfg(all(feature = "tds73", any(feature = "jiff", feature = "time")))]
     #[test]
-    fn date_from_days_accepts_the_wire_range() {
-        assert_eq!(date_from_days(0).days(), 0);
-        assert_eq!(date_from_days((1 << 24) - 1).days(), (1 << 24) - 1);
+    fn try_date_from_days_accepts_the_wire_range() {
+        assert_eq!(try_date_from_days(0).unwrap().days(), 0);
+        assert_eq!(
+            try_date_from_days((1 << 24) - 1).unwrap().days(),
+            (1 << 24) - 1
+        );
     }
 
     #[cfg(all(feature = "tds73", any(feature = "jiff", feature = "time")))]
     #[test]
-    #[should_panic]
-    fn date_from_days_of_a_date_before_year_one_is_rejected_by_date_new() {
-        let _ = date_from_days(-1);
+    fn try_date_from_days_rejects_dates_outside_the_wire_range() {
+        for days in [-1, i64::MIN, 1 << 24, i64::MAX] {
+            let err = try_date_from_days(days).unwrap_err();
+            assert!(
+                matches!(&err, crate::Error::Conversion(m) if m.contains("0001-01-01..9999-12-31")),
+                "{days}: {err:?}"
+            );
+        }
+    }
+
+    #[cfg(all(not(feature = "tds73"), any(feature = "jiff", feature = "time")))]
+    #[test]
+    fn try_legacy_days_enforces_the_datetime_range() {
+        assert_eq!(try_legacy_days(-53_690).unwrap(), -53_690);
+        assert_eq!(try_legacy_days(2_958_463).unwrap(), 2_958_463);
+        assert!(try_legacy_days(-53_691).is_err());
+        assert!(try_legacy_days(2_958_464).is_err());
+        assert!(try_legacy_days(i64::MAX).is_err());
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn nanos_of_day_is_total_over_the_clock_range() {
+        assert_eq!(nanos_of_day(0, 0, 0, 0), 0);
+        assert_eq!(
+            nanos_of_day(23, 59, 59, 999_999_999),
+            86_400 * 1_000_000_000 - 1
+        );
     }
 
     #[cfg(all(feature = "tds73", any(feature = "jiff", feature = "time")))]
