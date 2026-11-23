@@ -23,6 +23,10 @@ forward.
 
 ### Fixed
 
+- The login driver version is packed at compile time; a pre-release or build
+  suffix (`-rc1`, `+meta`) is stripped instead of zeroing that part, and a
+  malformed crate version fails the build rather than packing zero bits
+  (RCA-IN-3, RCA-ENF-7).
 - Encoding a two-byte-length column type (`NVARCHAR`, `VARCHAR`, `VARBINARY`,
   `CHAR`, `NCHAR`, `BINARY`) whose length is above 65 534 bytes now fails with
   `Error::Conversion` naming `type_length`, instead of silently declaring the

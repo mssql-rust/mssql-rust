@@ -377,29 +377,56 @@ use tds::codec::*;
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub(crate) fn get_driver_version() -> u64 {
-    pack_version(env!("CARGO_PKG_VERSION"))
+    // Evaluated at compile time: a malformed `CARGO_PKG_VERSION` fails the
+    // build instead of silently packing zero bits.
+    const PACKED: u64 = pack_version(env!("CARGO_PKG_VERSION"));
+    PACKED
 }
 
-/// Packs the dotted parts of `version` one byte each, first part lowest.
-fn pack_version(version: &str) -> u64 {
-    version
-        .splitn(6, '.')
-        .enumerate()
-        .fold(0u64, |acc, (index, part)| {
-            // Fallback: 0 - a part that is not a plain number (a pre-release
-            // suffix such as `0-rc1`) contributes no bits to the packed
-            // version.
-            let num = part.parse::<u64>().unwrap_or(0);
-            // One byte per version part: bit-field packing (RCA-BIT-2). The
-            // parts are at most six, so the shift is at most 40 bits; a shift
-            // that could not be made contributes no bits either.
-            let packed = u32::try_from(index)
-                .ok()
-                .and_then(|index| index.checked_mul(8))
-                .and_then(|shift| num.checked_shl(shift))
-                .unwrap_or(0);
-            acc | packed
-        })
+/// Packs the dotted numeric parts of `version` one byte each, first part
+/// lowest.
+///
+/// A pre-release (`-rc1`) or build (`+meta`) suffix is stripped first. Every
+/// remaining part must be a plain decimal number of at most 255, and there may
+/// be at most six parts; anything else panics, which in the compile-time
+/// evaluation of [`get_driver_version`] is a build error.
+const fn pack_version(version: &str) -> u64 {
+    let bytes = version.as_bytes();
+
+    // The numeric core ends at the first `-` or `+`.
+    let mut end = 0;
+    while end < bytes.len() && bytes[end] != b'-' && bytes[end] != b'+' {
+        end += 1;
+    }
+
+    let mut packed = [0u8; 8];
+    let mut index = 0usize;
+    let mut num = 0u8;
+    let mut digits = 0u32;
+    let mut pos = 0;
+    while pos <= end {
+        if pos == end || bytes[pos] == b'.' {
+            assert!(digits > 0, "version part is empty");
+            assert!(index < 6, "version has more than six parts");
+            packed[index] = num;
+            index += 1;
+            num = 0;
+            digits = 0;
+        } else {
+            let byte = bytes[pos];
+            assert!(byte.is_ascii_digit(), "version part is not numeric");
+            digits += 1;
+            let Some(times_ten) = num.checked_mul(10) else {
+                panic!("version part exceeds one byte");
+            };
+            let Some(next) = times_ten.checked_add(byte - b'0') else {
+                panic!("version part exceeds one byte");
+            };
+            num = next;
+        }
+        pos += 1;
+    }
+    u64::from_le_bytes(packed)
 }
 
 #[cfg(test)]
@@ -413,9 +440,34 @@ mod version_tests {
     }
 
     #[test]
-    fn non_numeric_part_falls_back_to_zero_bits() {
-        assert_eq!(pack_version("1.2.3-rc1"), 0x0000_0201);
-        assert_eq!(pack_version("x.2.3"), 0x0003_0200);
+    fn pre_release_and_build_suffixes_are_stripped() {
+        assert_eq!(pack_version("1.2.3-rc1"), 0x0003_0201);
+        assert_eq!(pack_version("1.2.3+build.5"), 0x0003_0201);
+        assert_eq!(pack_version("1.2.3-rc.1+b"), 0x0003_0201);
+    }
+
+    #[test]
+    #[should_panic(expected = "not numeric")]
+    fn non_numeric_core_part_is_rejected() {
+        let _ = pack_version("x.2.3");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty")]
+    fn empty_part_is_rejected() {
+        let _ = pack_version("1..3");
+    }
+
+    #[test]
+    #[should_panic(expected = "one byte")]
+    fn part_over_one_byte_is_rejected() {
+        let _ = pack_version("1.256.0");
+    }
+
+    #[test]
+    #[should_panic(expected = "more than six")]
+    fn seventh_part_is_rejected() {
+        let _ = pack_version("1.1.1.1.1.1.1");
     }
 
     #[test]
