@@ -60,6 +60,21 @@ feature-gated:
   server is reachable in your environment, say so explicitly rather than
   silently only running the unit tests.
 
+### Faster local runs with cargo-nextest
+
+Optional; CI keeps `cargo test`. `mssql/.config/nextest.toml` configures it, so
+from `mssql/`:
+
+```sh
+cargo nextest run --lib --no-fail-fast   # offline unit tests, one process each
+cargo test --doc                         # nextest skips doctests, so run both
+```
+
+The integration binaries (`tests/*.rs`) share one SQL Server, so they sit in a
+one-thread `live-db` group; they still need `MSSQL_TEST_CONNECTION_STRING` (and
+`--features all`) and fail without a server exactly as under `cargo test`.
+Retries are off.
+
 ## Verifying a fix against upstream
 
 If the change originates from an upstream Tiberius PR or issue (most do —
