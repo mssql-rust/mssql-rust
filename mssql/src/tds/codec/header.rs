@@ -249,6 +249,14 @@ mod tests {
     }
 
     #[test]
+    fn transaction_manager_constructor() {
+        let header = PacketHeader::transaction_manager(5);
+        assert_eq!(header.ty, PacketType::TransactionManagerReq);
+        assert_eq!(header.status, PacketStatus::EndOfMessage);
+        assert_eq!(header.id, 5);
+    }
+
+    #[test]
     fn pre_login_constructor() {
         let header = PacketHeader::pre_login(1);
         assert_eq!(header.r#type(), PacketType::PreLogin);

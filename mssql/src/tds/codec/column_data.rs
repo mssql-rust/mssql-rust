@@ -1276,6 +1276,127 @@ mod tests {
         assert_eq!(bytes.as_ref(), &u64::MAX.to_le_bytes());
     }
 
+    fn encode_with(value: ColumnData<'_>, ty: &TypeInfo) -> crate::Result<BytesMut> {
+        let mut bytes = BytesMut::new();
+        value.encode(&mut BytesMutWithTypeInfo::new(&mut bytes).with_type_info(ty))?;
+        Ok(bytes)
+    }
+
+    #[cfg(any(feature = "jiff", feature = "time"))]
+    #[test]
+    fn invalid_values_keep_their_message_and_never_encode() {
+        let conversion = ColumnData::invalid(Error::Conversion("bad date".into()));
+        assert_eq!(conversion, ColumnData::Invalid("bad date".into()));
+        let other = ColumnData::invalid(Error::Protocol("oops".into()));
+        assert!(matches!(other, ColumnData::Invalid(ref m) if m.contains("oops")));
+    }
+
+    #[test]
+    fn invalid_values_are_rejected_and_report_their_type() {
+        let value = ColumnData::Invalid("nope".into());
+        assert_eq!(value.type_name(), "invalid");
+        assert_eq!(
+            value.reject_invalid().unwrap_err(),
+            Error::Conversion("nope".into())
+        );
+        assert!(ColumnData::I32(Some(1)).reject_invalid().is_ok());
+        let mut bytes = BytesMut::new();
+        let error = value
+            .encode(&mut BytesMutWithTypeInfo::new(&mut bytes))
+            .unwrap_err();
+        assert_eq!(error, Error::Conversion("nope".into()));
+        assert!(bytes.is_empty());
+    }
+
+    #[test]
+    fn sql_variant_columns_accept_any_value() {
+        let ty = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::SSVariant, 8009, None));
+        let bytes = encode_with(ColumnData::I32(Some(5)), &ty).unwrap();
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn money_columns_encode_numeric_and_float_values() {
+        for len in [4, 8] {
+            let var = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Money, len, None));
+            let bytes = encode_with(
+                ColumnData::Numeric(Some(Numeric::new_with_scale(12345, 4))),
+                &var,
+            )
+            .unwrap();
+            assert_eq!(bytes[0] as usize, len);
+            assert_eq!(bytes.len(), len + 1);
+        }
+
+        for (fixed, len) in [(FixedLenType::Money, 8), (FixedLenType::Money4, 4)] {
+            let ty = TypeInfo::FixedLen(fixed);
+            let bytes = encode_with(ColumnData::F64(Some(1.5)), &ty).unwrap();
+            assert_eq!(bytes.len(), len);
+            let bytes = encode_with(
+                ColumnData::Numeric(Some(Numeric::new_with_scale(15000, 4))),
+                &ty,
+            )
+            .unwrap();
+            assert_eq!(bytes.len(), len);
+        }
+    }
+
+    #[test]
+    fn legacy_text_values_encode_in_the_column_collation() {
+        let ty = TypeInfo::VarLenSized(VarLenContext::new(
+            VarLenType::Text,
+            100,
+            Some(Collation::new(0x0409, 0)),
+        ));
+        let bytes = encode_with(ColumnData::String(Some(Cow::Borrowed("abc"))), &ty).unwrap();
+        assert!(bytes.ends_with(b"abc"));
+    }
+
+    #[test]
+    fn ntext_and_image_values_carry_a_text_pointer() {
+        let ntext = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::NText, 100, None));
+        let bytes = encode_with(ColumnData::String(Some(Cow::Borrowed("ab"))), &ntext).unwrap();
+        assert_eq!(bytes[0], 16);
+        assert!(bytes.ends_with(&[b'a', 0, b'b', 0]));
+        assert_eq!(
+            encode_with(ColumnData::String(None), &ntext)
+                .unwrap()
+                .as_ref(),
+            &[0]
+        );
+
+        let image = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Image, 100, None));
+        let bytes =
+            encode_with(ColumnData::Binary(Some(Cow::Borrowed(&[1, 2, 3]))), &image).unwrap();
+        assert_eq!(bytes[0], 16);
+        assert!(bytes.ends_with(&[1, 2, 3]));
+        assert_eq!(
+            encode_with(ColumnData::Binary(None), &image)
+                .unwrap()
+                .as_ref(),
+            &[0]
+        );
+    }
+
+    #[cfg(feature = "tds73")]
+    #[test]
+    fn datetime2_values_are_rescaled_to_the_column_scale() {
+        let ty = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Datetime2, 3, None));
+        let value = DateTime2::new(Date::new(700_000), Time::new(12_345, 7));
+        let bytes = encode_with(ColumnData::DateTime2(Some(value)), &ty).unwrap();
+        assert_eq!(bytes[0], Time::new(0, 3).len().unwrap() + 3);
+    }
+
+    #[test]
+    fn xml_values_encode_with_and_without_type_information() {
+        let xml = XmlData::new("<x/>");
+        let mut bytes = BytesMut::new();
+        ColumnData::Xml(Some(Cow::Borrowed(&xml)))
+            .encode(&mut BytesMutWithTypeInfo::new(&mut bytes))
+            .unwrap();
+        assert_eq!(bytes[0], u8::from(VarLenType::Xml));
+    }
+
     #[test]
     fn varchar_without_collation_is_a_bulk_input_error() {
         let ty = TypeInfo::VarLenSized(VarLenContext::new(VarLenType::BigVarChar, 20, None));

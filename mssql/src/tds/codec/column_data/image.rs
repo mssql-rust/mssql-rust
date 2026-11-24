@@ -25,3 +25,29 @@ where
 
     Ok(ColumnData::Binary(Some(buf.into())))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+    use bytes::{BufMut, BytesMut};
+
+    #[tokio::test]
+    async fn image_values_decode_with_and_without_a_text_pointer() {
+        let mut input = BytesMut::from(&[0u8][..]).into_sql_read_bytes();
+        assert_eq!(decode(&mut input).await.unwrap(), ColumnData::Binary(None));
+
+        let mut wire = BytesMut::new();
+        wire.put_u8(2); // text pointer length
+        wire.extend_from_slice(&[9, 9]); // text pointer
+        wire.put_i32_le(0); // days
+        wire.put_u32_le(0); // second fractions
+        wire.put_u32_le(3);
+        wire.extend_from_slice(&[1, 2, 3]);
+        let mut input = wire.into_sql_read_bytes();
+        assert_eq!(
+            decode(&mut input).await.unwrap(),
+            ColumnData::Binary(Some(vec![1, 2, 3].into()))
+        );
+    }
+}

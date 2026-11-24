@@ -38,3 +38,23 @@ impl Encode<BytesMut> for TokenSspi {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+
+    #[tokio::test]
+    async fn sspi_token_decodes_and_encodes_its_payload() {
+        let mut input = BytesMut::from(&[3, 0, 7, 8, 9][..]).into_sql_read_bytes();
+        let token = TokenSspi::decode_async(&mut input).await.unwrap();
+        assert_eq!(token.as_ref(), &[7, 8, 9]);
+
+        let mut out = BytesMut::new();
+        token.encode(&mut out).unwrap();
+        assert_eq!(out.as_ref(), &[7, 8, 9]);
+
+        let mut input = BytesMut::from(&[3, 0, 7][..]).into_sql_read_bytes();
+        assert!(TokenSspi::decode_async(&mut input).await.is_err());
+    }
+}
