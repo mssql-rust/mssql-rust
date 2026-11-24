@@ -14,13 +14,20 @@ forward.
 
 ## Unreleased
 
+## Version 3.0.0
+
+Released 2026-11-24.
+
+This is a **major** release: it contains the breaking changes below. Review
+them before upgrading from 2.x.
+
 ### Changed (breaking)
 
 - `ColumnData` is now `#[non_exhaustive]` and has a new `#[doc(hidden)]`
   variant, `Invalid(Cow<'static, str>)`. Downstream code that matches
   `ColumnData` exhaustively (without a wildcard arm) no longer compiles. This
-  is a breaking change and implies a **major** version bump (2.x to 3.0.0)
-  when released. `Invalid` is never sent: `ToSql` /
+  is a breaking change, hence the major version bump (2.x to 3.0.0).
+  `Invalid` is never sent: `ToSql` /
   `IntoSql` cannot return an error, so a failed conversion yields `Invalid`
   carrying the message, and `Client::execute`, `query`, `into_query`,
   `call_procedure` (including table-valued parameter rows), `Query` and bulk
@@ -29,7 +36,12 @@ forward.
 - `ExecuteResult::total` now returns `Result<u64>` and fails with
   `Error::Conversion` when the affected-row total does not fit a `u64`,
   instead of reporting `u64::MAX` (rust-checked-arithmetic RCA-IN-6). Use
-  `checked_total` for an `Option`.
+  `checked_total` (new) for an `Option`.
+- Conversions that used to wrap, truncate, or substitute a fallback now fail
+  with `Error::Conversion` or `Error::Protocol`: a two-byte-length column
+  type longer than 65 534 bytes is rejected instead of becoming `(max)`, and
+  out-of-range dates are rejected instead of panicking (see Fixed). Code that
+  relied on the old lenient behavior must handle the new errors.
 
 ### Fixed
 
