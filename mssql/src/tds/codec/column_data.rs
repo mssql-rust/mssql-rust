@@ -2548,4 +2548,68 @@ mod tests {
             .expect("value must be Some");
         assert_eq!(original, from_owned);
     }
+
+    #[tokio::test]
+    async fn xml_columns_keep_their_schema_collection() {
+        let schema = std::sync::Arc::new(crate::xml::XmlSchema::new("db", "dbo", "coll"));
+        let units: Vec<u8> = "<a/>".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let reader = &mut short_string_wire(&units).into_sql_read_bytes();
+        let value = ColumnData::decode(
+            reader,
+            &TypeInfo::Xml {
+                schema: Some(schema.clone()),
+                size: 40,
+            },
+        )
+        .await
+        .unwrap();
+        let ColumnData::Xml(Some(xml)) = value else {
+            panic!("expected xml, got {value:?}");
+        };
+        assert_eq!(xml.to_string(), "<a/>");
+        assert!(xml.schema().is_some());
+    }
+
+    #[tokio::test]
+    async fn the_null_fixed_type_decodes_as_a_null_bit() {
+        let reader = &mut BytesMut::new().into_sql_read_bytes();
+        let value = ColumnData::decode(reader, &TypeInfo::FixedLen(FixedLenType::Null))
+            .await
+            .unwrap();
+        assert_eq!(value, ColumnData::Bit(None));
+    }
+
+    #[test]
+    fn the_typed_buffer_borrows_its_bytes() {
+        use std::borrow::Borrow;
+        let mut bytes = BytesMut::from(&[1u8, 2, 3][..]);
+        let buffer = BytesMutWithTypeInfo::new(&mut bytes);
+        let borrowed: &[u8] = buffer.borrow();
+        assert_eq!(borrowed, &[1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn text_values_decode_in_the_column_collation() {
+        let collation = Some(Collation::new(0x0409, 0));
+        let mut wire = BytesMut::new();
+        wire.put_u8(16);
+        wire.extend_from_slice(&[0; 16]);
+        wire.put_i32_le(0);
+        wire.put_u32_le(0);
+        wire.put_u32_le(3);
+        wire.extend_from_slice(b"abc");
+        let value = text::decode(&mut wire.into_sql_read_bytes(), collation)
+            .await
+            .unwrap();
+        assert_eq!(decoded_string(value).as_deref(), Some("abc"));
+
+        // A NULL text pointer.
+        let value = text::decode(
+            &mut BytesMut::from(&[0u8][..]).into_sql_read_bytes(),
+            collation,
+        )
+        .await
+        .unwrap();
+        assert_eq!(value, ColumnData::String(None));
+    }
 }

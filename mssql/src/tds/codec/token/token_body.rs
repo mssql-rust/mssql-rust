@@ -180,4 +180,15 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, crate::Error::Protocol(_)));
     }
+
+    #[test]
+    fn a_utf16_length_that_overflows_is_an_error() {
+        let mut body = super::TokenBody {
+            token: "TEST",
+            buf: Vec::new(),
+            pos: 0,
+        };
+        assert!(body.utf16(usize::MAX).is_err());
+        assert!(body.utf16(1).is_err());
+    }
 }

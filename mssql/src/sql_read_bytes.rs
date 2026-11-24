@@ -524,4 +524,104 @@ mod reader_tests {
             .unwrap();
         assert_eq!(output, input);
     }
+
+    /// Returns `Pending` before every read, then serves whole reads, and
+    /// then either a clean end of stream or an I/O error.
+    struct Stuttering {
+        data: std::collections::VecDeque<u8>,
+        pending: bool,
+        fail_at_end: bool,
+    }
+
+    impl Stuttering {
+        fn new(data: &[u8], fail_at_end: bool) -> Self {
+            Self {
+                data: data.iter().copied().collect(),
+                pending: true,
+                fail_at_end,
+            }
+        }
+    }
+
+    impl AsyncRead for Stuttering {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut task::Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<io::Result<usize>> {
+            let pending = self.pending;
+            self.pending = !pending;
+            if pending {
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            // Whole reads only: the field readers restart a partly read value
+            // after `Pending`, so a short read would drop its first bytes.
+            if self.data.len() >= buf.len() {
+                for slot in buf.iter_mut() {
+                    *slot = self.data.pop_front().unwrap_or_default();
+                }
+                return Poll::Ready(Ok(buf.len()));
+            }
+            match self.data.pop_front() {
+                Some(byte) => {
+                    buf[0] = byte;
+                    Poll::Ready(Ok(1))
+                }
+                None if self.fail_at_end => {
+                    Poll::Ready(Err(io::Error::new(io::ErrorKind::BrokenPipe, "gone")))
+                }
+                None => Poll::Ready(Ok(0)),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn readers_resume_after_pending_and_report_errors_and_eof() {
+        assert_eq!(
+            ReadBVarchar::new(Stuttering::new(&[2, b'h', 0, b'i', 0], false))
+                .await
+                .unwrap(),
+            "hi"
+        );
+        assert_eq!(
+            ReadUSVarchar::new(Stuttering::new(&[1, 0, b'h', 0], false))
+                .await
+                .unwrap(),
+            "h"
+        );
+        assert_eq!(
+            ReadU32Le::new(Stuttering::new(&[1, 0, 0, 0], false))
+                .await
+                .unwrap(),
+            1
+        );
+
+        // The length prefix and the body each fail on a broken transport.
+        let error = ReadBVarchar::new(Stuttering::new(&[], true))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        let error = ReadBVarchar::new(Stuttering::new(&[1], true))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        let error = ReadU32Le::new(Stuttering::new(&[1], true))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+
+        // A clean end of stream before the value is complete.
+        let error = ReadU32Le::new(Stuttering::new(&[1], false))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[tokio::test]
+    async fn a_completed_field_reader_can_be_polled_again() {
+        let mut reader = Box::pin(ReadU16Le::new(futures_util::io::Cursor::new(vec![1, 2])));
+        assert_eq!(reader.as_mut().await.unwrap(), 0x0201);
+        assert_eq!(reader.as_mut().await.unwrap(), 0x0201);
+    }
 }

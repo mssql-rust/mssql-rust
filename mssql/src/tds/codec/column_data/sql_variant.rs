@@ -561,4 +561,30 @@ mod tests {
         )
         .is_err());
     }
+
+    // Truncated or mis-sized temporal variants are protocol errors, never a
+    // desynchronised row.
+    #[cfg(feature = "tds73")]
+    #[tokio::test]
+    async fn malformed_temporal_variants_are_errors() {
+        // time(3) needs 4 value bytes.
+        assert!(run(&variant(0x29, &[3], &[1])).await.is_err());
+        // datetime2 values carry at least the 3 date bytes.
+        assert!(run(&variant(0x2A, &[3], &[1, 2])).await.is_err());
+        // datetime2(3): 4 time bytes + 3 date bytes, one byte missing.
+        assert!(run(&variant(0x2A, &[3], &[0; 6])).await.is_err());
+        // datetimeoffset carries date, time and a 2-byte offset.
+        assert!(run(&variant(0x2B, &[3], &[0; 4])).await.is_err());
+        assert!(run(&variant(0x2B, &[3], &[0; 8])).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn malformed_variant_framing_is_an_error() {
+        // A total length of one byte cannot hold the type and property count.
+        assert!(run(&[1, 0, 0, 0, 0x38]).await.is_err());
+        // More property bytes than the total length allows.
+        assert!(run(&[2, 0, 0, 0, 0x38, 5]).await.is_err());
+        // An unsupported base type.
+        assert!(run(&variant(0x62, &[], &[])).await.is_err());
+    }
 }

@@ -853,4 +853,54 @@ mod tests {
         };
         assert_eq!(ColumnType::Xml, ColumnType::from(&ty));
     }
+
+    #[test]
+    fn precision_typed_columns_map_every_variable_length_type() {
+        let precision = |ty| TypeInfo::VarLenSizedPrecision {
+            ty,
+            size: 17,
+            precision: 38,
+            scale: 2,
+        };
+        for (ty, expected) in [
+            (VarLenType::Guid, ColumnType::Guid),
+            (VarLenType::Intn, ColumnType::Intn),
+            (VarLenType::Bitn, ColumnType::Bitn),
+            (VarLenType::Decimaln, ColumnType::Decimaln),
+            (VarLenType::Numericn, ColumnType::Numericn),
+            (VarLenType::Floatn, ColumnType::Floatn),
+            (VarLenType::Money, ColumnType::Money),
+            (VarLenType::Datetimen, ColumnType::Datetimen),
+            (VarLenType::BigVarBin, ColumnType::BigVarBin),
+            (VarLenType::BigVarChar, ColumnType::BigVarChar),
+            (VarLenType::BigBinary, ColumnType::BigBinary),
+            (VarLenType::BigChar, ColumnType::BigChar),
+            (VarLenType::NVarchar, ColumnType::NVarchar),
+            (VarLenType::NChar, ColumnType::NChar),
+            (VarLenType::Xml, ColumnType::Xml),
+            (VarLenType::Udt, ColumnType::Udt),
+            (VarLenType::Text, ColumnType::Text),
+            (VarLenType::Image, ColumnType::Image),
+            (VarLenType::NText, ColumnType::NText),
+            (VarLenType::SSVariant, ColumnType::SSVariant),
+        ] {
+            assert_eq!(ColumnType::from(&precision(ty)), expected, "{ty:?}");
+        }
+        assert_eq!(
+            ColumnType::from(&TypeInfo::FixedLen(FixedLenType::Null)),
+            ColumnType::Null
+        );
+    }
+
+    #[test]
+    fn a_column_without_data_is_a_protocol_error() {
+        let row = Row::new(
+            vec![Column::new("id".into(), ColumnType::Int4)],
+            TokenRow::new(),
+        );
+        assert!(matches!(
+            row.try_get::<i32, _>("id"),
+            Err(Error::Protocol(_))
+        ));
+    }
 }

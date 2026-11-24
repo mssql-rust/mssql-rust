@@ -850,4 +850,28 @@ mod tests {
     fn nullable_unknown_bit_position() {
         assert!(flags(0x8000).contains(ColumnFlag::NullableUnknown));
     }
+
+    #[test]
+    fn bulk_col_metadata_rejects_more_columns_than_the_count_field_holds() {
+        let ty = TypeInfo::FixedLen(FixedLenType::Int4);
+        let columns: Vec<_> = (0..=u16::MAX as usize)
+            .map(|_| bulk_column("c", ty.clone()))
+            .collect();
+        let mut buf = BytesMut::new();
+        let error = encode_bulk_col_metadata(&columns, "t", &mut buf).unwrap_err();
+        assert!(matches!(error, crate::Error::BulkInput(_)));
+    }
+
+    #[test]
+    fn column_metadata_rejects_a_name_longer_than_255_code_units() {
+        let ty = TypeInfo::FixedLen(FixedLenType::Int4);
+        let mut buf = BytesMut::new();
+        assert!(bulk_column(&"n".repeat(255), ty.clone())
+            .encode(&mut buf)
+            .is_ok());
+        let error = bulk_column(&"n".repeat(256), ty)
+            .encode(&mut BytesMut::new())
+            .unwrap_err();
+        assert!(matches!(error, crate::Error::Conversion(_)));
+    }
 }

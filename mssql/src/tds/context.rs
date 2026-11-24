@@ -112,6 +112,12 @@ impl Context {
         self.version
     }
 
+    /// Lets a test decode as an older server would.
+    #[cfg(test)]
+    pub(crate) fn set_version(&mut self, version: FeatureLevel) {
+        self.version = version;
+    }
+
     pub fn set_spn(&mut self, host: impl AsRef<str>, port: u16) {
         self.spn = Some(format!("MSSQLSvc/{}:{}", host.as_ref(), port));
     }

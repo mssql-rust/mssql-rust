@@ -127,4 +127,19 @@ mod tests {
         };
         assert!(one.to_string().contains("1 row left"));
     }
+
+    #[tokio::test]
+    async fn servers_before_2005_send_a_four_byte_row_count() {
+        let mut wire = BytesMut::new();
+        wire.put_u16_le(BitFlags::from(DoneStatus::Count).bits());
+        wire.put_u16_le(7);
+        wire.put_u32_le(9);
+
+        let mut reader = wire.into_sql_read_bytes();
+        reader
+            .context_mut()
+            .set_version(crate::tds::codec::FeatureLevel::SqlServer2000);
+        let done = TokenDone::decode(&mut reader).await.unwrap();
+        assert_eq!(9, done.rows());
+    }
 }
