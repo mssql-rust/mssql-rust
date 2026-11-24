@@ -238,9 +238,9 @@ mod tests {
             .expect_err("wrong number of columns");
     }
 
-    use crate::SqlReadBytes;
     use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
     use crate::tds::codec::token::token_col_metadata::TokenColMetaData;
+    use crate::SqlReadBytes;
     use std::sync::Arc;
 
     fn int_column(name: &'static str) -> MetaDataColumn<'static> {

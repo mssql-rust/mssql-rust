@@ -713,6 +713,8 @@ mod tests {
     #[tokio::test]
     async fn every_wire_shape_round_trips() {
         let collation = Some(Collation::new(0x0904_00d0, 52));
+        // `mut` is needed only when a feature below pushes more shapes.
+        #[allow(unused_mut)]
         let mut types = vec![
             TypeInfo::FixedLen(FixedLenType::Int4),
             TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Intn, 4, None)),
