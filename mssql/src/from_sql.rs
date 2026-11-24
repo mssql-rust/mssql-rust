@@ -26,7 +26,7 @@ use uuid::Uuid;
 /// |`jiff::civil::DateTime` (with feature flag `jiff`)|`datetime`/`datetime2`/`smalldatetime`|
 /// |`jiff::civil::Date` (with feature flag `jiff`)|`date`|
 /// |`jiff::civil::Time` (with feature flag `jiff`)|`time`|
-/// |`jiff::Timestamp` / `jiff::Zoned` (with feature flag `jiff`)|`datetimeoffset`|
+/// |`jiff::Timestamp` / `jiff::ZonedDateTime` (with feature flag `jiff`)|`datetimeoffset`|
 ///
 /// See the [`time`](crate::time) module for more information about the date
 /// and time structs.

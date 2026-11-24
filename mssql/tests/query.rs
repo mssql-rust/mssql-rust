@@ -2377,7 +2377,7 @@ where
         .unwrap();
 
     assert_eq!(
-        Some(dt.to_zoned(jiff::tz::TimeZone::UTC).datetime()),
+        Some(dt.to_zoned_datetime(jiff::tz::TimeZone::UTC).datetime()),
         row.get(0)
     );
     Ok(())
@@ -2488,11 +2488,11 @@ async fn date_time_fixed<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    use jiff::{tz::TimeZone, Timestamp, Zoned};
+    use jiff::{tz::TimeZone, Timestamp, ZonedDateTime};
 
     let fixed = TimeZone::fixed(jiff::tz::offset(3));
     let ts: Timestamp = "2020-04-20T16:20:00Z".parse().unwrap();
-    let dt: Zoned = ts.to_zoned(fixed);
+    let dt: ZonedDateTime = ts.to_zoned_datetime(fixed);
 
     let row = conn
         .query("SELECT @P1", &[&dt])
@@ -2506,13 +2506,13 @@ where
     let mut query = Query::new("SELECT @P1, @P2");
 
     query.bind(dt.clone());
-    query.bind(Option::<Zoned>::None);
+    query.bind(Option::<ZonedDateTime>::None);
 
     let stream = query.query(&mut conn).await?;
     let row = stream.into_row().await?.unwrap();
 
     assert_eq!(Some(dt.clone()), row.get(0));
-    assert_eq!(Option::<Zoned>::None, row.get(1));
+    assert_eq!(Option::<ZonedDateTime>::None, row.get(1));
 
     Ok(())
 }
@@ -2523,11 +2523,11 @@ async fn date_time_fixed_convertion<S>(mut conn: mssql::Client<S>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    use jiff::{tz::TimeZone, Timestamp, Zoned};
+    use jiff::{tz::TimeZone, Timestamp, ZonedDateTime};
 
     let fixed = TimeZone::fixed(jiff::tz::offset(3));
     let ts: Timestamp = "2020-04-20T16:20:00Z".parse().unwrap();
-    let dt: Zoned = ts.to_zoned(fixed);
+    let dt: ZonedDateTime = ts.to_zoned_datetime(fixed);
 
     let row = conn
         .query(

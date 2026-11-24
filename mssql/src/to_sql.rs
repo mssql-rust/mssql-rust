@@ -32,7 +32,7 @@ use uuid::Uuid;
 /// |[`XmlData`]|`xml`|
 /// |`jiff::civil::Date` (with `jiff` feature, TDS 7.3 >)|`date`|
 /// |`jiff::civil::Time` (with `jiff` feature, TDS 7.3 >)|`time`|
-/// |`jiff::Zoned` (with `jiff` feature, TDS 7.3 >)|`datetimeoffset`|
+/// |`jiff::ZonedDateTime` (with `jiff` feature, TDS 7.3 >)|`datetimeoffset`|
 /// |`jiff::Timestamp` (with `jiff` feature, TDS 7.3 >)|`datetime2` (UTC)|
 /// |`jiff::civil::DateTime` (with `jiff` feature, TDS 7.3 >)|`datetime2`|
 /// |`jiff::civil::DateTime` (with `jiff` feature, TDS 7.2)|`datetime`|

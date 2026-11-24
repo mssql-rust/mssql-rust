@@ -179,7 +179,7 @@ test_bulk_type!(datetime2(
 test_bulk_type!(datetime2_naive("DATETIME2", 100, {
     let dt: CivilDateTime = Timestamp::new(1658524194, 123456789)
         .unwrap()
-        .to_zoned(jiff::tz::TimeZone::UTC)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
         .datetime();
 
     vec![dt; 100].into_iter()

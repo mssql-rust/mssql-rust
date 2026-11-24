@@ -8,9 +8,9 @@
 //! | `date` | [`civil::Date`](jiff::civil::Date) |
 //! | `time` | [`civil::Time`](jiff::civil::Time) |
 //! | `datetime`, `datetime2`, `smalldatetime` | [`civil::DateTime`](jiff::civil::DateTime) |
-//! | `datetimeoffset` | [`Timestamp`](jiff::Timestamp) (instant, UTC) or [`Zoned`](jiff::Zoned) (fixed offset kept) |
+//! | `datetimeoffset` | [`Timestamp`](jiff::Timestamp) (instant, UTC) or [`ZonedDateTime`](jiff::ZonedDateTime) (fixed offset kept) |
 //!
-//! Writing a `Timestamp` sends a `datetime2` in UTC; writing a `Zoned` sends a
+//! Writing a `Timestamp` sends a `datetime2` in UTC; writing a `ZonedDateTime` sends a
 //! `datetimeoffset` carrying the zone's UTC offset at that instant.
 
 #[cfg(not(feature = "tds73"))]
@@ -20,7 +20,7 @@ use super::{DateTime2, DateTimeOffset, Time};
 use crate::tds::codec::ColumnData;
 pub use jiff::civil::{Date as CivilDate, DateTime as CivilDateTime, Time as CivilTime};
 #[cfg(feature = "tds73")]
-pub use jiff::{Timestamp, Zoned};
+pub use jiff::{Timestamp, ZonedDateTime};
 
 use jiff::civil;
 use jiff::Span;
@@ -127,11 +127,11 @@ fn dto_to_timestamp(dto: &DateTimeOffset) -> crate::Result<Timestamp> {
 
 #[cfg(feature = "tds73")]
 fn timestamp_to_dt2(ts: &Timestamp) -> crate::Result<DateTime2> {
-    civil_to_dt2(ts.to_zoned(jiff::tz::TimeZone::UTC).datetime())
+    civil_to_dt2(ts.to_zoned_datetime(jiff::tz::TimeZone::UTC).datetime())
 }
 
 #[cfg(feature = "tds73")]
-fn zoned_to_dto(z: &Zoned) -> crate::Result<DateTimeOffset> {
+fn zoned_to_dto(z: &ZonedDateTime) -> crate::Result<DateTimeOffset> {
     let offset = super::offset_minutes(z.offset().seconds());
     Ok(DateTimeOffset::new(
         timestamp_to_dt2(&z.timestamp())?,
@@ -140,14 +140,14 @@ fn zoned_to_dto(z: &Zoned) -> crate::Result<DateTimeOffset> {
 }
 
 #[cfg(feature = "tds73")]
-fn dto_to_zoned(dto: &DateTimeOffset) -> crate::Result<Zoned> {
+fn dto_to_zoned(dto: &DateTimeOffset) -> crate::Result<ZonedDateTime> {
     let ts = dto_to_timestamp(dto)?;
     let seconds = i32::from(dto.offset)
         .checked_mul(60)
         .ok_or_else(|| out_of_range("datetimeoffset offset"))?;
     let off = jiff::tz::Offset::from_seconds(seconds)
         .map_err(|e| crate::Error::Conversion(e.to_string().into()))?;
-    Ok(ts.to_zoned(jiff::tz::TimeZone::fixed(off)))
+    Ok(ts.to_zoned_datetime(jiff::tz::TimeZone::fixed(off)))
 }
 
 #[cfg(feature = "tds73")]
@@ -178,19 +178,19 @@ impl crate::FromSqlOwned for Timestamp {
 }
 
 #[cfg(feature = "tds73")]
-impl<'a> crate::FromSql<'a> for Zoned {
+impl<'a> crate::FromSql<'a> for ZonedDateTime {
     fn from_sql(data: &'a ColumnData<'static>) -> crate::Result<Option<Self>> {
         match data {
             ColumnData::DateTimeOffset(dto) => dto.as_ref().map(dto_to_zoned).transpose(),
             _ => Err(crate::Error::Conversion(
-                format!("cannot interpret {:?} as a Zoned value", data).into(),
+                format!("cannot interpret {:?} as a ZonedDateTime value", data).into(),
             )),
         }
     }
 }
 
 #[cfg(feature = "tds73")]
-impl crate::FromSqlOwned for Zoned {
+impl crate::FromSqlOwned for ZonedDateTime {
     fn from_sql_owned(data: ColumnData<'static>) -> crate::Result<Option<Self>> {
         crate::FromSql::from_sql(&data)
     }
@@ -222,7 +222,7 @@ to_sql!(self_,
         civil::Time: (ColumnData::Time, Time { increments: to_nanos(*self_) / 100, scale: 7 });
         civil::DateTime: (super::fallible(ColumnData::DateTime2), civil_to_dt2(*self_));
         Timestamp: (super::fallible(ColumnData::DateTime2), timestamp_to_dt2(self_));
-        Zoned: (super::fallible(ColumnData::DateTimeOffset), zoned_to_dto(self_));
+        ZonedDateTime: (super::fallible(ColumnData::DateTimeOffset), zoned_to_dto(self_));
 );
 
 #[cfg(feature = "tds73")]
@@ -231,7 +231,7 @@ into_sql!(self_,
         civil::Time: (ColumnData::Time, Time { increments: to_nanos(self_) / 100, scale: 7 });
         civil::DateTime: (super::fallible(ColumnData::DateTime2), civil_to_dt2(self_));
         Timestamp: (super::fallible(ColumnData::DateTime2), timestamp_to_dt2(&self_));
-        Zoned: (super::fallible(ColumnData::DateTimeOffset), zoned_to_dto(&self_));
+        ZonedDateTime: (super::fallible(ColumnData::DateTimeOffset), zoned_to_dto(&self_));
 );
 
 #[cfg(not(feature = "tds73"))]
@@ -337,7 +337,7 @@ mod tests {
         let before = civil::date(0, 12, 31);
         let dt = before.at(0, 0, 0, 0);
         let ts = TimeZone::UTC.to_timestamp(dt).unwrap();
-        let zoned = ts.to_zoned(TimeZone::fixed(Offset::from_seconds(3600).unwrap()));
+        let zoned = ts.to_zoned_datetime(TimeZone::fixed(Offset::from_seconds(3600).unwrap()));
 
         assert_invalid(&before.to_sql());
         assert_invalid(&before.into_sql());
@@ -369,7 +369,7 @@ mod tests {
         ));
         let ts = TimeZone::UTC.to_timestamp(first.at(0, 0, 0, 0)).unwrap();
         assert!(matches!(ts.to_sql(), ColumnData::DateTime2(Some(_))));
-        let zoned = ts.to_zoned(TimeZone::fixed(Offset::from_seconds(3600).unwrap()));
+        let zoned = ts.to_zoned_datetime(TimeZone::fixed(Offset::from_seconds(3600).unwrap()));
         assert!(matches!(
             zoned.to_sql(),
             ColumnData::DateTimeOffset(Some(_))
@@ -392,9 +392,9 @@ mod tests {
         let ts: Timestamp = "2020-04-20T16:20:00Z".parse().unwrap();
         assert_eq!(Some(ts), Timestamp::from_sql(&ts.into_sql()).unwrap());
 
-        let z = ts.to_zoned(TimeZone::fixed(Offset::from_seconds(3 * 3600).unwrap()));
+        let z = ts.to_zoned_datetime(TimeZone::fixed(Offset::from_seconds(3 * 3600).unwrap()));
         let cd = z.clone().into_sql();
-        let back = Zoned::from_sql(&cd).unwrap().unwrap();
+        let back = ZonedDateTime::from_sql(&cd).unwrap().unwrap();
         assert_eq!(z.timestamp(), back.timestamp());
         assert_eq!(z.offset(), back.offset());
         assert_eq!(Some(ts), Timestamp::from_sql(&cd).unwrap());
@@ -405,9 +405,9 @@ mod tests {
         let ts: Timestamp = "2020-04-20T16:20:00Z".parse().unwrap();
         assert_eq!(Timestamp::from_sql_owned(ts.into_sql()).unwrap(), Some(ts));
 
-        let z = ts.to_zoned(TimeZone::fixed(Offset::from_seconds(3600).unwrap()));
+        let z = ts.to_zoned_datetime(TimeZone::fixed(Offset::from_seconds(3600).unwrap()));
         assert_eq!(
-            Zoned::from_sql_owned(z.clone().into_sql())
+            ZonedDateTime::from_sql_owned(z.clone().into_sql())
                 .unwrap()
                 .unwrap()
                 .timestamp(),
@@ -417,8 +417,8 @@ mod tests {
         let wrong = ColumnData::I32(Some(1));
         assert!(Timestamp::from_sql(&wrong).is_err());
         assert!(Timestamp::from_sql_owned(wrong.clone()).is_err());
-        assert!(Zoned::from_sql(&wrong).is_err());
-        assert!(Zoned::from_sql_owned(wrong.clone()).is_err());
+        assert!(ZonedDateTime::from_sql(&wrong).is_err());
+        assert!(ZonedDateTime::from_sql_owned(wrong.clone()).is_err());
         assert!(civil::DateTime::from_sql(&wrong).is_err());
         assert!(civil::Time::from_sql(&wrong).is_err());
         assert!(civil::Date::from_sql(&wrong).is_err());
@@ -434,7 +434,7 @@ mod tests {
             civil_to_dt2(civil::date(2020, 1, 1).at(0, 0, 0, 0)).unwrap(),
             i16::MAX,
         )));
-        assert!(Zoned::from_sql(&invalid_offset).is_err());
+        assert!(ZonedDateTime::from_sql(&invalid_offset).is_err());
     }
 
     #[test]

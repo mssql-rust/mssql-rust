@@ -42,6 +42,12 @@ them before upgrading from 2.x.
   type longer than 65 534 bytes is rejected instead of becoming `(max)`, and
   out-of-range dates are rejected instead of panicking (see Fixed). Code that
   relied on the old lenient behavior must handle the new errors.
+- The optional `jiff` dependency is now `jiff` 1.x (minimum 1.0.1). jiff 1.0
+  renamed `Zoned` to `ZonedDateTime` and `Timestamp::to_zoned` to
+  `to_zoned_datetime`; the `FromSql`/`ToSql` implementations and the
+  `mssql::time::jiff` re-export follow, so `jiff::ZonedDateTime` is the type
+  that maps to `datetimeoffset`. Types from `jiff` 0.2 no longer implement the
+  traits.
 
 ### Fixed
 
