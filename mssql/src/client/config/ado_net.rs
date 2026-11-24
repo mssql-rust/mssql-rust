@@ -687,4 +687,19 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    fn server_parsing_rejects_a_value_with_too_many_parts() {
+        let ado: AdoNetConfig = "server=tcp:host,1433,extra".parse().unwrap();
+        assert!(ado.server().is_err());
+    }
+
+    #[test]
+    fn server_parsing_without_a_server_key_leaves_everything_unset() {
+        let ado: AdoNetConfig = "user id=sa".parse().unwrap();
+        let server = ado.server().unwrap();
+        assert_eq!(None, server.host);
+        assert_eq!(None, server.port);
+        assert_eq!(None, server.instance);
+    }
 }

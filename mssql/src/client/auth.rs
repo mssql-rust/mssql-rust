@@ -226,4 +226,24 @@ mod tests {
     fn none_auth_debug_is_stable() {
         assert_eq!("None", format!("{:?}", AuthMethod::None));
     }
+
+    #[cfg(any(all(windows, feature = "winauth"), all(unix, feature = "sspi-rs")))]
+    #[test]
+    fn windows_auth_debug_output_hides_the_password() {
+        let auth = AuthMethod::windows("DOMAIN\\alice", "secret");
+        let text = format!("{auth:?}");
+        assert!(text.starts_with("Windows(WindowsAuth"), "{text}");
+        assert!(text.contains("alice") && text.contains("DOMAIN"), "{text}");
+        assert!(text.contains("<HIDDEN>"), "{text}");
+        assert!(!text.contains("secret"), "{text}");
+    }
+
+    #[cfg(any(
+        all(windows, feature = "winauth"),
+        all(unix, feature = "integrated-auth-gssapi")
+    ))]
+    #[test]
+    fn integrated_auth_debug_output_names_the_method() {
+        assert_eq!("Integrated", format!("{:?}", AuthMethod::Integrated));
+    }
 }

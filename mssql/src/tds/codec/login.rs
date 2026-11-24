@@ -876,4 +876,41 @@ mod tests {
         login.readonly(false);
         assert!(!login.type_flags.contains(LoginTypeFlag::ReadOnlyIntent));
     }
+
+    #[test]
+    fn a_federated_authentication_token_is_encoded_as_utf16() {
+        let mut login = LoginMessage::new();
+        login.user_name("user");
+        login.aad_token("tok", true, Some([3; 32]));
+        let bound = login.encoded_len_upper_bound().unwrap();
+        let wire = login.encode_to_vec().unwrap();
+        assert!(bound >= wire.len());
+        let token: Vec<u8> = "tok".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert!(wire.windows(token.len()).any(|w| w == token.as_slice()));
+    }
+
+    #[cfg(any(
+        all(unix, any(feature = "integrated-auth-gssapi", feature = "sspi-rs")),
+        windows
+    ))]
+    #[test]
+    fn an_sspi_token_is_carried_in_the_login_data() {
+        let token = vec![0xa1, 0xb2, 0xc3, 0xd4, 0xe5];
+        let mut login = LoginMessage::new();
+        login.user_name("user");
+        login.integrated_security(Some(token.clone()));
+        let bound = login.encoded_len_upper_bound().unwrap();
+        let with_token = login.encode_to_vec().unwrap();
+        assert!(bound >= with_token.len());
+        assert!(with_token
+            .windows(token.len())
+            .any(|window| window == token.as_slice()));
+
+        // Clearing the token removes it again.
+        let mut login = LoginMessage::new();
+        login.user_name("user");
+        login.integrated_security(Some(token));
+        login.integrated_security(None);
+        assert!(login.encode_to_vec().unwrap().len() < with_token.len());
+    }
 }
