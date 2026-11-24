@@ -421,4 +421,12 @@ mod tests {
         )));
         assert!(PrimitiveDateTime::from_sql(&far_dt2).is_err());
     }
+
+    #[test]
+    fn checked_conversion_helpers_reject_extreme_inputs() {
+        assert!(from_nanos(86_400 * 1_000_000_000).is_err());
+        assert!(from_sec_fragments(u64::MAX).is_err());
+        #[cfg(feature = "tds73")]
+        assert!(from_secs(u64::MAX).is_err());
+    }
 }

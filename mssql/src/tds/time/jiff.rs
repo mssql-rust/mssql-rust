@@ -436,4 +436,47 @@ mod tests {
         )));
         assert!(Zoned::from_sql(&invalid_offset).is_err());
     }
+
+    #[test]
+    fn checked_conversion_helpers_reject_extreme_inputs() {
+        assert!(from_days(i64::MAX, 1).is_err());
+        assert!(from_nanos(-1).is_err());
+        assert!(from_nanos(86_400 * 1_000_000_000).is_err());
+        assert!(from_sec_fragments(i64::MAX).is_err());
+        assert!(from_mins(u32::MAX).is_err());
+        assert!(from_mins(24 * 60).is_err());
+    }
+
+    #[test]
+    fn instants_past_the_timestamp_range_are_conversion_errors() {
+        // 9999-12-31 is a valid datetime2 date but later than the largest
+        // `Timestamp`.
+        let last_day = || {
+            DateTime2::new(
+                Date::new(3_652_058),
+                crate::tds::time::Time {
+                    increments: 0,
+                    scale: 7,
+                },
+            )
+        };
+        let dto = DateTimeOffset::new(last_day(), 0);
+        assert!(dto_to_timestamp(&dto).is_err());
+        assert!(dto_to_zoned(&dto).is_err());
+        assert!(Timestamp::from_sql(&ColumnData::DateTimeOffset(Some(dto))).is_err());
+        assert!(Timestamp::from_sql(&ColumnData::DateTime2(Some(last_day()))).is_err());
+    }
+
+    #[test]
+    fn offsets_beyond_the_supported_range_are_conversion_errors() {
+        let dt2 = DateTime2::new(
+            Date::new(700_000),
+            crate::tds::time::Time {
+                increments: 0,
+                scale: 7,
+            },
+        );
+        // 40 hours is more than jiff's +/-25:59:59 offset limit.
+        assert!(dto_to_zoned(&DateTimeOffset::new(dt2, 2_400)).is_err());
+    }
 }
