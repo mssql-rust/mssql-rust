@@ -237,4 +237,90 @@ mod tests {
         row.encode(&mut buf_with_columns)
             .expect_err("wrong number of columns");
     }
+
+    use crate::SqlReadBytes;
+    use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
+    use crate::tds::codec::token::token_col_metadata::TokenColMetaData;
+    use std::sync::Arc;
+
+    fn int_column(name: &'static str) -> MetaDataColumn<'static> {
+        MetaDataColumn {
+            base: BaseMetaDataColumn {
+                flags: ColumnFlag::Nullable.into(),
+                ty: TypeInfo::FixedLen(FixedLenType::Int4),
+            },
+            col_name: name.into(),
+        }
+    }
+
+    fn reader_with_two_int_columns(wire: &[u8]) -> impl SqlReadBytes {
+        let mut reader = BytesMut::from(wire).into_sql_read_bytes();
+        reader
+            .context_mut()
+            .set_last_meta(Arc::new(TokenColMetaData {
+                columns: vec![int_column("a"), int_column("b")],
+            }));
+        reader
+    }
+
+    #[tokio::test]
+    async fn a_row_before_any_column_metadata_is_a_protocol_error() {
+        let expected = Error::Protocol("received a ROW token before any COLMETADATA".into());
+        let mut reader = BytesMut::new().into_sql_read_bytes();
+        assert_eq!(TokenRow::decode(&mut reader).await.unwrap_err(), expected);
+        assert_eq!(
+            TokenRow::decode_nbc(&mut reader).await.unwrap_err(),
+            expected
+        );
+    }
+
+    #[tokio::test]
+    async fn rows_decode_against_the_cached_metadata() {
+        let mut reader = reader_with_two_int_columns(&[1, 0, 0, 0, 2, 0, 0, 0]);
+        let row = TokenRow::decode(&mut reader).await.unwrap();
+        assert_eq!(
+            row.data,
+            vec![ColumnData::I32(Some(1)), ColumnData::I32(Some(2))]
+        );
+
+        // A truncated row surfaces the read error rather than a short row.
+        let mut reader = reader_with_two_int_columns(&[1, 0, 0, 0]);
+        assert!(TokenRow::decode(&mut reader).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn null_bitmap_rows_skip_the_columns_the_bitmap_marks() {
+        // Bit 0 set: column `a` is NULL and absent from the wire.
+        let mut reader = reader_with_two_int_columns(&[0b01, 9, 0, 0, 0]);
+        let row = TokenRow::decode_nbc(&mut reader).await.unwrap();
+        assert_eq!(
+            row.data,
+            vec![ColumnData::I32(None), ColumnData::I32(Some(9))]
+        );
+
+        // No bit set: both columns are present.
+        let mut reader = reader_with_two_int_columns(&[0, 1, 0, 0, 0, 2, 0, 0, 0]);
+        let row = TokenRow::decode_nbc(&mut reader).await.unwrap();
+        assert_eq!(
+            row.data,
+            vec![ColumnData::I32(Some(1)), ColumnData::I32(Some(2))]
+        );
+
+        // A missing bitmap is a read error.
+        let mut reader = reader_with_two_int_columns(&[]);
+        assert!(TokenRow::decode_nbc(&mut reader).await.is_err());
+    }
+
+    #[test]
+    fn a_row_encodes_as_the_row_token_followed_by_each_column() {
+        let columns = vec![int_column("a")];
+        let mut buf = BytesMut::new();
+        let mut buf_with_columns = BytesMutWithDataColumns::new(&mut buf, &columns);
+
+        5i32.into_row().encode(&mut buf_with_columns).unwrap();
+
+        // The ROW token, then the fixed-width INT4 value.
+        assert_eq!(buf[0], u8::from(TokenType::Row));
+        assert_eq!(&buf[buf.len() - 4..], &5i32.to_le_bytes());
+    }
 }

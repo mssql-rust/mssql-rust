@@ -716,3 +716,21 @@ mod coverage_tests {
         ));
     }
 }
+
+#[cfg(all(test, any(feature = "jiff", feature = "time")))]
+mod fallible_tests {
+    use super::*;
+    use crate::ColumnData;
+
+    #[test]
+    fn fallible_maps_null_value_and_error_to_the_matching_column_data() {
+        let ctor = fallible(ColumnData::I32);
+        assert_eq!(ctor(None), ColumnData::I32(None));
+        assert_eq!(ctor(Some(Ok(7))), ColumnData::I32(Some(7)));
+        let invalid = ctor(Some(Err(crate::Error::Conversion("too early".into()))));
+        match invalid {
+            ColumnData::Invalid(message) => assert!(message.contains("too early"), "{message}"),
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+}

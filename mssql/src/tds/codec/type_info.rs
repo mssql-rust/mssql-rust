@@ -699,4 +699,76 @@ mod tests {
             }
         ));
     }
+
+    async fn round_trip_of(ty: TypeInfo) -> TypeInfo {
+        let mut buf = BytesMut::new();
+        ty.clone().encode(&mut buf).unwrap();
+        let decoded = TypeInfo::decode(&mut buf.into_sql_read_bytes())
+            .await
+            .unwrap();
+        assert_eq!(decoded, ty);
+        decoded
+    }
+
+    #[tokio::test]
+    async fn every_wire_shape_round_trips() {
+        let collation = Some(Collation::new(0x0904_00d0, 52));
+        let mut types = vec![
+            TypeInfo::FixedLen(FixedLenType::Int4),
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Intn, 4, None)),
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Guid, 16, None)),
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::NVarchar, 40, collation)),
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::BigVarBin, 8000, None)),
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Text, 1 << 20, collation)),
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::NText, 1 << 20, collation)),
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Image, 1 << 20, None)),
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::SSVariant, 8016, None)),
+            TypeInfo::VarLenSizedPrecision {
+                ty: VarLenType::Numericn,
+                size: 17,
+                precision: 38,
+                scale: 10,
+            },
+            TypeInfo::Xml {
+                schema: None,
+                size: 0xffff_ffff_ffff_fffe,
+            },
+            TypeInfo::Xml {
+                schema: Some(Arc::new(XmlSchema::new("db", "dbo", "collection"))),
+                size: 0xffff_ffff_ffff_fffe,
+            },
+        ];
+        #[cfg(feature = "tds73")]
+        types.extend([
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Daten, 3, None)),
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Timen, 5, None)),
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Datetime2, 8, None)),
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::DatetimeOffsetn, 10, None)),
+        ]);
+        for ty in types {
+            round_trip_of(ty).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn udt_type_info_is_read_as_raw_bytes_and_names_are_dropped() {
+        let mut wire = vec![u8::from(VarLenType::Udt), 0x10, 0x00];
+        for name in ["db", "sys", "geography"] {
+            wire.push(u8::try_from(name.len()).unwrap());
+            for unit in name.encode_utf16() {
+                wire.extend_from_slice(&unit.to_le_bytes());
+            }
+        }
+        let assembly = "Microsoft.SqlServer.Types";
+        wire.extend_from_slice(&u16::try_from(assembly.len()).unwrap().to_le_bytes());
+        for unit in assembly.encode_utf16() {
+            wire.extend_from_slice(&unit.to_le_bytes());
+        }
+        let mut reader = BytesMut::from(&wire[..]).into_sql_read_bytes();
+        let ti = TypeInfo::decode(&mut reader).await.unwrap();
+        assert_eq!(
+            ti,
+            TypeInfo::VarLenSized(VarLenContext::new(VarLenType::Udt, 16, None))
+        );
+    }
 }

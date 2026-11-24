@@ -1649,4 +1649,136 @@ mod timeout_tests {
             .await
             .unwrap();
     }
+
+    fn utf16_units(value: &str) -> Vec<u8> {
+        value
+            .encode_utf16()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect()
+    }
+
+    // One Int4 column named "n", as COLMETADATA.
+    fn int_column_metadata() -> Vec<u8> {
+        let mut wire = vec![TokenType::ColMetaData as u8, 1, 0];
+        wire.extend_from_slice(&0u32.to_le_bytes()); // user type
+        wire.extend_from_slice(&0u16.to_le_bytes()); // flags
+        wire.push(0x38); // INT4
+        wire.push(1);
+        wire.extend(utf16_units("n"));
+        wire
+    }
+
+    #[tokio::test]
+    async fn token_stream_decodes_metadata_rows_and_the_three_done_kinds() {
+        let mut payload = int_column_metadata();
+        payload.extend_from_slice(&[TokenType::Row as u8, 7, 0, 0, 0]);
+        // A packed-null row: bit 0 of the bitmap marks the only column NULL.
+        payload.extend_from_slice(&[TokenType::NbcRow as u8, 0b1]);
+        for token in [TokenType::Done, TokenType::DoneProc, TokenType::DoneInProc] {
+            payload.push(token as u8);
+            payload.extend_from_slice(&0u16.to_le_bytes());
+            payload.extend_from_slice(&0u16.to_le_bytes());
+            payload.extend_from_slice(&3u64.to_le_bytes());
+        }
+
+        let mut connection = incoming_connection(&payload);
+        let mut tokens = TokenStream::new(&mut connection).try_unfold();
+
+        let Some(ReceivedToken::NewResultset(meta)) = tokens.try_next().await.unwrap() else {
+            panic!("expected COLMETADATA");
+        };
+        assert_eq!(1, meta.columns.len());
+        let Some(ReceivedToken::Row(row)) = tokens.try_next().await.unwrap() else {
+            panic!("expected ROW");
+        };
+        assert_eq!(Some(&crate::ColumnData::I32(Some(7))), row.get(0));
+        let Some(ReceivedToken::Row(row)) = tokens.try_next().await.unwrap() else {
+            panic!("expected NBCROW");
+        };
+        assert_eq!(Some(&crate::ColumnData::I32(None)), row.get(0));
+        assert!(matches!(
+            tokens.try_next().await.unwrap(),
+            Some(ReceivedToken::Done(_))
+        ));
+        assert!(matches!(
+            tokens.try_next().await.unwrap(),
+            Some(ReceivedToken::DoneProc(_))
+        ));
+        assert!(matches!(
+            tokens.try_next().await.unwrap(),
+            Some(ReceivedToken::DoneInProc(_))
+        ));
+        assert!(tokens.try_next().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn rows_without_metadata_and_truncated_tokens_are_errors() {
+        for token in [TokenType::Row, TokenType::NbcRow] {
+            let mut connection = incoming_connection(&[token as u8, 0]);
+            let error = TokenStream::new(&mut connection)
+                .try_unfold()
+                .try_next()
+                .await
+                .unwrap_err();
+            assert!(matches!(error, crate::Error::Protocol(_)), "{error:?}");
+        }
+
+        // A token the dispatcher knows the byte of but does not handle.
+        let mut connection = incoming_connection(&[TokenType::ColInfo as u8]);
+        assert!(TokenStream::new(&mut connection)
+            .try_unfold()
+            .try_next()
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn token_stream_decodes_return_value_info_and_login_ack() {
+        let mut payload = vec![TokenType::ReturnValue as u8];
+        payload.extend_from_slice(&1u16.to_le_bytes()); // ordinal
+        payload.push(2);
+        payload.extend(utf16_units("@x"));
+        payload.push(0x01); // output parameter
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload.extend_from_slice(&0u16.to_le_bytes());
+        payload.push(0x38);
+        payload.extend_from_slice(&5i32.to_le_bytes());
+
+        let mut info = Vec::new();
+        info.extend_from_slice(&5701u32.to_le_bytes());
+        info.extend_from_slice(&[1, 0]);
+        info.extend_from_slice(&2u16.to_le_bytes());
+        info.extend(utf16_units("hi"));
+        info.extend_from_slice(&[0, 0]);
+        info.extend_from_slice(&1u32.to_le_bytes());
+        payload.push(TokenType::Info as u8);
+        payload.extend_from_slice(&u16::try_from(info.len()).unwrap().to_le_bytes());
+        payload.extend(info);
+
+        let mut ack = vec![1];
+        ack.extend_from_slice(&(crate::tds::codec::FeatureLevel::SqlServerN as u32).to_be_bytes());
+        ack.push(1);
+        ack.extend(utf16_units("S"));
+        ack.extend_from_slice(&1u32.to_le_bytes());
+        payload.push(TokenType::LoginAck as u8);
+        payload.extend_from_slice(&u16::try_from(ack.len()).unwrap().to_le_bytes());
+        payload.extend(ack);
+
+        let mut connection = incoming_connection(&payload);
+        let mut tokens = TokenStream::new(&mut connection).try_unfold();
+        let Some(ReceivedToken::ReturnValue(value)) = tokens.try_next().await.unwrap() else {
+            panic!("expected RETURNVALUE");
+        };
+        assert_eq!("@x", value.param_name);
+        assert_eq!(crate::ColumnData::I32(Some(5)), value.value);
+        let Some(ReceivedToken::Info(info)) = tokens.try_next().await.unwrap() else {
+            panic!("expected INFO");
+        };
+        assert_eq!("hi", info.message);
+        let Some(ReceivedToken::LoginAck(ack)) = tokens.try_next().await.unwrap() else {
+            panic!("expected LOGINACK");
+        };
+        assert_eq!("S", ack.prog_name);
+        assert!(tokens.try_next().await.unwrap().is_none());
+    }
 }

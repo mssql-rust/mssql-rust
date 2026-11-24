@@ -914,4 +914,119 @@ mod collect_results_tests {
         let mut stream = preloaded_owned_stream(Ok(None));
         assert!(stream.try_next().await.unwrap().is_none());
     }
+
+    fn return_value(name: &str, value: i32) -> ReceivedToken {
+        ReceivedToken::ReturnValue(TokenReturnValue {
+            param_ordinal: 0,
+            param_name: name.to_string(),
+            udf: false,
+            meta: BaseMetaDataColumn {
+                flags: BitFlags::empty(),
+                ty: TypeInfo::FixedLen(FixedLenType::Int4),
+            },
+            value: crate::ColumnData::I32(Some(value)),
+        })
+    }
+
+    #[test]
+    fn owned_stream_debug_reports_owner_and_completion() {
+        let stream = preloaded_owned_stream(Ok(None));
+        assert_eq!(
+            format!("{stream:?}"),
+            "OwnedQueryStream { has_owner: false, done: false }"
+        );
+    }
+
+    #[test]
+    fn query_item_accessors_distinguish_metadata_from_rows() {
+        let cols = columns();
+        let metadata = meta(&cols, 3);
+        assert!(metadata.as_row().is_none());
+        assert_eq!(metadata.as_metadata().unwrap().result_index(), 3);
+        assert_eq!(metadata.as_metadata().unwrap().columns().len(), 1);
+        assert!(meta(&cols, 3).into_row().is_none());
+        assert!(metadata.into_metadata().is_some());
+
+        let item = row(&cols, 1);
+        assert!(item.as_metadata().is_none());
+        assert!(item.as_row().is_some());
+        assert!(row(&cols, 1).into_metadata().is_none());
+        assert!(item.into_row().is_some());
+    }
+
+    #[tokio::test]
+    async fn output_params_collect_return_values_and_status() {
+        let query = query_stream(vec![
+            Ok(ReceivedToken::ReturnStatus(5)),
+            Ok(return_value("@total", 42)),
+            Ok(ReceivedToken::ReturnStatus(u32::MAX)),
+        ]);
+        let params = query.into_output_params().await.unwrap();
+        // The last status wins, reinterpreted as a signed value.
+        assert_eq!(params.return_status(), Some(-1));
+        assert_eq!(params.get::<i32>("total"), Some(42));
+        assert_eq!(params.get::<i32>("@total"), Some(42));
+        assert_eq!(params.try_get::<i32>("@total").unwrap(), Some(42));
+        assert!(matches!(
+            params.try_get::<i32>("missing"),
+            Err(Error::Conversion(_))
+        ));
+        assert!(params.try_get::<&str>("total").is_err());
+    }
+
+    #[tokio::test]
+    async fn output_params_of_a_plain_query_are_empty() {
+        let params = query_stream(vec![]).into_output_params().await.unwrap();
+        assert_eq!(params.return_status(), None);
+        assert!(params.try_get::<i32>("anything").is_err());
+    }
+
+    #[tokio::test]
+    async fn columns_skips_other_tokens_and_stops_at_rows_and_the_end() {
+        // Tokens before the metadata are consumed; the metadata is not.
+        let mut query = query_stream(vec![
+            Ok(ReceivedToken::ReturnStatus(0)),
+            Ok(ReceivedToken::NewResultset(wire_metadata())),
+        ]);
+        let names: Vec<_> = query
+            .columns()
+            .await
+            .unwrap()
+            .unwrap()
+            .iter()
+            .map(|column| column.name().to_string())
+            .collect();
+        assert_eq!(names, ["answer"]);
+
+        // A row with no metadata ends the search; so does an empty stream.
+        let mut data = TokenRow::new();
+        data.push(crate::ColumnData::I32(Some(1)));
+        let mut query = query_stream(vec![Ok(ReceivedToken::Row(data))]);
+        assert!(query.columns().await.unwrap().is_none());
+        let mut query = query_stream(vec![]);
+        assert!(query.columns().await.unwrap().is_none());
+
+        // A stream error is surfaced.
+        let mut query = query_stream(vec![Err(Error::Protocol("boom".into()))]);
+        assert!(query.columns().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn forward_to_metadata_notes_return_tokens_and_stops_at_a_resultset() {
+        let mut query = query_stream(vec![
+            Ok(ReceivedToken::ReturnStatus(7)),
+            Ok(return_value("out", 1)),
+            Ok(ReceivedToken::NewResultset(wire_metadata())),
+        ]);
+        query.forward_to_metadata().await.unwrap();
+        let params = query.into_output_params().await.unwrap();
+        assert_eq!(params.return_status(), Some(7));
+        assert_eq!(params.get::<i32>("out"), Some(1));
+
+        let mut query = query_stream(vec![Ok(ReceivedToken::ReturnStatus(1))]);
+        query.forward_to_metadata().await.unwrap();
+
+        let mut query = query_stream(vec![Err(Error::Protocol("boom".into()))]);
+        assert!(query.forward_to_metadata().await.is_err());
+    }
 }

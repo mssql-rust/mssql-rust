@@ -354,4 +354,71 @@ mod tests {
         assert_eq!(odt.hour(), 5);
         assert_eq!(odt.to_offset(UtcOffset::UTC).hour(), 10);
     }
+
+    #[test]
+    fn datetime_family_decodes_and_rejects_out_of_range_parts() {
+        let first = day(1900, Month::January, 2);
+
+        let small = ColumnData::SmallDateTime(Some(tds::SmallDateTime {
+            days: 1,
+            seconds_fragments: 90,
+        }));
+        assert_eq!(
+            PrimitiveDateTime::from_sql(&small).unwrap().unwrap(),
+            PrimitiveDateTime::new(first, Time::from_hms(1, 30, 0).unwrap())
+        );
+
+        let legacy = ColumnData::DateTime(Some(tds::DateTime::new(1, 300 * 61)));
+        assert_eq!(
+            PrimitiveDateTime::from_sql(&legacy).unwrap().unwrap(),
+            PrimitiveDateTime::new(first, Time::from_hms(0, 1, 1).unwrap())
+        );
+        // A negative day count is a date before 1900.
+        let before = ColumnData::DateTime(Some(tds::DateTime::new(-1, 0)));
+        assert_eq!(
+            PrimitiveDateTime::from_sql(&before)
+                .unwrap()
+                .unwrap()
+                .date(),
+            day(1899, Month::December, 31)
+        );
+
+        let dt2 = ColumnData::DateTime2(Some(tds::DateTime2::new(
+            tds::Date::new(737_534),
+            tds::Time {
+                increments: 58_805 * 10_000_000 + 1_234_567,
+                scale: 7,
+            },
+        )));
+        assert_eq!(
+            PrimitiveDateTime::from_sql(&dt2).unwrap().unwrap(),
+            PrimitiveDateTime::new(
+                day(2020, Month::April, 20),
+                Time::from_hms_nano(16, 20, 5, 123_456_700).unwrap()
+            )
+        );
+
+        // Time of day at or past 24h is rejected for every wire shape.
+        let late_legacy = ColumnData::DateTime(Some(tds::DateTime::new(0, 300 * 86_400)));
+        assert!(PrimitiveDateTime::from_sql(&late_legacy).is_err());
+        let late_dt2 = ColumnData::DateTime2(Some(tds::DateTime2::new(
+            tds::Date::new(0),
+            tds::Time {
+                increments: 864_000_000_000,
+                scale: 7,
+            },
+        )));
+        assert!(PrimitiveDateTime::from_sql(&late_dt2).is_err());
+        // A day count past 9999-12-31 is rejected too.
+        let far = ColumnData::DateTime(Some(tds::DateTime::new(i32::MAX, 0)));
+        assert!(PrimitiveDateTime::from_sql(&far).is_err());
+        let far_dt2 = ColumnData::DateTime2(Some(tds::DateTime2::new(
+            tds::Date::new((1 << 24) - 1),
+            tds::Time {
+                increments: 0,
+                scale: 7,
+            },
+        )));
+        assert!(PrimitiveDateTime::from_sql(&far_dt2).is_err());
+    }
 }

@@ -815,4 +815,67 @@ mod tests {
         let data = ColumnData::Numeric(Some(Numeric::new_with_scale(10i128.pow(37) + 1, 38)));
         assert!(Decimal::from_sql(&data).is_err());
     }
+
+    #[tokio::test]
+    async fn decode_accepts_a_wide_field_with_a_small_magnitude_and_rejects_bad_framing() {
+        // A 13-byte field whose high bytes are all zero takes the low-part
+        // shortcut.
+        let mut wire = vec![13_u8, 1, 7];
+        wire.extend_from_slice(&[0; 11]);
+        let mut reader = BytesMut::from(&wire[..]).into_sql_read_bytes();
+        assert_eq!(
+            Numeric::decode(&mut reader, 0).await.unwrap(),
+            Some(Numeric::new_with_scale(7, 0))
+        );
+
+        // A zero length is NULL.
+        let mut reader = BytesMut::from(&[0_u8][..]).into_sql_read_bytes();
+        assert_eq!(Numeric::decode(&mut reader, 0).await.unwrap(), None);
+
+        // An unknown sign byte, an unknown length and a scale above 38.
+        for (wire, message) in [
+            (vec![5_u8, 2, 0, 0, 0, 0], "decimal: invalid sign"),
+            (
+                vec![6_u8, 1, 0, 0, 0, 0, 0],
+                "decimal/numeric: invalid length of 6 received",
+            ),
+            (
+                vec![5_u8, 1, 1, 0, 0, 0],
+                "decimal/numeric: invalid scale 39",
+            ),
+        ] {
+            let scale = if message.ends_with("39") { 39 } else { 0 };
+            let mut reader = BytesMut::from(&wire[..]).into_sql_read_bytes();
+            assert_eq!(
+                Numeric::decode(&mut reader, scale).await.unwrap_err(),
+                Error::Protocol(message.into())
+            );
+        }
+    }
+
+    #[cfg(all(feature = "rust_decimal", feature = "tds73"))]
+    #[test]
+    fn rust_decimal_from_an_ordinary_scale_is_exact() {
+        use crate::{ColumnData, FromSql};
+        let data = ColumnData::Numeric(Some(Numeric::new_with_scale(-12345, 2)));
+        assert_eq!(
+            Decimal::from_sql(&data).unwrap().unwrap().to_string(),
+            "-123.45"
+        );
+        assert_eq!(Decimal::from_sql(&ColumnData::Numeric(None)).unwrap(), None);
+    }
+
+    #[cfg(all(feature = "bigdecimal", feature = "tds73"))]
+    #[test]
+    fn bigdecimal_from_sql_keeps_value_and_scale() {
+        use crate::{ColumnData, FromSql};
+        let data = ColumnData::Numeric(Some(Numeric::new_with_scale(12345, 3)));
+        let big = BigDecimal::from_sql(&data).unwrap().unwrap();
+        assert_eq!(big.to_string(), "12.345");
+        assert_eq!(
+            BigDecimal::from_sql(&ColumnData::Numeric(None)).unwrap(),
+            None
+        );
+        assert!(BigDecimal::from_sql(&ColumnData::I32(Some(1))).is_err());
+    }
 }
